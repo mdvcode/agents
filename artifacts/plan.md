@@ -1,45 +1,59 @@
 TASK
-- Fix the contactapi2 admin Celery Scheduler status so it reflects the real Celery process state on the py311 test stand.
+- Analyze the local agent workspace, improve its operating structure, clean stale artifacts, and add durable per-issue history for GitHub issue work.
 
 CONTEXT
-- Admin index calls `ContactAPIAdminSite.index()`.
-- The Celery status block uses `celery_task_get_admin_context()`.
-- `celery_task_get_processes()` currently matches only an exact absolute `settings.VIRTUALENV_DIR/bin/celery` cmdline element.
-- On `contactapi2`/py311, the live worker process is started with a relative `../venv311/bin/celery` cmdline element, so the exact-path match misses it.
-- Server check on 2026-05-08 found:
-  - py311 contactapi worker running as `daryna`, queue `py311test`, command includes `-A contactapi`.
-  - production contactapi venv38 worker systemd units are active.
-  - no contactapi beat process was found; only an unrelated IAM2 beat process was present.
-
-RISK
-- MEDIUM: the change affects Celery admin status and start/stop/restart button gating.
-- No migrations, auth/session/JWT/CSRF, billing/payments, secrets, production settings, or destructive commands are in scope.
+- User requested an agent setup matching the screenshot: local git history, docs store with logs, kanban boards for tasks/process, tests/fixes, features, onboarding for agents, and local repo output.
+- User clarified that every GitHub issue should have visible execution history, while every issue also has its own branch.
+- Repository already contains `.agents/prompts/`, `.agents/skills/`, `AGENTS.md`, git history, and `artifacts/`.
+- `artifacts/` contained required runtime artifacts plus stale one-off sweep/probe files from previous Django investigations.
 
 FILES_TO_INSPECT
 - `AGENTS.md`
 - `artifacts/lessons_learned.md`
-- `contactapi/contactapi/admin.py`
-- `contactapi/apps/core/utils/celery_process_helper.py`
-- `contactapi/apps/core/utils/processes.py`
-- `contactapi/templates/admin/contactapi_admin_index.html`
-- `contactapi/contactapi/settings_py311.py`
-- `contactapi/contactapi/settings_live.py`
+- `.agents/prompts/*.md`
+- `.agents/skills/*/SKILL.md`
+- `artifacts/`
 
-IMPLEMENTATION_PLAN
-- Keep the existing exact `CELERY_BINARY_PATH` match for compatibility.
-- Add a fallback matcher for Celery processes whose cmdline contains a `celery` executable and app selector `-A contactapi` or `--app contactapi`.
-- Exclude unrelated Celery apps such as IAM2 by requiring the contactapi app name.
-- Add focused tests for exact-path matching, relative py311 command matching, and unrelated app exclusion.
-- Leave server processes/systemd untouched.
+FILES_TO_CHANGE
+- `AGENTS.md`
+- `docs/index.md`
+- `docs/onboarding.md`
+- `docs/git-and-logs.md`
+- `docs/agent-system.md`
+- `docs/kanban/tasks.md`
+- `docs/kanban/tests-and-fixes.md`
+- `docs/kanban/features.md`
+- `docs/issues/README.md`
+- `docs/issues/_template.md`
+- Required files under `artifacts/`
+
+DO_NOT_TOUCH
+- Django application code.
+- Protected paths from `AGENTS.md`.
+- Existing user-added `.idea/*` changes.
+
+ASSUMPTIONS
+- Cleaning artifacts means removing stale temporary investigation outputs while preserving required current-task artifacts, lessons, and audit log.
+- Documentation and process-only changes are sufficient; no Django behavior change is needed.
+- Per-issue history should live in `docs/issues/` because issue history is durable, while `artifacts/` is current-task state.
 
 CHECKS_TO_RUN
-- `python3 -m py_compile contactapi/apps/core/utils/celery_process_helper.py contactapi/apps/core/tests/test_celery_process_helper.py`
-- `./.venv38/bin/python -m pytest contactapi/apps/core/tests/test_celery_process_helper.py --tb=short --maxfail=1 -o addopts=`
+- `git status --short`
+- `find artifacts -maxdepth 1 -type f | sort`
+- `python3 -m json.tool artifacts/risk.json`
+- `python3 -m json.tool artifacts/quality.json`
+- `python3 -m json.tool artifacts/verdict.json`
+- `git diff --check`
 - `make check`
 - `make security`
 
+INITIAL_RISK_CLASS
+- LOW: documentation, prompts/process, and artifact hygiene only.
+
 DONE_CRITERIA
-- The helper detects the py311 contactapi worker command shape observed on `contactapi2`.
-- The helper still detects the existing absolute-path production command shape.
-- Unrelated Celery processes are not counted as contactapi Scheduler status.
-- Required artifacts and audit log are updated.
+- Agents have a clear onboarding path.
+- Git/docs/logs/artifacts/kanban expectations are documented.
+- Kanban boards exist for tasks/process, tests/fixes, and features.
+- Per-issue history convention and template exist for GitHub issue branches.
+- `artifacts/` contains only required current-task artifacts, lessons, and audit log.
+- Verification outcomes and blockers are recorded.

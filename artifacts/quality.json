@@ -1,41 +1,48 @@
 {
-  "task": "contactapi2-celery-admin-status",
+  "task": "agent-workspace-cleanup",
   "overall_status": "partial",
   "checks": [
     {
-      "name": "py_compile_changed_files",
-      "command": "python3 -m py_compile contactapi/apps/core/utils/celery_process_helper.py contactapi/apps/core/tests/test_celery_process_helper.py",
-      "status": "passed"
-    },
-    {
-      "name": "focused_celery_process_helper_pytest",
-      "command": "./.venv38/bin/python -m pytest -p no:django contactapi/apps/core/tests/test_celery_process_helper.py --tb=short --maxfail=1 -o addopts=",
+      "name": "git_status",
+      "command": "git status --short",
       "status": "passed",
-      "summary": "4 passed, 1 PytestConfigWarning because the Django plugin was intentionally disabled for this dependency-isolated helper test."
+      "summary": "Shows this task's unstaged documentation/artifact changes plus pre-existing staged `.idea/*` files. The `.idea/*` files were not modified by this task."
     },
     {
-      "name": "focused_new_test_ruff",
-      "command": "./.venv38/bin/python -m ruff check contactapi/apps/core/tests/test_celery_process_helper.py",
+      "name": "artifact_inventory",
+      "command": "find artifacts -maxdepth 1 -type f | sort",
       "status": "passed",
-      "summary": "All checks passed."
+      "summary": "Only required current-task artifacts, lessons, and audit log remain in `artifacts/`."
     },
     {
-      "name": "focused_pytest_with_django_plugin",
-      "command": "./.venv38/bin/python -m pytest contactapi/apps/core/tests/test_celery_process_helper.py --tb=short --maxfail=1 -o addopts=",
-      "status": "failed_environment",
-      "summary": "Django startup failed before collection because local .venv38 lacks pyairtable."
+      "name": "artifact_json_validity",
+      "command": "python3 -m json.tool artifacts/risk.json; python3 -m json.tool artifacts/quality.json; python3 -m json.tool artifacts/verdict.json",
+      "status": "passed",
+      "summary": "All JSON artifacts parsed successfully."
+    },
+    {
+      "name": "git_diff_check",
+      "command": "git diff --check",
+      "status": "passed",
+      "summary": "No whitespace errors found in the unstaged patch."
+    },
+    {
+      "name": "issue_history_inventory",
+      "command": "find docs/issues -maxdepth 1 -type f | sort",
+      "status": "passed",
+      "summary": "`docs/issues/README.md` and `docs/issues/_template.md` exist for durable per-issue history."
     },
     {
       "name": "make_check",
       "command": "make check",
-      "status": "failed_baseline",
-      "summary": "Fails on broad existing ruff/format findings including .claude worktrees, mypy syntax error in contactapi/apps/campaigndata/models.py:42, and pytest startup failure due missing pyairtable."
+      "status": "unavailable",
+      "summary": "Failed with `No rule to make target 'check'`; this agent workspace does not currently define the required Makefile target."
     },
     {
       "name": "make_security",
       "command": "make security",
-      "status": "failed_baseline",
-      "summary": "Fails on existing Bandit findings and pip-audit dependency vulnerabilities; detect-secrets did not report a confirmed secret."
+      "status": "unavailable",
+      "summary": "Failed with `No rule to make target 'security'`; this agent workspace does not currently define the required Makefile target."
     }
   ],
   "focused_tests_passed": true,

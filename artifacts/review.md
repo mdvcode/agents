@@ -1,23 +1,29 @@
 # SUMMARY
-- Fixed Celery admin status detection for the py311 contactapi2 worker command shape.
-- No server-side manual service change was made.
-- No migrations, auth/permission/session/CSRF, billing, payment, protected secret, production settings, or production infrastructure files were changed.
-
-# SERVER_FINDINGS
-- SSH check on `contactapi.static.fyi` at 2026-05-08 11:21 CEST found the py311 contactapi worker running as user `daryna`.
-- The py311 worker command includes `/var/www/hosts/contactapi.static.fyi/contactapi/venv311/bin/python ../venv311/bin/celery -A contactapi worker -P solo -Q py311test`.
-- Production `contactapi.celery.service`, `contactapi.celery-high-priority.service`, and `contactapi.celery-low-priority.service` are active.
-- No contactapi Celery Beat process was found; the only `beat` process in the checked output belonged to unrelated IAM2.
+- Agent workspace structure was improved with durable docs, onboarding, and kanban boards.
+- Stale one-off artifacts were removed from `artifacts/`; required artifacts, lessons, and audit log were preserved.
+- No Django application code was changed.
 
 # CORRECTNESS_FINDINGS
-- Existing exact `CELERY_BINARY_PATH` matching remains supported.
-- Relative Celery commands such as `../venv311/bin/celery -A contactapi` are now detected.
-- Unrelated Celery apps are excluded by requiring the app selector to resolve to `contactapi`.
-- Duplicate process entries are avoided by pid when combining exact-path and fallback matches.
+- `AGENTS.md` now points new agents to onboarding, docs, git/logs, and kanban boards.
+- The docs match the screenshot request: git history, docs store with logs, kanban for tasks/process, kanban for tests/fixes, kanban for features, and onboarding.
+- The docs now also support the clarified GitHub issue workflow: one issue branch plus one durable issue journal under `docs/issues/`.
+- Artifact cleanup keeps the required artifact set listed in `AGENTS.md`.
 
-# TEST_FINDINGS
-- Focused helper tests passed: `4 passed`.
-- Repository-level `make check` and `make security` still fail on existing baseline issues recorded in `artifacts/quality.json` and `artifacts/security.md`.
+# DJANGO_DRF_FINDINGS
+- Not applicable. No Django or DRF application files were changed.
+
+# ARCHITECTURE_FINDINGS
+- The agent workflow is now explicit enough for another agent to enter the repository without relying on hidden context.
+- Long-lived process knowledge now lives in `docs/`; transient task state remains in `artifacts/`.
+
+# POLICY_VIOLATIONS
+- None found in the planned diff.
 
 # KNOWN_LESSON_CONFLICTS
-- None found. The patch is narrowly scoped, does not alter migrations or production settings, and does not change Celery task execution semantics.
+- None found. The task does not repeat the existing lessons about model ownership, lifecycle events, runtime dependencies, management command side effects, admin schema compatibility, or sweep harness pitfalls.
+
+# SUGGESTED_PATCH
+- None.
+
+# NOTES
+- Existing staged `.idea/*` files were user-owned pre-existing changes and were not modified.

@@ -1,31 +1,32 @@
 # Summary
-- Investigated the contactapi2 admin Celery Scheduler status against the real server state.
-- Found a code-side detection bug: py311 Celery is running, but the admin helper only matched an absolute `settings.VIRTUALENV_DIR/bin/celery` cmdline entry.
-- Patched `celery_task_get_processes()` to keep the exact-path match and add a contactapi-specific fallback for relative Celery commands.
-- Added focused tests for absolute path matching, py311 relative command matching, unrelated Celery exclusion, and duplicate avoidance.
+- Analyzed the local agent workspace.
+- Found a strong role split in `.agents/prompts/` and `.agents/skills/`, but the workspace lacked a clear onboarding entry, durable docs index, kanban boards, and artifact cleanup rules.
+- Added the missing structure so new agents can enter the repository consistently and understand where tasks, tests/fixes, features, docs, logs, issue histories, and runtime artifacts live.
 
-# Root Cause
-- On contactapi2, the py311 worker process is launched with `../venv311/bin/celery`.
-- `settings_py311.VIRTUALENV_DIR` resolves to the absolute `.../venv311`, so the old helper looked for `.../venv311/bin/celery` and missed the live process.
-- Because `celery_task_get_admin_context()` uses that helper directly, the admin UI could show `Inaktiv` and `Starten` even while the py311 worker was running.
+# Agent Improvements
+- `AGENTS.md` now defines the agent workspace model.
+- `docs/onboarding.md` gives every agent the same entry checklist.
+- `docs/git-and-logs.md` explains git, docs, logs, and artifact responsibilities.
+- `docs/agent-system.md` records the analysis and recommended next improvements.
+- `docs/kanban/tasks.md`, `docs/kanban/tests-and-fixes.md`, and `docs/kanban/features.md` implement the requested kanban layout.
+- `docs/issues/README.md` and `docs/issues/_template.md` define durable history per GitHub issue and branch.
 
-# File Changes
-## Modified
-- `contactapi/apps/core/utils/celery_process_helper.py`: added robust contactapi Celery cmdline matching.
-- `artifacts/plan.md`, `artifacts/risk.json`, `artifacts/review.md`, `artifacts/quality.json`, `artifacts/security.md`, `artifacts/verdict.json`, `artifacts/report.md`: updated for this task.
-- `artifacts/audit_log.jsonl`: appended this autonomous action.
+# Artifact Cleanup
+- Removed stale one-off probe scripts, large JSON outputs, sweep reports, rollback/smoke leftovers, and obsolete suggested tests from `artifacts/`.
+- Preserved required current-task artifacts, `artifacts/lessons_learned.md`, and `artifacts/audit_log.jsonl`.
 
-## Added
-- `contactapi/apps/core/tests/test_celery_process_helper.py`: focused regression tests.
+# GitHub Issue Flow
+- Each GitHub issue gets its own branch, for example `codex/issue-123-short-name`.
+- Each issue gets its own durable journal, for example `docs/issues/issue-123.md`.
+- `artifacts/` stays focused on the active task and can be cleaned after the issue summary is copied into the journal.
 
 # Verification
-- Server check: py311 contactapi worker is running; no contactapi beat process was found.
-- Passed: `python3 -m py_compile contactapi/apps/core/utils/celery_process_helper.py contactapi/apps/core/tests/test_celery_process_helper.py`.
-- Passed: `./.venv38/bin/python -m pytest -p no:django contactapi/apps/core/tests/test_celery_process_helper.py --tb=short --maxfail=1 -o addopts=` with `4 passed`.
-- Passed: `./.venv38/bin/python -m ruff check contactapi/apps/core/tests/test_celery_process_helper.py`.
-- Failed baseline: `make check` fails on existing broad ruff/format findings, `contactapi/apps/campaigndata/models.py:42` syntax error, and pytest startup failure due missing `pyairtable`.
-- Failed baseline: `make security` fails on existing Bandit and pip-audit findings.
+- Passed: `git status --short` inspection. It shows this task plus pre-existing staged `.idea/*` files that were not modified.
+- Passed: `find artifacts -maxdepth 1 -type f | sort`. Only required artifacts remain.
+- Passed: JSON parsing for `artifacts/risk.json`, `artifacts/quality.json`, and `artifacts/verdict.json`.
+- Passed: `git diff --check`.
+- Blocked: `make check` and `make security` are unavailable because this repository has no matching Makefile targets.
 
 # Next Action
-- Deploy the code patch to the py311 test stand and refresh `/admin/`; the status should detect the existing `py311test` worker as active.
-- Separately decide whether the UI label should be changed from "Scheduler" if the desired status is specifically Celery Beat, because no contactapi beat process was present in the server check.
+- Review the docs/artifact cleanup.
+- Optionally add `make check` and `make security` targets for this agent workspace so future agents can run the full required pipeline here.

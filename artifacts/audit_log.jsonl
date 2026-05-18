@@ -38,3 +38,7 @@
 {"time":"2026-05-07T13:14:02+02:00","agent":"codex","action":"issue-95-enpal-lead-api-core-utils-refactor","commit_sha":"","verdict":"patch","checks_passed":false,"focused_checks_passed":true}
 {"time":"2026-05-07T13:22:53+02:00","agent":"codex","action":"issue-95-enpal-lead-api-review-fix","commit_sha":"","verdict":"patch","checks_passed":false,"focused_checks_passed":true}
 {"time":"2026-05-08T11:31:41+02:00","agent":"codex","action":"contactapi2-celery-admin-status","commit_sha":"","verdict":"patch","checks_passed":false,"focused_checks_passed":true}
+{"time":"2026-05-18T14:20:52+02:00","agent":"codex","action":"agent-workspace-cleanup","commit_sha":"","verdict":"patch","checks_passed":false,"focused_checks_passed":null}
+{"time":"2026-05-18T14:20:52+02:00","agent":"codex","action":"agent-workspace-cleanup-verification","commit_sha":"","verdict":"patch","checks_passed":false,"focused_checks_passed":true}
+{"time":"2026-05-18T14:35:00+02:00","agent":"codex","action":"add-per-issue-history-journals","commit_sha":"","verdict":"patch","checks_passed":false,"focused_checks_passed":null}
+{"time":"2026-05-18T14:35:14+02:00","agent":"codex","action":"verify-per-issue-history-journals","commit_sha":"","verdict":"patch","checks_passed":false,"focused_checks_passed":true}
