@@ -1,0 +1,35 @@
+# Agent System Analysis
+
+## Current State
+- The repository has a good role split: planner, risk classifier, implementation agent, test generator, quality runner, security agent, reviewer, report agent, and orchestrator.
+- The skills are clear and useful, especially the Django, DRF, security, git, testing, and lessons policies.
+- The main weakness was workspace shape: the prompts existed, but there was no obvious front door for a new agent, no durable docs index, no kanban layer, and `artifacts/` had accumulated stale one-off investigation files.
+
+## Improvements Made
+- Added an explicit agent workspace model to `AGENTS.md`.
+- Added onboarding docs so any agent can enter the repo in the same order.
+- Added a docs index and a git/logs/artifacts policy.
+- Added three kanban boards:
+  - task/process execution;
+  - tests and fixes;
+  - features.
+- Added a durable per-issue journal convention so every GitHub issue can keep its own timeline while `artifacts/` remains current-task scratch space.
+- Cleaned stale runtime artifacts so `artifacts/` returns to its intended purpose: current task artifacts plus lessons and audit log.
+
+## Recommended Next Improvements
+- Add a tiny command wrapper later, for example `make agent-status`, that prints current git status, current artifact verdict, and kanban state.
+- Add a task template under `docs/templates/` if repeated tasks become noisy.
+- Keep kanban cards short and link them to artifact reports instead of duplicating long logs.
+- Consider adding an `agent-state.json` only if machines need to consume board state; markdown is better while humans are the primary reviewers.
+- If many GitHub issues are active at once, keep one branch and one `docs/issues/issue-<number>.md` journal per issue.
+
+## Agent Flow
+1. Planner writes scope and checks.
+2. Risk Classifier sets autonomy gates.
+3. Implementation Agent patches narrowly.
+4. Test Generator covers changed behavior.
+5. Quality Runner records quality checks.
+6. Security Agent records security checks.
+7. Reviewer compares the diff against policy and lessons.
+8. Report Agent writes the human summary.
+9. Orchestrator writes the final verdict and next action.
