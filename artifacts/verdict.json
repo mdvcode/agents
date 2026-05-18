@@ -1,0 +1,38 @@
+{
+  "action": "patch",
+  "task": "contactapi2-celery-admin-status",
+  "risk_class": "medium",
+  "checks_passed": false,
+  "focused_checks_passed": true,
+  "repository_checks_passed": false,
+  "blockers": [
+    "Repository-level make check fails on existing broad ruff/format findings, contactapi/apps/campaigndata/models.py:42 syntax error, and pytest startup failure due missing pyairtable.",
+    "Repository-level make security fails on existing Bandit findings and pip-audit dependency vulnerabilities."
+  ],
+  "passed_checks": [
+    "python3 -m py_compile contactapi/apps/core/utils/celery_process_helper.py contactapi/apps/core/tests/test_celery_process_helper.py",
+    "./.venv38/bin/python -m pytest -p no:django contactapi/apps/core/tests/test_celery_process_helper.py --tb=short --maxfail=1 -o addopts= (4 passed)",
+    "./.venv38/bin/python -m ruff check contactapi/apps/core/tests/test_celery_process_helper.py"
+  ],
+  "server_observations": [
+    "py311 contactapi worker is running on contactapi2 as daryna with ../venv311/bin/celery -A contactapi worker -P solo -Q py311test.",
+    "contactapi production venv38 Celery systemd units are active.",
+    "No contactapi Celery Beat process was observed; only unrelated IAM2 beat was present."
+  ],
+  "warnings": [
+    "The admin block label says Scheduler, but the existing helper and start/stop helper operate on contactapi Celery worker processes/services, not a dedicated contactapi beat process.",
+    "Focused pytest was run with the Django plugin disabled because local .venv38 is missing pyairtable and full Django startup fails before test collection."
+  ],
+  "protected_paths_touched": [],
+  "reasoning_summary": [
+    "The incorrect inactive status was caused by exact absolute-path cmdline matching.",
+    "The patch keeps the existing absolute-path behavior and adds a contactapi app-specific fallback for relative Celery commands.",
+    "Unrelated Celery apps on the same host are excluded by requiring -A/--app contactapi."
+  ],
+  "next_actions": [
+    "Deploy the patch to contactapi2 and refresh the admin page.",
+    "Clarify whether a separate Celery Beat status should be displayed, since no contactapi beat process was found on the server.",
+    "Address repository baseline make check and make security failures separately."
+  ],
+  "lessons_updated": false
+}

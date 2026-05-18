@@ -1,0 +1,21 @@
+{
+  "id": 760974,
+  "category": "cfxkvzs",
+  "uuid": "00000000-0000-0000-0000-0000000b9c8e",
+  "is_from_dialfire": false,
+  "dialfire_transfer": true,
+  "kvz_uploads": [
+    {"id": 2606, "exists": false, "has_file": true},
+    {"id": 2607, "exists": false, "has_file": true},
+    {"id": 2608, "exists": false, "has_file": true},
+    {"id": 3402, "exists": false, "has_file": true},
+    {"id": 3403, "exists": false, "has_file": true},
+    {"id": 3732, "exists": false, "has_file": true},
+    {"id": 3733, "exists": false, "has_file": true},
+    {"id": 4075, "exists": false, "has_file": true},
+    {"id": 4076, "exists": false, "has_file": true},
+    {"id": 4077, "exists": false, "has_file": true}
+  ],
+  "pdf_read_ok_count": 0,
+  "pdf_read_errors": []
+}

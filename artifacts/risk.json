@@ -1,0 +1,36 @@
+{
+  "risk_class": "medium",
+  "reasons": [
+    "The change affects Celery admin status and the admin start/stop/restart button gating.",
+    "Celery-related repository rules classify task-adjacent changes as elevated risk; this patch does not change task execution semantics.",
+    "The patch only broadens process detection to match the real py311 command shape observed on contactapi2.",
+    "No migrations, authentication/permission changes, production settings, protected paths, billing/payments, or destructive commands are touched."
+  ],
+  "changed_areas": [
+    "contactapi/apps/core/utils/celery_process_helper.py",
+    "contactapi/apps/core/tests/test_celery_process_helper.py",
+    "artifacts/plan.md",
+    "artifacts/risk.json",
+    "artifacts/review.md",
+    "artifacts/quality.json",
+    "artifacts/security.md",
+    "artifacts/verdict.json",
+    "artifacts/report.md",
+    "artifacts/audit_log.jsonl"
+  ],
+  "protected_paths_touched": [],
+  "autonomy_allowed": {
+    "patch": true,
+    "commit_push": false,
+    "open_pr": false,
+    "auto_merge": false,
+    "deploy_staging": false,
+    "deploy_production": false
+  },
+  "review_focus": [
+    "Verify py311 relative celery commands are now detected.",
+    "Verify unrelated Celery apps on the same host are excluded.",
+    "Verify admin start/restart/kill behavior remains consistent with the detected contactapi process set.",
+    "Verify no manual server-only fix is required."
+  ]
+}

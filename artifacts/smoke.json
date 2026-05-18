@@ -1,0 +1,8 @@
+{
+  "status": "fail",
+  "checks": [],
+  "failures": [
+    "django-system-check",
+    "url-import"
+  ]
+}

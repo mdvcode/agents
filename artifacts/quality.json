@@ -1,0 +1,48 @@
+{
+  "task": "contactapi2-celery-admin-status",
+  "overall_status": "partial",
+  "checks": [
+    {
+      "name": "py_compile_changed_files",
+      "command": "python3 -m py_compile contactapi/apps/core/utils/celery_process_helper.py contactapi/apps/core/tests/test_celery_process_helper.py",
+      "status": "passed"
+    },
+    {
+      "name": "focused_celery_process_helper_pytest",
+      "command": "./.venv38/bin/python -m pytest -p no:django contactapi/apps/core/tests/test_celery_process_helper.py --tb=short --maxfail=1 -o addopts=",
+      "status": "passed",
+      "summary": "4 passed, 1 PytestConfigWarning because the Django plugin was intentionally disabled for this dependency-isolated helper test."
+    },
+    {
+      "name": "focused_new_test_ruff",
+      "command": "./.venv38/bin/python -m ruff check contactapi/apps/core/tests/test_celery_process_helper.py",
+      "status": "passed",
+      "summary": "All checks passed."
+    },
+    {
+      "name": "focused_pytest_with_django_plugin",
+      "command": "./.venv38/bin/python -m pytest contactapi/apps/core/tests/test_celery_process_helper.py --tb=short --maxfail=1 -o addopts=",
+      "status": "failed_environment",
+      "summary": "Django startup failed before collection because local .venv38 lacks pyairtable."
+    },
+    {
+      "name": "make_check",
+      "command": "make check",
+      "status": "failed_baseline",
+      "summary": "Fails on broad existing ruff/format findings including .claude worktrees, mypy syntax error in contactapi/apps/campaigndata/models.py:42, and pytest startup failure due missing pyairtable."
+    },
+    {
+      "name": "make_security",
+      "command": "make security",
+      "status": "failed_baseline",
+      "summary": "Fails on existing Bandit findings and pip-audit dependency vulnerabilities; detect-secrets did not report a confirmed secret."
+    }
+  ],
+  "focused_tests_passed": true,
+  "repository_checks_passed": false,
+  "coverage": {
+    "status": "unknown",
+    "percent": null,
+    "threshold": 80
+  }
+}
