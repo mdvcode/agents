@@ -3,6 +3,18 @@
 ## Mission
 Build safe, reviewable improvements to this Django repository with minimal diffs, explicit verification, and repository-local artifacts that make autonomous work auditable.
 
+## Agent workspace model
+- Treat this repository as the local home base for agents: prompts, skills, docs, logs, kanban boards, and audit artifacts live here.
+- New agents should start with `docs/onboarding.md`, then read `AGENTS.md`, `artifacts/lessons_learned.md`, and the current `artifacts/plan.md`.
+- Use git as the history of agent work. Keep changes small, reviewable, and traceable through `artifacts/audit_log.jsonl`.
+- Store durable process documentation in `docs/`, not in one-off task artifacts.
+- Use markdown kanban boards under `docs/kanban/`:
+  - `docs/kanban/tasks.md` for active execution work and process state.
+  - `docs/kanban/tests-and-fixes.md` for failing checks, fixes, and retests.
+  - `docs/kanban/features.md` for feature ideas and delivery slices.
+- Keep per-issue execution history in `docs/issues/issue-<number>.md`; every GitHub issue branch should have one matching issue journal.
+- The expected output of autonomous work is a local git repository state with code, docs, logs, artifacts, and a clear verdict.
+
 ## Global operating rules
 - Prefer minimal, reversible changes.
 - Never claim success without running verification tools.
@@ -101,6 +113,14 @@ Treat changes touching any of the following as HIGH risk and protected:
 - `artifacts/report.md`
 - `artifacts/lessons_learned.md`
 - `artifacts/audit_log.jsonl`
+
+## Artifact hygiene
+- Keep `artifacts/` small and current.
+- Required artifacts should describe the current task only.
+- Copy durable issue history and final summaries into `docs/issues/issue-<number>.md`; do not rely on `artifacts/` as long-term issue memory.
+- Move durable knowledge into `docs/` or `artifacts/lessons_learned.md`.
+- Do not leave old probe scripts, large JSON dumps, or stale sweep reports in `artifacts/` after their findings have been summarized.
+- If a future task needs temporary investigation outputs, create them intentionally and remove or summarize them before completion.
 
 ## Lessons learned policy
 - Agents must read `AGENTS.md` and `artifacts/lessons_learned.md` before major conclusions.
