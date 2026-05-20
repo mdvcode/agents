@@ -6,14 +6,27 @@ Build safe, reviewable improvements to this Django repository with minimal diffs
 ## Agent workspace model
 - Treat this repository as the local home base for agents: prompts, skills, docs, logs, kanban boards, and audit artifacts live here.
 - New agents should start with `docs/onboarding.md`, then read `AGENTS.md`, `artifacts/lessons_learned.md`, and the current `artifacts/plan.md`.
+- Treat `/Users/user/agents` as a private control plane. Do not assume its memory files can be committed to any target project repository.
 - Use git as the history of agent work. Keep changes small, reviewable, and traceable through `artifacts/audit_log.jsonl`.
 - Store durable process documentation in `docs/`, not in one-off task artifacts.
+- For multiple projects, keep private project memory under `docs/projects/<project>/`.
 - Use markdown kanban boards under `docs/kanban/`:
   - `docs/kanban/tasks.md` for active execution work and process state.
   - `docs/kanban/tests-and-fixes.md` for failing checks, fixes, and retests.
   - `docs/kanban/features.md` for feature ideas and delivery slices.
-- Keep per-issue execution history in `docs/issues/issue-<number>.md`; every GitHub issue branch should have one matching issue journal.
+- Keep per-issue execution history in `docs/projects/<project>/issues/issue-<number>.md`; every GitHub issue branch should have one matching issue journal.
+- Maintain global agent knowledge in `docs/wiki/`, `docs/memory/`, and `docs/graph/`; maintain project-specific private knowledge in `docs/projects/<project>/wiki/`, `docs/projects/<project>/memory/`, and `docs/projects/<project>/graph/`.
+- Use `docs/templates/goal.md` or the same structure in `artifacts/plan.md` before non-trivial implementation.
+- Validate structured artifacts with `make validate-artifacts` or `make check`.
 - The expected output of autonomous work is a local git repository state with code, docs, logs, artifacts, and a clear verdict.
+
+## Privacy and publication rules
+- Private execution memory stays in `/Users/user/agents` by default.
+- Target project repositories should receive only reviewed code, tests, migrations when explicitly approved, and safe public documentation.
+- Do not publish `docs/projects/*/issues/`, `docs/projects/*/memory/`, `docs/projects/*/wiki/`, `docs/projects/*/graph/`, or `artifacts/` into a target project repository unless the user explicitly approves.
+- Before copying any memory into a PR, issue comment, commit message, or project documentation, sanitize it: remove secrets, tokens, private customer data, internal reasoning traces, private URLs, and unnecessary names.
+- Project privacy policy lives in `docs/projects/<project>/privacy.md` and must be read before work on that project.
+- A GitHub issue is not worked automatically when it appears. Start issue work only when the user explicitly gives a project and issue number, unless the user has created a separate automation for monitoring.
 
 ## Global operating rules
 - Prefer minimal, reversible changes.
@@ -35,7 +48,8 @@ For every non-trivial task:
 8. repair failures
 9. re-run checks
 10. update artifacts
-11. decide the next action
+11. update the project issue journal and private project memory/wiki/graph when durable project knowledge changed
+12. decide the next action
 
 ## Python rules
 - Prefer explicit typing where practical.
@@ -117,8 +131,9 @@ Treat changes touching any of the following as HIGH risk and protected:
 ## Artifact hygiene
 - Keep `artifacts/` small and current.
 - Required artifacts should describe the current task only.
-- Copy durable issue history and final summaries into `docs/issues/issue-<number>.md`; do not rely on `artifacts/` as long-term issue memory.
-- Move durable knowledge into `docs/` or `artifacts/lessons_learned.md`.
+- Copy durable issue history and final summaries into `docs/projects/<project>/issues/issue-<number>.md`; do not rely on `artifacts/` as long-term issue memory.
+- Move durable project knowledge into `docs/projects/<project>/wiki/`, `docs/projects/<project>/memory/`, `docs/projects/<project>/graph/`, or `artifacts/lessons_learned.md`.
+- Move only cross-project agent-system knowledge into global `docs/wiki/`, `docs/memory/`, or `docs/graph/`.
 - Do not leave old probe scripts, large JSON dumps, or stale sweep reports in `artifacts/` after their findings have been summarized.
 - If a future task needs temporary investigation outputs, create them intentionally and remove or summarize them before completion.
 

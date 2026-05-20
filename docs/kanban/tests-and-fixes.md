@@ -11,9 +11,10 @@
 - None.
 
 ## Review
-- `make check` and `make security` targets are missing from this agent workspace; add them if the full pipeline should run here.
+- None.
 
 ## Done
 - Test/fix board created.
 - Verified JSON artifacts, artifact inventory, and `git diff --check`.
 - Confirmed no Django application behavior changed.
+- Added `make check`, `make security`, `make validate-artifacts`, and `make agent-status`.

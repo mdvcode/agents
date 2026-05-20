@@ -1,0 +1,13 @@
+{
+  "required": [
+    "task",
+    "overall_status",
+    "checks",
+    "focused_tests_passed",
+    "repository_checks_passed",
+    "coverage"
+  ],
+  "enums": {
+    "overall_status": ["passed", "partial", "failed", "pending"]
+  }
+}

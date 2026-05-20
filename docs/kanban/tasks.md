@@ -1,8 +1,6 @@
 # Tasks Kanban
 
 ## Backlog
-- Add a lightweight `make agent-status` command that summarizes git state, current artifacts, and kanban cards.
-- Add templates for common task types if repetition grows.
 - Add automation later to create an issue branch and issue journal from one command.
 
 ## Ready
@@ -21,3 +19,4 @@
 - Onboarding path documented for new agents.
 - Agent workspace cleanup and onboarding docs completed.
 - Per-issue history convention added under `docs/issues/`.
+- PDF-derived wiki, memory, graph, goal template, schemas, Makefile, and agent skills added.

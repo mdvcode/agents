@@ -15,10 +15,16 @@
   - features.
 - Added a durable per-issue journal convention so every GitHub issue can keep its own timeline while `artifacts/` remains current-task scratch space.
 - Cleaned stale runtime artifacts so `artifacts/` returns to its intended purpose: current task artifacts plus lessons and audit log.
+- Added the PDF-derived architecture:
+  - `docs/wiki/` for LLM Wiki-style durable knowledge.
+  - `docs/memory/` for persistent memory, daily notes, scratchpad, and topics.
+  - `docs/graph/` for project maps.
+  - `docs/templates/goal.md` for `/goal` scoping.
+  - `schemas/`, `scripts/validate_artifacts.py`, and `Makefile` for structured output guardrails.
+  - New skills for issue intake, context engineering, structured output guard, performance optimization, and documentation/ADRs.
 
 ## Recommended Next Improvements
-- Add a tiny command wrapper later, for example `make agent-status`, that prints current git status, current artifact verdict, and kanban state.
-- Add a task template under `docs/templates/` if repeated tasks become noisy.
+- Add a command that creates branch, issue journal, and kanban card from a GitHub issue number.
 - Keep kanban cards short and link them to artifact reports instead of duplicating long logs.
 - Consider adding an `agent-state.json` only if machines need to consume board state; markdown is better while humans are the primary reviewers.
 - If many GitHub issues are active at once, keep one branch and one `docs/issues/issue-<number>.md` journal per issue.

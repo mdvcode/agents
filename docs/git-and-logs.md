@@ -11,6 +11,9 @@
 ## Documentation Store
 - Put durable process documentation in `docs/`.
 - Put per-issue execution history in `docs/issues/`.
+- Put synthesized reusable knowledge in `docs/wiki/`.
+- Put cross-issue memory, daily notes, topic notes, and scratchpad items in `docs/memory/`.
+- Put navigation maps in `docs/graph/`.
 - Put agent prompts in `.agents/prompts/`.
 - Put reusable local skills in `.agents/skills/`.
 - Put task runtime outputs in `artifacts/`.
@@ -24,4 +27,5 @@
 - Required artifacts are the only files that should remain in `artifacts/` by default.
 - Summarize old probes and sweeps into `artifacts/report.md`, `artifacts/review.md`, or durable docs before removing raw files.
 - For GitHub issue work, copy the final result, checks, blockers, and PR link into the issue journal before clearing `artifacts/`.
+- Promote stable lessons to `docs/wiki/` or `docs/memory/`; do not make future agents rediscover them from raw logs.
 - Temporary scripts should be deleted once their results are captured.

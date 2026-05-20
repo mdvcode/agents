@@ -1,0 +1,12 @@
+{
+  "required": [
+    "risk_class",
+    "reasons",
+    "changed_areas",
+    "protected_paths_touched",
+    "autonomy_allowed"
+  ],
+  "enums": {
+    "risk_class": ["low", "medium", "high"]
+  }
+}

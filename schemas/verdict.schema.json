@@ -1,0 +1,18 @@
+{
+  "required": [
+    "action",
+    "task",
+    "risk_class",
+    "checks_passed",
+    "blockers",
+    "warnings",
+    "protected_paths_touched",
+    "reasoning_summary",
+    "next_actions",
+    "lessons_updated"
+  ],
+  "enums": {
+    "action": ["reject", "patch", "commit_push", "open_pr", "await_approval"],
+    "risk_class": ["low", "medium", "high"]
+  }
+}

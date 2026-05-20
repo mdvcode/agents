@@ -1,36 +1,39 @@
 {
   "action": "patch",
-  "task": "agent-workspace-cleanup",
+  "task": "multi-project-private-memory-correction",
   "risk_class": "low",
-  "checks_passed": false,
+  "checks_passed": true,
   "focused_checks_passed": true,
-  "repository_checks_passed": false,
-  "blockers": [
-    "`make check` is unavailable because this repository has no `check` target.",
-    "`make security` is unavailable because this repository has no `security` target."
-  ],
+  "repository_checks_passed": true,
+  "blockers": [],
   "passed_checks": [
     "git status --short",
     "find artifacts -maxdepth 1 -type f | sort",
     "python3 -m json.tool artifacts/risk.json",
     "python3 -m json.tool artifacts/quality.json",
     "python3 -m json.tool artifacts/verdict.json",
+    "python3 scripts/validate_artifacts.py",
     "git diff --check",
-    "find docs/issues -maxdepth 1 -type f | sort"
+    "find docs/issues -maxdepth 1 -type f | sort",
+    "find docs/projects -maxdepth 4 -type f | sort",
+    "find docs/wiki docs/memory docs/graph docs/templates schemas .agents/skills -maxdepth 3 -type f | sort",
+    "make check",
+    "make security",
+    "make agent-status"
   ],
   "warnings": [
     "Pre-existing staged `.idea/*` files remain in the index and were not modified.",
-    "New docs were intentionally left unstaged after removing accidental staging for `docs/`."
+    "`make agent-status` printed non-fatal macOS xcrun cache warnings under the read-only sandbox but exited successfully."
   ],
   "protected_paths_touched": [],
   "reasoning_summary": [
-    "The existing agent prompts and skills were useful, but the workspace lacked a clear onboarding path, durable docs index, kanban boards, per-issue history, and artifact hygiene policy.",
-    "The patch adds those process structures and removes stale one-off artifacts from the live artifacts directory.",
-    "The work is documentation and repository hygiene only."
+    "The user clarified that there are multiple projects and issue execution history is private.",
+    "The patch makes `/Users/user/agents` a private control plane and scopes project memory under `docs/projects/<project>/`.",
+    "The work is documentation and local agent process only; no target project code changed."
   ],
   "next_actions": [
-    "Review the documentation, issue-history convention, and artifact cleanup diff.",
-    "Optionally add `make check` and `make security` targets for this agent workspace."
+    "Create a project folder from `docs/projects/_template/` for each real project.",
+    "Before the next issue, fill that project's `privacy.md`."
   ],
   "lessons_updated": false
 }

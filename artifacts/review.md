@@ -1,20 +1,22 @@
 # SUMMARY
-- Agent workspace structure was improved with durable docs, onboarding, and kanban boards.
-- Stale one-off artifacts were removed from `artifacts/`; required artifacts, lessons, and audit log were preserved.
+- Agent workspace was corrected for multiple projects and private memory.
+- Added `docs/projects/` project template and explicit privacy/publication rules.
 - No Django application code was changed.
 
 # CORRECTNESS_FINDINGS
-- `AGENTS.md` now points new agents to onboarding, docs, git/logs, and kanban boards.
-- The docs match the screenshot request: git history, docs store with logs, kanban for tasks/process, kanban for tests/fixes, kanban for features, and onboarding.
-- The docs now also support the clarified GitHub issue workflow: one issue branch plus one durable issue journal under `docs/issues/`.
-- Artifact cleanup keeps the required artifact set listed in `AGENTS.md`.
+- `AGENTS.md` now states `/Users/user/agents` is a private control plane.
+- Project-specific issue history is now documented as `docs/projects/<project>/issues/issue-<number>.md`.
+- Project-specific memory/wiki/graph are now under `docs/projects/<project>/`.
+- Global `docs/wiki`, `docs/memory`, and `docs/graph` are reserved for cross-project agent-system knowledge.
+- `docs/projects/_template/privacy.md` defines what can and cannot be published to target project repos.
+- Issue work starts only when the user gives project + issue number unless a separate monitor automation is requested.
 
 # DJANGO_DRF_FINDINGS
 - Not applicable. No Django or DRF application files were changed.
 
 # ARCHITECTURE_FINDINGS
-- The agent workflow is now explicit enough for another agent to enter the repository without relying on hidden context.
-- Long-lived process knowledge now lives in `docs/`; transient task state remains in `artifacts/`.
+- The new layout separates private control-plane memory from target project repositories.
+- The project template prevents memory from different projects mixing by default.
 
 # POLICY_VIOLATIONS
 - None found in the planned diff.

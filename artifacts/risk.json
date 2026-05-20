@@ -1,14 +1,23 @@
 {
   "risk_class": "low",
   "reasons": [
-    "Changes are limited to documentation, local agent process guidance, kanban markdown files, per-issue history templates, and artifact cleanup.",
+    "Changes are limited to documentation, local agent process guidance, project memory templates, and skill instructions.",
     "No Django application code, migrations, auth, permissions, sessions, billing, payments, secrets, production settings, or infrastructure files are touched.",
-    "Artifact cleanup removes stale one-off investigation files while preserving required artifacts, lessons, and audit log."
+    "The update reduces confidentiality risk by making project memory private and project-scoped by default."
   ],
   "changed_areas": [
     "AGENTS.md",
     "docs/",
     "docs/issues/",
+    "docs/wiki/",
+    "docs/memory/",
+    "docs/graph/",
+    "docs/projects/",
+    "docs/templates/",
+    ".agents/skills/",
+    "schemas/",
+    "scripts/validate_artifacts.py",
+    "Makefile",
     "artifacts/plan.md",
     "artifacts/risk.json",
     "artifacts/review.md",
@@ -16,8 +25,7 @@
     "artifacts/security.md",
     "artifacts/verdict.json",
     "artifacts/report.md",
-    "artifacts/audit_log.jsonl",
-    "artifacts cleanup"
+    "artifacts/audit_log.jsonl"
   ],
   "protected_paths_touched": [],
   "autonomy_allowed": {
@@ -29,8 +37,8 @@
     "deploy_production": false
   },
   "review_focus": [
-    "Verify onboarding and kanban docs match the requested operating model.",
-    "Verify required artifacts are preserved.",
+    "Verify private project memory is scoped under `docs/projects/<project>/`.",
+    "Verify publication rules prevent private issue history from being committed to target project repositories by default.",
     "Verify no user-owned `.idea/*` changes were modified."
   ]
 }
