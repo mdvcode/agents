@@ -1,39 +1,20 @@
 {
   "action": "patch",
-  "task": "multi-project-private-memory-correction",
+  "task": "Flowfox issue 897",
   "risk_class": "low",
-  "checks_passed": true,
-  "focused_checks_passed": true,
-  "repository_checks_passed": true,
-  "blockers": [],
-  "passed_checks": [
-    "git status --short",
-    "find artifacts -maxdepth 1 -type f | sort",
-    "python3 -m json.tool artifacts/risk.json",
-    "python3 -m json.tool artifacts/quality.json",
-    "python3 -m json.tool artifacts/verdict.json",
-    "python3 scripts/validate_artifacts.py",
-    "git diff --check",
-    "find docs/issues -maxdepth 1 -type f | sort",
-    "find docs/projects -maxdepth 4 -type f | sort",
-    "find docs/wiki docs/memory docs/graph docs/templates schemas .agents/skills -maxdepth 3 -type f | sort",
-    "make check",
-    "make security",
-    "make agent-status"
+  "checks_passed": false,
+  "blockers": [
+    "bun audit reports the existing dependency advisory baseline: 105 vulnerabilities, including 2 critical."
   ],
   "warnings": [
-    "Pre-existing staged `.idea/*` files remain in the index and were not modified.",
-    "`make agent-status` printed non-fatal macOS xcrun cache warnings under the read-only sandbox but exited successfully."
+    "Manual Sanity Studio visual verification on desktop and 13-inch viewport remains recommended."
   ],
-  "protected_paths_touched": [],
-  "reasoning_summary": [
-    "The user clarified that there are multiple projects and issue execution history is private.",
-    "The patch makes `/Users/user/agents` a private control plane and scopes project memory under `docs/projects/<project>/`.",
-    "The work is documentation and local agent process only; no target project code changed."
-  ],
+  "protected_paths_touched": false,
+  "reasoning_summary": "Implemented shared Sanity Studio footer view action behavior for Landing Pages and Advertorials, preserving existing Advertorial behavior while adding Landing Page live/preview URL support and missing-slug disabled state.",
   "next_actions": [
-    "Create a project folder from `docs/projects/_template/` for each real project.",
-    "Before the next issue, fill that project's `privacy.md`."
+    "Review the patch.",
+    "Manually verify the Studio footer layout.",
+    "Handle dependency audit baseline separately."
   ],
-  "lessons_updated": false
+  "lessons_updated": true
 }

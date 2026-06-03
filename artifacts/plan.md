@@ -1,74 +1,63 @@
-TASK
-- Correct the agent system for multiple projects and private project memory.
+# Goal
 
-CONTEXT
-- User clarified that there are multiple projects and that issue execution history is private.
-- The local `/Users/user/agents` repository should be a private control plane, not something copied into target project repositories.
-- Project-specific issue journals, memory, wiki, and graph should be separated per project under `docs/projects/<project>/`.
-- Target project GitHub repositories should receive only reviewed code/tests/public docs and sanitized summaries.
-- GitHub issues should not be solved automatically when they appear; work starts when the user gives a project and issue number unless a separate monitor automation is requested.
+## GOAL
 
-FILES_TO_INSPECT
-- `AGENTS.md`
-- `artifacts/lessons_learned.md`
-- `.agents/skills/*/SKILL.md`
-- `docs/`
-- `artifacts/`
+- Implement `PrimestSpec/flowfox#897`: add a Landing Page Sanity Studio `View Live` / preview footer action beside `Publish`.
 
-FILES_TO_CHANGE
-- `AGENTS.md`
-- `docs/index.md`
-- `docs/onboarding.md`
-- `docs/git-and-logs.md`
-- `docs/agent-system.md`
-- `docs/wiki/`
-- `docs/memory/`
-- `docs/graph/`
-- `docs/projects/`
-- `docs/templates/goal.md`
-- `docs/kanban/tasks.md`
-- `docs/kanban/tests-and-fixes.md`
-- `docs/kanban/features.md`
-- `docs/issues/README.md`
-- `docs/issues/_template.md`
-- `.agents/skills/issue-intake/SKILL.md`
-- `.agents/skills/context-engineering/SKILL.md`
-- `.agents/skills/structured-output-guard/SKILL.md`
-- `.agents/skills/performance-optimization/SKILL.md`
-- `.agents/skills/documentation-and-adrs/SKILL.md`
-- `schemas/`
-- `scripts/validate_artifacts.py`
-- `Makefile`
-- Required files under `artifacts/`
+## CONTEXT
 
-DO_NOT_TOUCH
-- Django application code.
-- Protected paths from `AGENTS.md`.
-- Existing user-added `.idea/*` changes.
+- Existing Advertorial footer action lives in `apps/studio/components/AdvertorialViewAction.tsx`.
+- Existing Studio view URL helper lives in `apps/studio/lib/advertorial-view-url.ts`.
+- Studio footer wiring lives in `apps/studio/sanity.config.tsx`.
+- Focused URL tests live in `lib/__tests__/advertorial-view-url.test.ts`.
 
-ASSUMPTIONS
-- Documentation/process changes are sufficient; no target project code changes are needed.
-- Project memory is private by default and remains local under `/Users/user/agents`.
-- Global `docs/wiki` and `docs/memory` should hold only cross-project agent-system knowledge, not private project issue details.
+## CONSTRAINTS
 
-CHECKS_TO_RUN
-- `git status --short`
-- `find artifacts -maxdepth 1 -type f | sort`
-- `python3 -m json.tool artifacts/risk.json`
-- `python3 -m json.tool artifacts/quality.json`
-- `python3 -m json.tool artifacts/verdict.json`
-- `python3 scripts/validate_artifacts.py`
+- Match the existing Advertorial footer action dimensions, spacing, icon behavior, typography, and publish pairing.
+- Use existing Landing Page `slug.current`; do not add schema fields or Prisma migrations.
+- Disable the action when the active document has no valid slug.
+- Use `/l/<slug>` for Landing Pages and `/a/<slug>` for Advertorials.
+- Preserve draft/preview behavior for unpublished or autosaved documents.
+- Avoid auth, permissions, billing, payment, secrets, dependency, migration, webhook, and production infrastructure changes.
+
+## RISK
+
+- LOW: Sanity Studio UI and deterministic URL helper changes only.
+
+## PLAN
+
+1. Extend the Studio URL helper for both Advertorial and Landing Page documents while preserving existing Advertorial exports.
+2. Update the footer action component to render the same dual-action layout for `advertorial` and `landingPage`.
+3. Wire the generalized footer into Sanity config.
+4. Add focused tests for Landing Page live URLs, draft preview URLs, and missing-slug disabled state.
+5. Update root/external agent guidance, issue journals, and required artifacts.
+6. Run focused Vitest, targeted ESLint, root and Studio Bun TypeScript checks, `git diff --check`, detect-secrets, dependency audit, and external agent checks.
+
+## DONE WHEN
+
+- Landing Page documents show `View Live` directly left of `Publish` in the Sanity editor footer when published and slugged.
+- Draft or locally edited Landing Pages open a preview URL in a new tab.
+- Missing/empty Landing Page slugs disable the view action.
+- Existing Advertorial footer action behavior is unchanged.
+- Required artifacts, issue journals, verification, and audit log are updated.
+
+## VERIFY
+
+- `bun node_modules/vitest/vitest.mjs lib/__tests__/advertorial-view-url.test.ts`
+- `bun node_modules/eslint/bin/eslint.js apps/studio/components/AdvertorialViewAction.tsx apps/studio/lib/advertorial-view-url.ts apps/studio/sanity.config.tsx lib/__tests__/advertorial-view-url.test.ts`
+- `bun node_modules/typescript/lib/tsc.js --noEmit --incremental false`
+- `bun node_modules/typescript/lib/tsc.js --noEmit -p apps/studio/tsconfig.json --incremental false`
 - `git diff --check`
-- `make check`
-- `make security`
+- `detect-secrets scan <changed safe files>`
+- `bun audit`
+- `make check` and `make security` in `external/agents`
 
-INITIAL_RISK_CLASS
-- LOW: documentation, local agent process, schemas, and lightweight validation only.
+## OUTPUT
 
-DONE_CRITERIA
-- `AGENTS.md` states private control-plane and publication rules.
-- `docs/projects/` template exists for multiple projects.
-- Issue journals are project-scoped under `docs/projects/<project>/issues/`.
-- Project privacy policy template exists.
-- Skills and onboarding require project identification and privacy review.
-- Verification outcomes and blockers are recorded.
+- Landing Page Sanity Studio footer view action matching Advertorial footer action.
+- Focused URL helper regression coverage.
+- Updated agent guidance, issue journals, and required artifacts.
+
+## STOP RULES
+
+- Stop if implementation requires migrations, protected paths, auth/session/permission changes, billing/payment changes, secrets, dependency changes, webhook changes, or production deployment changes.

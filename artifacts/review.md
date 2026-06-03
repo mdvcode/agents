@@ -1,31 +1,18 @@
-# SUMMARY
-- Agent workspace was corrected for multiple projects and private memory.
-- Added `docs/projects/` project template and explicit privacy/publication rules.
-- No Django application code was changed.
+# Review
 
-# CORRECTNESS_FINDINGS
-- `AGENTS.md` now states `/Users/user/agents` is a private control plane.
-- Project-specific issue history is now documented as `docs/projects/<project>/issues/issue-<number>.md`.
-- Project-specific memory/wiki/graph are now under `docs/projects/<project>/`.
-- Global `docs/wiki`, `docs/memory`, and `docs/graph` are reserved for cross-project agent-system knowledge.
-- `docs/projects/_template/privacy.md` defines what can and cannot be published to target project repos.
-- Issue work starts only when the user gives project + issue number unless a separate monitor automation is requested.
+## Scope
 
-# DJANGO_DRF_FINDINGS
-- Not applicable. No Django or DRF application files were changed.
+- Flowfox issue 897: Landing Page Sanity Studio `View Live` / preview footer action next to `Publish`.
 
-# ARCHITECTURE_FINDINGS
-- The new layout separates private control-plane memory from target project repositories.
-- The project template prevents memory from different projects mixing by default.
+## Findings
 
-# POLICY_VIOLATIONS
-- None found in the planned diff.
+- Shared Studio URL helper now supports both Advertorial and Landing Page content routes.
+- The existing Advertorial footer layout is reused for Landing Pages with fixed-width buttons and Publish pairing.
+- Draft/autosaved documents use `/api/preview`; published documents without drafts use live public routes.
+- Missing slugs disable the view action.
+- No protected paths, migrations, dependencies, auth/session rules, billing, payments, secrets, webhooks, or production infrastructure are touched.
 
-# KNOWN_LESSON_CONFLICTS
-- None found. The task does not repeat the existing lessons about model ownership, lifecycle events, runtime dependencies, management command side effects, admin schema compatibility, or sweep harness pitfalls.
+## Residual Risk
 
-# SUGGESTED_PATCH
-- None.
-
-# NOTES
-- Existing staged `.idea/*` files were user-owned pre-existing changes and were not modified.
+- Manual Studio visual verification on desktop and 13-inch viewport remains recommended.
+- Dependency audit baseline remains unresolved outside this patch.

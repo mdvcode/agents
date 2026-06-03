@@ -1,79 +1,63 @@
 {
-  "task": "multi-project-private-memory-correction",
-  "overall_status": "passed",
+  "task": "Flowfox issue 897 - Landing Page Studio View Live footer action",
+  "overall_status": "partial",
   "checks": [
     {
-      "name": "git_status",
-      "command": "git status --short",
+      "name": "focused_vitest",
+      "command": "bun node_modules/vitest/vitest.mjs lib/__tests__/advertorial-view-url.test.ts",
       "status": "passed",
-      "summary": "Shows this task's agent-system additions plus pre-existing staged `.idea/*` files. The `.idea/*` files were not modified by this task."
+      "details": "10 focused URL helper tests passed."
     },
     {
-      "name": "artifact_inventory",
-      "command": "find artifacts -maxdepth 1 -type f | sort",
+      "name": "targeted_eslint_changed_files",
+      "command": "bun node_modules/eslint/bin/eslint.js apps/studio/components/AdvertorialViewAction.tsx apps/studio/lib/advertorial-view-url.ts apps/studio/sanity.config.tsx lib/__tests__/advertorial-view-url.test.ts",
       "status": "passed",
-      "summary": "Only required current-task artifacts, lessons, and audit log remain in `artifacts/`."
+      "details": "Completed without output."
     },
     {
-      "name": "artifact_json_validity",
-      "command": "python3 -m json.tool artifacts/risk.json; python3 -m json.tool artifacts/quality.json; python3 -m json.tool artifacts/verdict.json",
+      "name": "root_typecheck",
+      "command": "bun node_modules/typescript/lib/tsc.js --noEmit --incremental false",
       "status": "passed",
-      "summary": "All JSON artifacts parsed successfully."
+      "details": "Completed without output."
     },
     {
-      "name": "artifact_schema_validation",
-      "command": "python3 scripts/validate_artifacts.py",
+      "name": "studio_typecheck",
+      "command": "bun node_modules/typescript/lib/tsc.js --noEmit -p apps/studio/tsconfig.json --incremental false",
       "status": "passed",
-      "summary": "Required JSON artifacts and audit log validated successfully."
+      "details": "Completed without output."
     },
     {
-      "name": "git_diff_check",
+      "name": "diff_check",
       "command": "git diff --check",
       "status": "passed",
-      "summary": "No whitespace errors found in the unstaged patch."
+      "details": "No whitespace errors after final artifact updates."
     },
     {
-      "name": "issue_history_inventory",
-      "command": "find docs/issues -maxdepth 1 -type f | sort",
+      "name": "detect_secrets",
+      "command": "detect-secrets scan <changed safe files>",
       "status": "passed",
-      "summary": "`docs/issues/README.md` and `docs/issues/_template.md` exist as shared rules and template for project-scoped issue journals."
+      "details": "No findings."
     },
     {
-      "name": "project_template_inventory",
-      "command": "find docs/projects -maxdepth 4 -type f | sort",
-      "status": "passed",
-      "summary": "`docs/projects/README.md` and `docs/projects/_template/` exist for multi-project private memory."
+      "name": "dependency_audit",
+      "command": "bun audit",
+      "status": "blocked_baseline",
+      "details": "Existing dependency baseline reports 105 vulnerabilities, including 2 critical."
     },
     {
-      "name": "memory_wiki_graph_inventory",
-      "command": "find docs/wiki docs/memory docs/graph docs/templates schemas .agents/skills -maxdepth 3 -type f | sort",
-      "status": "passed",
-      "summary": "PDF-derived wiki, memory, graph, goal template, schemas, and new skills are present."
-    },
-    {
-      "name": "make_check",
+      "name": "external_agents_check",
       "command": "make check",
       "status": "passed",
-      "summary": "Runs artifact validation, JSON parsing, and `git diff --check`."
+      "details": "Artifact validation, JSON validation, and diff whitespace checks passed."
     },
     {
-      "name": "make_security",
+      "name": "external_agents_security",
       "command": "make security",
       "status": "passed",
-      "summary": "Documentation-only security target completed and points to AGENTS.md plus `make check` guardrails."
-    },
-    {
-      "name": "make_agent_status",
-      "command": "make agent-status",
-      "status": "passed",
-      "summary": "Printed git status and current verdict. macOS emitted non-fatal xcrun cache warnings under the read-only sandbox."
+      "details": "Documentation-only security check passed."
     }
   ],
   "focused_tests_passed": true,
-  "repository_checks_passed": true,
-  "coverage": {
-    "status": "unknown",
-    "percent": null,
-    "threshold": 80
-  }
+  "repository_checks_passed": false,
+  "coverage": "Focused tests cover Landing Page live/preview/disabled URL behavior plus existing Advertorial behavior. Repository status remains partial due to baseline dependency advisories."
 }

@@ -1,44 +1,17 @@
 {
   "risk_class": "low",
   "reasons": [
-    "Changes are limited to documentation, local agent process guidance, project memory templates, and skill instructions.",
-    "No Django application code, migrations, auth, permissions, sessions, billing, payments, secrets, production settings, or infrastructure files are touched.",
-    "The update reduces confidentiality risk by making project memory private and project-scoped by default."
+    "Adds shared Sanity Studio view-target URL handling for Landing Page and Advertorial content documents.",
+    "Updates the existing Studio footer action to render the Advertorial-style dual View/Publish layout for Landing Pages.",
+    "Adds focused URL helper tests only.",
+    "Does not touch protected paths, auth rules, billing, payments, secrets, dependencies, migrations, webhooks, or production infrastructure."
   ],
   "changed_areas": [
-    "AGENTS.md",
-    "docs/",
-    "docs/issues/",
-    "docs/wiki/",
-    "docs/memory/",
-    "docs/graph/",
-    "docs/projects/",
-    "docs/templates/",
-    ".agents/skills/",
-    "schemas/",
-    "scripts/validate_artifacts.py",
-    "Makefile",
-    "artifacts/plan.md",
-    "artifacts/risk.json",
-    "artifacts/review.md",
-    "artifacts/quality.json",
-    "artifacts/security.md",
-    "artifacts/verdict.json",
-    "artifacts/report.md",
-    "artifacts/audit_log.jsonl"
+    "Flowfox Sanity Studio footer action",
+    "Flowfox Studio view URL helper",
+    "focused URL helper tests",
+    "agent guidance and issue journals"
   ],
-  "protected_paths_touched": [],
-  "autonomy_allowed": {
-    "patch": true,
-    "commit_push": false,
-    "open_pr": false,
-    "auto_merge": false,
-    "deploy_staging": false,
-    "deploy_production": false
-  },
-  "review_focus": [
-    "Verify private project memory is scoped under `docs/projects/<project>/`.",
-    "Verify publication rules prevent private issue history from being committed to target project repositories by default.",
-    "Verify no user-owned `.idea/*` changes were modified."
-  ]
+  "protected_paths_touched": false,
+  "autonomy_allowed": true
 }
