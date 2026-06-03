@@ -1,63 +1,21 @@
 {
-  "task": "Flowfox issue 897 - Landing Page Studio View Live footer action",
-  "overall_status": "partial",
+  "task": "Flowfox no-agent-publication and private-file exclusion rules",
+  "overall_status": "passed",
   "checks": [
     {
-      "name": "focused_vitest",
-      "command": "bun node_modules/vitest/vitest.mjs lib/__tests__/advertorial-view-url.test.ts",
+      "name": "artifact_validation",
+      "command": "make validate-artifacts",
       "status": "passed",
-      "details": "10 focused URL helper tests passed."
-    },
-    {
-      "name": "targeted_eslint_changed_files",
-      "command": "bun node_modules/eslint/bin/eslint.js apps/studio/components/AdvertorialViewAction.tsx apps/studio/lib/advertorial-view-url.ts apps/studio/sanity.config.tsx lib/__tests__/advertorial-view-url.test.ts",
-      "status": "passed",
-      "details": "Completed without output."
-    },
-    {
-      "name": "root_typecheck",
-      "command": "bun node_modules/typescript/lib/tsc.js --noEmit --incremental false",
-      "status": "passed",
-      "details": "Completed without output."
-    },
-    {
-      "name": "studio_typecheck",
-      "command": "bun node_modules/typescript/lib/tsc.js --noEmit -p apps/studio/tsconfig.json --incremental false",
-      "status": "passed",
-      "details": "Completed without output."
+      "details": "Artifact validation passed. macOS sandbox emitted non-blocking xcrun cache warnings."
     },
     {
       "name": "diff_check",
       "command": "git diff --check",
       "status": "passed",
-      "details": "No whitespace errors after final artifact updates."
-    },
-    {
-      "name": "detect_secrets",
-      "command": "detect-secrets scan <changed safe files>",
-      "status": "passed",
-      "details": "No findings."
-    },
-    {
-      "name": "dependency_audit",
-      "command": "bun audit",
-      "status": "blocked_baseline",
-      "details": "Existing dependency baseline reports 105 vulnerabilities, including 2 critical."
-    },
-    {
-      "name": "external_agents_check",
-      "command": "make check",
-      "status": "passed",
-      "details": "Artifact validation, JSON validation, and diff whitespace checks passed."
-    },
-    {
-      "name": "external_agents_security",
-      "command": "make security",
-      "status": "passed",
-      "details": "Documentation-only security check passed."
+      "details": "No whitespace errors."
     }
   ],
   "focused_tests_passed": true,
-  "repository_checks_passed": false,
-  "coverage": "Focused tests cover Landing Page live/preview/disabled URL behavior plus existing Advertorial behavior. Repository status remains partial due to baseline dependency advisories."
+  "repository_checks_passed": true,
+  "coverage": "No application tests required for documentation and prompt guidance changes."
 }

@@ -39,6 +39,11 @@ Build safe, reviewable improvements to this Django repository with minimal diffs
 ## Flowfox rules
 - Treat Flowfox as a Next.js 15 / React 19 / Prisma / Sanity repository, not a Django repository.
 - Preserve the existing app-router layout under `app/`, shared helpers under `lib/`, and CMS components under `components/cms/`.
+- For Flowfox issue completion, provide visual local-site evidence before requesting approval whenever the change affects UI, routing, public CMS rendering, Studio UI, dashboard UI, or user-visible behavior. Start or reuse the local dev server, open the affected local URL, and attach at least one screenshot; capture a short video/trace when motion, multi-step interaction, responsive behavior, modal flows, or before/after behavior matters. If local visual evidence is impossible, record the blocker and do not claim approve-ready completion.
+- Flowfox approve gate: after implementation and verification, stop at `await_approval` with the evidence links, changed-file summary, checks, risk, and blockers. Do not commit, push, or open/update a PR until the user explicitly approves that exact completed state.
+- After explicit Flowfox approval, commit only the reviewed changed/added/deleted files that belong to the approved scope. Use the repository's configured identity from `git config user.name` and `git config user.email`; do not hardcode another name/email and do not change git identity unless the user explicitly asks. If either value is missing, stop and ask the user to configure it.
+- Never commit, push, or include in a Flowfox PR any private control-plane files or paths such as `/Users/user/agents`, `external/agents/`, `.agents/`, `artifacts/`, private `docs/projects/*/issues/`, private `docs/projects/*/memory/`, private `docs/projects/*/wiki/`, private `docs/projects/*/graph/`, screenshots/traces with sensitive data, or agent prompt/skill/audit files. Before staging, inspect `git status --short` and stage only approved public Flowfox project files.
+- After explicit Flowfox approval and a successful commit, push the current issue branch to the user's GitHub remote and create or update a PR from that branch. The PR must use the authenticated GitHub account already available to `git`/`gh`, include a sanitized product/engineering summary, checks, risk, and safe local visual evidence references, and exclude private issue notes, secrets, raw screenshots with sensitive data, internal reasoning, agent files, and any mention that agents, Codex, AI, or automation performed the work.
 - Keep SurveyJS rendering client-only; do not introduce server imports of SurveyJS UI packages.
 - For Brand Set styling, prefer shared tokens from `lib/brand-set-css.ts` and the existing `BrandSetSsrStyleTag` / `BrandSetOverrideListener` path over one-off component colors.
 - When a component has local style overrides, preserve the fallback order: local component setting > Brand Set token > system default.
@@ -121,6 +126,8 @@ For every non-trivial task:
 - LOW risk: may patch locally. Commit, push, and PR creation or updates should remain manual unless explicitly requested.
 - MEDIUM risk: may patch and prepare a PR update, but no autonomous commit, auto-merge, or deploy.
 - HIGH risk: may analyze and prepare a patch only, and must await human approval.
+- Flowfox approval exception: when the user explicitly replies with approve/approved/аппрув/одобряю for a completed Flowfox issue state that includes local visual evidence and passing or documented checks, agents may commit the approved file set using the repository's configured `user.name`/`user.email`, push the branch, and create or update the PR. This exception never allows auto-merge, deployment, protected-path changes, secret publication, or unapproved scope expansion.
+- Flowfox publication text rule: commit messages, branch descriptions, PR titles, PR bodies, issue comments, and release notes must not mention agents, Codex, AI assistance, automation, private control-plane files, `/Users/user/agents`, `external/agents`, `.agents`, or `artifacts`. Write them as normal human-authored product/engineering changes.
 
 ## Denylist and protected paths
 Treat changes touching any of the following as HIGH risk and protected:
@@ -174,6 +181,7 @@ A task is not done until:
 - risk is classified
 - artifacts are updated
 - tests are added or updated if needed
+- for Flowfox UI or user-visible work, local screenshot/video/trace evidence is captured or a blocker is recorded
 - the next action is clearly stated
 - an audit log entry is written for autonomous actions
 

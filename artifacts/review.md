@@ -1,18 +1,33 @@
 # Review
 
-## Scope
+## SUMMARY
 
-- Flowfox issue 897: Landing Page Sanity Studio `View Live` / preview footer action next to `Publish`.
+- Process-only update for Flowfox publication wording and private file exclusion.
 
-## Findings
+## CORRECTNESS_FINDINGS
 
-- Shared Studio URL helper now supports both Advertorial and Landing Page content routes.
-- The existing Advertorial footer layout is reused for Landing Pages with fixed-width buttons and Publish pairing.
-- Draft/autosaved documents use `/api/preview`; published documents without drafts use live public routes.
-- Missing slugs disable the view action.
-- No protected paths, migrations, dependencies, auth/session rules, billing, payments, secrets, webhooks, or production infrastructure are touched.
+- No code correctness findings; no application code changed.
 
-## Residual Risk
+## DJANGO_DRF_FINDINGS
 
-- Manual Studio visual verification on desktop and 13-inch viewport remains recommended.
-- Dependency audit baseline remains unresolved outside this patch.
+- Not applicable.
+
+## ARCHITECTURE_FINDINGS
+
+- The new rules keep private agent/control-plane files out of Flowfox commits and PRs and require public text to omit agent/Codex/AI/automation wording.
+
+## POLICY_VIOLATIONS
+
+- None found.
+
+## KNOWN_LESSON_CONFLICTS
+
+- None found.
+
+## SUGGESTED_PATCH
+
+- No further patch required.
+
+## NOTES
+
+- Publishing remains approval-gated, excludes private files, excludes agent/Codex/AI wording, and excludes auto-merge/deploy.

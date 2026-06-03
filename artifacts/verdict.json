@@ -1,20 +1,14 @@
 {
   "action": "patch",
-  "task": "Flowfox issue 897",
+  "task": "Flowfox no-agent-publication and private-file exclusion rules",
   "risk_class": "low",
-  "checks_passed": false,
-  "blockers": [
-    "bun audit reports the existing dependency advisory baseline: 105 vulnerabilities, including 2 critical."
-  ],
-  "warnings": [
-    "Manual Sanity Studio visual verification on desktop and 13-inch viewport remains recommended."
-  ],
+  "checks_passed": true,
+  "blockers": [],
+  "warnings": [],
   "protected_paths_touched": false,
-  "reasoning_summary": "Implemented shared Sanity Studio footer view action behavior for Landing Pages and Advertorials, preserving existing Advertorial behavior while adding Landing Page live/preview URL support and missing-slug disabled state.",
+  "reasoning_summary": "Added Flowfox process guidance forbidding agent/Codex/AI/automation mentions in public commit/PR text and excluding private control-plane files from staging, commits, pushes, and PRs.",
   "next_actions": [
-    "Review the patch.",
-    "Manually verify the Studio footer layout.",
-    "Handle dependency audit baseline separately."
+    "Use the approve-gated workflow on future Flowfox issue work and publish only approved public project files with normal product/engineering wording."
   ],
   "lessons_updated": true
 }

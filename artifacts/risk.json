@@ -1,16 +1,18 @@
 {
   "risk_class": "low",
   "reasons": [
-    "Adds shared Sanity Studio view-target URL handling for Landing Page and Advertorial content documents.",
-    "Updates the existing Studio footer action to render the Advertorial-style dual View/Publish layout for Landing Pages.",
-    "Adds focused URL helper tests only.",
-    "Does not touch protected paths, auth rules, billing, payments, secrets, dependencies, migrations, webhooks, or production infrastructure."
+    "Adds private agent process guidance for Flowfox publication wording and file exclusion.",
+    "Updates documentation, prompts, and skills only.",
+    "Does not touch target Flowfox application code, protected paths, auth rules, billing, payments, secrets, dependencies, migrations, webhooks, production infrastructure, or real GitHub publication."
   ],
   "changed_areas": [
-    "Flowfox Sanity Studio footer action",
-    "Flowfox Studio view URL helper",
-    "focused URL helper tests",
-    "agent guidance and issue journals"
+    "AGENTS.md Flowfox rules",
+    "git workflow documentation",
+    "orchestrator prompt",
+    "git workflow skill",
+    "Flowfox privacy guidance",
+    "agent workflow graph",
+    "task artifacts"
   ],
   "protected_paths_touched": false,
   "autonomy_allowed": true

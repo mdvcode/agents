@@ -1,16 +1,33 @@
 # Security
 
-## Checks
+## SUMMARY
 
-- PASS: `detect-secrets scan <changed safe files>` produced no findings.
-- BLOCKED BASELINE: `bun audit` reports 105 existing vulnerabilities, including 2 critical. No dependency files were changed.
+- Documentation/prompt-only change. No application code, secrets, auth, billing, production settings, or infrastructure changed.
 
-## Protected Paths
+## HIGH
 
-- No protected paths touched.
-- No migrations, auth/session rules, billing, payments, secrets, dependency manifests, webhooks, or production infrastructure changed.
+- None.
 
-## Notes
+## MEDIUM
 
-- Studio view URLs are built from existing Sanity slug values and encoded public paths.
-- Missing slugs disable the action instead of opening a malformed URL.
+- None.
+
+## LOW
+
+- Flowfox publication rules now explicitly forbid staging private control-plane files and forbid public commit/PR wording that exposes agent/Codex/AI/automation involvement.
+
+## DJANGO_SECURITY_NOTES
+
+- Not applicable.
+
+## SECRETS
+
+- No secrets added.
+
+## DEPENDENCY_RISKS
+
+- No dependency changes.
+
+## RECOMMENDED_ACTION
+
+- Keep control-plane files private by default; commit/push only approved public Flowfox project files and use normal product/engineering wording.

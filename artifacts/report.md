@@ -2,41 +2,20 @@
 
 ## Summary
 
-Implemented Flowfox issue 897. Landing Page Sanity Studio documents now share the Advertorial-style footer layout with `View Live` / `View Preview` next to `Publish`, route to `/l/<slug>`, use `/api/preview` for draft/autosave states, and disable the action when no slug is available.
+- Added Flowfox rules that commit messages, PR titles/bodies, issue comments, and release notes must not mention agents, Codex, AI assistance, automation, or private control-plane paths.
+- Added hard exclusions so private agent/control-plane files are never staged, committed, pushed, or included in Flowfox PRs.
+- Preserved the existing approve-gated workflow and configured git identity requirements.
 
-## File Inventory
+## Checks
 
-### Added
+- Passed: `make validate-artifacts`
+- Passed: `git diff --check`
+- Note: `make` emitted non-blocking macOS sandbox warnings about `/tmp/xcrun_db`, but artifact validation passed.
 
-- `docs/issues/issue-897.md`
-- `external/agents/docs/projects/flowfox/issues/issue-897.md`
+## Risk
 
-### Modified
-
-- `AGENTS.md`
-- `apps/studio/components/AdvertorialViewAction.tsx`
-- `apps/studio/lib/advertorial-view-url.ts`
-- `apps/studio/sanity.config.tsx`
-- `lib/__tests__/advertorial-view-url.test.ts`
-- `artifacts/*`
-- `external/agents/AGENTS.md`
-- `external/agents/artifacts/*`
-
-### Deleted
-
-- None.
-
-## Verification
-
-- PASS: focused Vitest for Studio view URL helper behavior.
-- PASS: targeted ESLint for changed Studio action/config/helper/test files.
-- PASS: root Bun TypeScript check.
-- PASS: Studio Bun TypeScript check.
-- PASS: `git diff --check`.
-- PASS: `detect-secrets scan <changed safe files>`.
-- BLOCKED BASELINE: `bun audit` reports 105 existing vulnerabilities, including 2 critical.
-- PASS: `make check` and `make security` in `external/agents`.
+- LOW: private process documentation and prompt guidance only.
 
 ## Next Action
 
-- Review and manually verify the Studio footer layout before rollout.
+- Use this workflow on the next Flowfox issue: implement, verify, capture local visual evidence, request approval, then publish only approved public project files with normal product/engineering commit and PR text.
