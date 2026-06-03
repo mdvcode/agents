@@ -1,22 +1,16 @@
-# SUMMARY
-- Security review for the multi-project private memory correction.
-- The task changes documentation, local skills, and private project memory templates.
-- No secrets, shell execution, eval/exec, database writes, migrations, production settings, or infrastructure files are introduced.
+# Security
 
-# CHECKS
-- `make security`: passed.
-- `make check`: passed.
-- `python3 scripts/validate_artifacts.py`: passed.
-- Manual task-specific security review: passed.
+## Checks
 
-# TASK_SPECIFIC_FINDINGS
-- No task-specific security findings.
-- Existing `.idea/*` staged files were not modified.
-- The change reduces confidentiality risk by making private project memory local-only by default.
-- `docs/projects/_template/privacy.md` defines what may and may not be published to target repositories.
+- PASS: `detect-secrets scan <changed safe files>` produced no findings.
+- BLOCKED BASELINE: `bun audit` reports 105 existing vulnerabilities, including 2 critical. No dependency files were changed.
 
-# BASELINE_FINDINGS
-- No baseline security blocker found for this documentation/tooling-only agent workspace change.
+## Protected Paths
 
-# RECOMMENDED_ACTION
-- No task-specific security blocker was found.
+- No protected paths touched.
+- No migrations, auth/session rules, billing, payments, secrets, dependency manifests, webhooks, or production infrastructure changed.
+
+## Notes
+
+- Studio view URLs are built from existing Sanity slug values and encoded public paths.
+- Missing slugs disable the action instead of opening a malformed URL.
