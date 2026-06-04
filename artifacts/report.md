@@ -2,20 +2,32 @@
 
 ## Summary
 
-- Added Flowfox rules that commit messages, PR titles/bodies, issue comments, and release notes must not mention agents, Codex, AI assistance, automation, or private control-plane paths.
-- Added hard exclusions so private agent/control-plane files are never staged, committed, pushed, or included in Flowfox PRs.
-- Preserved the existing approve-gated workflow and configured git identity requirements.
+- Removed the static `Über Tools & Utilities` information banner from the Toolbox page.
+- Confirmed the approve/publish rule is already present in the Flowfox agent guidance.
+- Added a persistent agent rule for future UI-removal issues to sweep exact text plus neighboring copy/link/icon markers.
 
-## Checks
+## Changed Files
 
-- Passed: `make validate-artifacts`
-- Passed: `git diff --check`
-- Note: `make` emitted non-blocking macOS sandbox warnings about `/tmp/xcrun_db`, but artifact validation passed.
+- `app/(dashboard)/tools/ToolsBoardClient.tsx`
+- `agents/AGENTS.md`
+- `agents/artifacts/*`
+- `agents/docs/projects/flowfox/issues/issue-943.md`
 
-## Risk
+## Verification
 
-- LOW: private process documentation and prompt guidance only.
+- PASS: removed banner text sweep returned zero matches.
+- PASS: targeted ESLint for `ToolsBoardClient`.
+- PASS: root TypeScript check.
+- PASS: `git diff --check`.
+- PASS FALLBACK: changed-file secret marker scan.
+- BLOCKED TOOL MISSING: `detect-secrets` is not installed.
+- BLOCKED BASELINE: `bun audit` reports 105 existing advisories, including 2 critical.
+- PASS VISUAL: authenticated local `/tools` screenshot confirms the page header and tool cards render while removed banner title/copy/link text are absent.
+
+## Evidence
+
+- Authenticated `/tools` screenshot: `/private/tmp/flowfox-issue-943-tools-authenticated-final.png`
 
 ## Next Action
 
-- Use this workflow on the next Flowfox issue: implement, verify, capture local visual evidence, request approval, then publish only approved public project files with normal product/engineering commit and PR text.
+- Await explicit approval before any commit, push, or PR.
