@@ -1,19 +1,17 @@
 {
   "risk_class": "low",
   "reasons": [
-    "Adds private agent process guidance for Flowfox publication wording and file exclusion.",
-    "Updates documentation, prompts, and skills only.",
-    "Does not touch target Flowfox application code, protected paths, auth rules, billing, payments, secrets, dependencies, migrations, webhooks, production infrastructure, or real GitHub publication."
+    "Removes one static informational banner from a dashboard UI component.",
+    "No backend, data model, permission, auth, billing, payment, dependency, migration, webhook, or production infrastructure changes.",
+    "The page title, tools grid, navigation personalization action, and pin controls remain intact."
   ],
   "changed_areas": [
-    "AGENTS.md Flowfox rules",
-    "git workflow documentation",
-    "orchestrator prompt",
-    "git workflow skill",
-    "Flowfox privacy guidance",
-    "agent workflow graph",
-    "task artifacts"
+    "Flowfox Toolbox dashboard UI",
+    "private agent process artifacts",
+    "private Flowfox issue journal",
+    "agent persistent UI-removal sweep guidance"
   ],
   "protected_paths_touched": false,
-  "autonomy_allowed": true
+  "autonomy_allowed": true,
+  "approval_required_before_publish": true
 }
