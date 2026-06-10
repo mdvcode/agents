@@ -2,7 +2,7 @@
 
 This directory stores private memory for multiple target projects.
 
-`/Users/user/agents` is the private control plane. Target project repositories receive only reviewed code, tests, and safe public documentation.
+`/Users/user/agents` is the private control plane. Target project repositories receive only reviewed code, tests, and safe public documentation according to each project's publication rules.
 
 ## Layout
 Each project should use:

@@ -1,22 +1,34 @@
 # Review
 
-## Findings
+## SUMMARY
 
-- No code-blocking findings in the implemented patch.
+- Process-only update changing Flowfox completed LOW/MEDIUM issue publication from approve-gated to automated commit, push, and PR creation.
 
-## Scope Check
+## CORRECTNESS_FINDINGS
 
-- Removed only the static `Über Tools & Utilities` banner container from `app/(dashboard)/tools/ToolsBoardClient.tsx`.
-- Kept the page header, menu-preferences action, tools grid, pin popover, and permission filtering unchanged.
-- Exact UI-code sweep found no remaining matches for the removed banner title, explanatory copy, or internal banner link text.
+- No code correctness findings; no application code changed.
 
-## Verification Notes
+## DJANGO_DRF_FINDINGS
 
-- Targeted ESLint passed after formatting the changed component.
-- Root TypeScript passed without output.
-- Local server reached ready state after a long cold start.
-- Authenticated `/tools` screenshot confirmed the main Toolbox page renders with the page header and cards while the removed banner title/copy/link text are absent.
+- Not applicable.
 
-## Residual Risk
+## ARCHITECTURE_FINDINGS
 
-- Dependency audit remains a known repository baseline blocker unrelated to this UI removal.
+- The new rules commit every task-scoped changed/added/deleted public Flowfox file, use configured git identity plus the authenticated GitHub account, keep private control-plane files out of Flowfox commits and PRs, and require public branch/text metadata to omit agent/Codex/AI/automation wording.
+- Durable workflow/privacy docs now match the new automated publication path.
+
+## POLICY_VIOLATIONS
+
+- None found.
+
+## KNOWN_LESSON_CONFLICTS
+
+- None found.
+
+## SUGGESTED_PATCH
+
+- No further patch required.
+
+## NOTES
+
+- Publishing is automated only for completed LOW/MEDIUM Flowfox issue work after verification and local evidence. HIGH-risk work, protected paths, auto-merge, deploy, secrets, and private files remain blocked.

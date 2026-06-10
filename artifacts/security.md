@@ -1,17 +1,33 @@
 # Security
 
-## Checks
+## SUMMARY
 
-- BLOCKED TOOL MISSING: `detect-secrets scan <changed safe files>` because `detect-secrets` is not installed.
-- PASS FALLBACK: marker scan over changed Flowfox and agent files found no secret-like strings.
-- BLOCKED BASELINE: `bun audit` reports 105 existing vulnerabilities, including 2 critical. No dependency files were changed.
+- Documentation/process-only change. No application code, secrets, auth, billing, production settings, or infrastructure changed.
 
-## Protected Paths
+## HIGH
 
-- No protected paths touched.
-- No migrations, auth/session rules, billing, payments, secrets, dependency manifests, webhooks, or production infrastructure changed.
+- None.
 
-## Notes
+## MEDIUM
 
-- The Flowfox code patch removes static JSX only and does not add new input, output, network, storage, or permission behavior.
-- Authenticated local `/tools` visual verification was completed using the user-provided test access. No credentials are stored in artifacts or report text.
+- Flowfox publication rules now allow automated commit, push, and PR creation for completed LOW/MEDIUM issue work without a separate approval step. The policy still blocks HIGH-risk work, protected paths, secrets, private control-plane files, auto-merge, deploy, and public wording that exposes agent/Codex/AI/automation involvement.
+
+## LOW
+
+- None.
+
+## DJANGO_SECURITY_NOTES
+
+- Not applicable.
+
+## SECRETS
+
+- No secrets added.
+
+## DEPENDENCY_RISKS
+
+- No dependency changes.
+
+## RECOMMENDED_ACTION
+
+- Keep control-plane files private by default; commit/push only task-scoped public Flowfox project files after required verification and use normal product/engineering wording.

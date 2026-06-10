@@ -2,52 +2,54 @@
 
 ## GOAL
 
-- Implement Flowfox issue 943 by removing the `Über Tools & Utilities` information banner from the Toolbox UI and verifying it is not rendered elsewhere.
+- Update Flowfox publication rules so completed issue work is automatically committed, pushed, and opened/updated as a PR from the user's configured git/GitHub identity without a separate approval step.
 
 ## CONTEXT
 
-- GitHub issue 943 asks to remove a static informational banner from the Toolbox and any other dashboard/platform views where the same element appears.
-- User note says the element may exist on multiple pages and should be found quickly through code search.
-- `external/` is not present in this checkout; agent context is under `agents/`.
-- Existing Flowfox agent rules already require local screenshot/video evidence before approval and commit/push/PR only after explicit user approval.
+- User wants every task-scoped changed/added/deleted file included in publication after completion.
+- User wants commits and PRs to use the repository's configured `user.name` / `user.email` and the authenticated GitHub account.
+- User wants no public mention of agents, Codex, AI assistance, or automation.
+- User wants public branch/commit/PR metadata to avoid agent/Codex/AI/automation wording.
+- User wants a local website URL after publication so the issue can be checked.
+- Existing Flowfox rules currently require explicit approval before commit/push/PR and must be changed.
 
 ## CONSTRAINTS
 
-- Keep the `/tools` page, grid cards, pin controls, and header action intact.
-- Remove the banner container from the DOM, including lightbulb icon, explanatory copy, and link to menu preferences.
-- Do not touch migrations, auth, billing, payments, secrets, dependencies, or production infrastructure.
-- Do not commit, push, or create a PR before explicit approval of the completed state.
-- Do not publish private agent/control-plane files.
+- Do not hardcode git `user.name` or `user.email`.
+- Do not auto-publish HIGH-risk or protected-path work.
+- Do not publish private screenshots, issue notes, secrets, internal memory, agent files, or control-plane paths.
+- Do not mention agents, Codex, AI assistance, automation, `.agents`, `artifacts`, `external/agents`, or `/Users/user/agents` in public Flowfox commit/PR text.
+- Do not allow auto-merge, deploy, protected-path changes, or scope expansion.
 
 ## RISK
 
-- LOW: narrow presentation-layer removal in one dashboard client component.
+- MEDIUM: private agent process documentation changes future Flowfox publication behavior by removing the approval gate for LOW/MEDIUM completed issue work.
 
 ## PLAN
 
-1. Read Flowfox agent rules, privacy guidance, and existing lessons.
-2. Fetch and summarize issue 943.
-3. Search exact banner title, neighboring copy, link text, and icon/info markers across UI code.
-4. Remove the banner element with a minimal patch.
-5. Update private agent issue journal and process artifacts.
-6. Run focused verification: zero-match text sweep, targeted ESLint, TypeScript, diff check, and security/dependency checks where available.
-7. Start/reuse local dev server and capture local screenshot evidence for `/tools`.
-8. Stop at `await_approval` with evidence, changed files, checks, risk, and blockers.
+1. Replace the Flowfox explicit approval gate in `AGENTS.md` with an automated publication gate for completed LOW/MEDIUM issue work.
+2. Preserve configured git identity, authenticated GitHub account usage, sanitized PR wording, private-file exclusions, and HIGH/protected stop rules.
+3. Require public-safe Flowfox branch names without agent/Codex/AI/automation wording.
+4. Require the final response after Flowfox publication to include the PR URL and local website URL for checking the issue.
+5. Update durable workflow/privacy docs that still describe the old approve-gated Flowfox publication path.
+6. Update current task artifacts.
+7. Run artifact validation and diff hygiene checks.
 
 ## DONE WHEN
 
-- `Über Tools & Utilities` has zero UI-code matches.
-- The bottom banner is absent from the local `/tools` page screenshot.
-- Checks pass or blockers are recorded.
-- Private agent artifacts and issue journal are updated.
-- Next action is explicit approval before commit/push/PR.
+- Flowfox completed LOW/MEDIUM issue work no longer waits for a separate user approval before commit/push/PR.
+- All task-scoped changed/added/deleted public project files are included in the commit.
+- Commit/PR publication uses configured git identity and authenticated GitHub account.
+- Public publication wording remains free of agent/Codex/AI/automation references.
+- Public Flowfox branch names also remain free of agent/Codex/AI/automation references.
+- Privacy, protected-path, HIGH-risk, no-auto-merge, and no-deploy limits remain intact.
+- Durable docs no longer contradict `AGENTS.md` about Flowfox automated publication.
 
 ## VERIFY
 
-- `rg -n "Über Tools & Utilities|Diese Seite sammelt verschiedene Tools|Einstellungen → Menü personalisieren" app components lib -S -g '!lib/generated/**'`
-- `bun node_modules/eslint/bin/eslint.js app/(dashboard)/tools/ToolsBoardClient.tsx`
-- `bun node_modules/typescript/lib/tsc.js --noEmit --incremental false`
+- `make validate-artifacts`
 - `git diff --check`
-- `detect-secrets scan <changed safe files>` or fallback marker scan if unavailable
-- `bun audit`
-- Local browser screenshot of `/tools`
+
+## STOP RULES
+
+- Stop if the change would require editing target Flowfox application code, migrations, secrets, auth, billing, production infrastructure, or real GitHub publication.

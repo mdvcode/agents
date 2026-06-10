@@ -1,24 +1,12 @@
 {
-  "task": "Flowfox issue 943 - remove Tools & Utilities information banner",
-  "overall_status": "partial",
+  "task": "Flowfox automated publication rules",
+  "overall_status": "passed",
   "checks": [
     {
-      "name": "ui_text_sweep",
-      "command": "rg -n \"Über Tools & Utilities|Diese Seite sammelt verschiedene Tools|Einstellungen → Menü personalisieren\" app components lib -S -g '!lib/generated/**'",
+      "name": "artifact_validation",
+      "command": "make validate-artifacts",
       "status": "passed",
-      "details": "No UI-code matches remain for the removed banner title, explanatory copy, or internal banner link text."
-    },
-    {
-      "name": "targeted_eslint",
-      "command": "bun node_modules/eslint/bin/eslint.js app/(dashboard)/tools/ToolsBoardClient.tsx",
-      "status": "passed",
-      "details": "Passed after running Prettier on the changed component."
-    },
-    {
-      "name": "root_typecheck",
-      "command": "bun node_modules/typescript/lib/tsc.js --noEmit --incremental false",
-      "status": "passed",
-      "details": "Completed without output."
+      "details": "Artifact validation passed. macOS sandbox emitted non-blocking xcrun cache warnings."
     },
     {
       "name": "diff_check",
@@ -27,37 +15,19 @@
       "details": "No whitespace errors."
     },
     {
-      "name": "detect_secrets",
-      "command": "detect-secrets scan <changed safe files>",
-      "status": "blocked_tool_missing",
-      "details": "detect-secrets is not installed in this environment."
-    },
-    {
-      "name": "secret_marker_fallback",
-      "command": "rg -n \"(SECRET|TOKEN|PASSWORD|API_KEY|PRIVATE_KEY|BEGIN [A-Z ]*PRIVATE KEY|ghp_|sk-[A-Za-z0-9]|SANITY_|SUPABASE_|DATABASE_URL)\" <changed files>",
+      "name": "security_placeholder",
+      "command": "make security",
       "status": "passed",
-      "details": "No marker matches in the changed files."
+      "details": "Documentation-only security check passed; protected-path and artifact checks are enforced by AGENTS.md and make check."
     },
     {
-      "name": "dependency_audit",
-      "command": "bun audit",
-      "status": "blocked_baseline",
-      "details": "Existing dependency baseline reports 105 vulnerabilities, including 2 critical. No dependency files were changed."
-    },
-    {
-      "name": "local_server",
-      "command": "NEXT_TELEMETRY_DISABLED=1 bun node_modules/next/dist/bin/next dev -p 3020",
+      "name": "repository_check",
+      "command": "make check",
       "status": "passed",
-      "details": "Server became ready after 179.3s; authenticated /tools rendered successfully."
-    },
-    {
-      "name": "visual_evidence",
-      "command": "Browser screenshot of authenticated local /tools",
-      "status": "passed",
-      "details": "Authenticated /tools screenshot saved at /private/tmp/flowfox-issue-943-tools-authenticated-final.png. DOM check confirmed Tools header present and removed banner title/copy/link text absent."
+      "details": "Artifact validation, JSON validation, and diff hygiene checks passed."
     }
   ],
   "focused_tests_passed": true,
-  "repository_checks_passed": false,
-  "coverage": "Static banner removal is covered by exact UI text sweep, targeted ESLint, root TypeScript, diff hygiene, and authenticated local /tools visual evidence. Repository status remains partial due to baseline dependency advisories and missing detect-secrets tool."
+  "repository_checks_passed": true,
+  "coverage": "No application tests required for documentation and prompt guidance changes."
 }

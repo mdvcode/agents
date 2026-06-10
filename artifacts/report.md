@@ -2,32 +2,23 @@
 
 ## Summary
 
-- Removed the static `Über Tools & Utilities` information banner from the Toolbox page.
-- Confirmed the approve/publish rule is already present in the Flowfox agent guidance.
-- Added a persistent agent rule for future UI-removal issues to sweep exact text plus neighboring copy/link/icon markers.
+- Replaced the Flowfox approve-gated publication path with automated commit, push, and PR creation for completed LOW/MEDIUM issue work after verification and required local evidence.
+- Required every task-scoped changed/added/deleted public Flowfox file to be included in the commit, using configured `user.name` / `user.email` and the authenticated GitHub account.
+- Preserved private-file exclusions, public-safe branch names and sanitized public wording with no agent/Codex/AI/automation mentions, HIGH/protected stop rules, no auto-merge, and no deploy.
+- Added a requirement to send the PR URL plus local website URL after publication.
 
-## Changed Files
+## Checks
 
-- `app/(dashboard)/tools/ToolsBoardClient.tsx`
-- `agents/AGENTS.md`
-- `agents/artifacts/*`
-- `agents/docs/projects/flowfox/issues/issue-943.md`
+- Passed: `make validate-artifacts`
+- Passed: `git diff --check`
+- Passed: `make security`
+- Passed: `make check`
+- Note: `make` emitted non-blocking macOS sandbox warnings about `/tmp/xcrun_db`, but artifact validation passed.
 
-## Verification
+## Risk
 
-- PASS: removed banner text sweep returned zero matches.
-- PASS: targeted ESLint for `ToolsBoardClient`.
-- PASS: root TypeScript check.
-- PASS: `git diff --check`.
-- PASS FALLBACK: changed-file secret marker scan.
-- BLOCKED TOOL MISSING: `detect-secrets` is not installed.
-- BLOCKED BASELINE: `bun audit` reports 105 existing advisories, including 2 critical.
-- PASS VISUAL: authenticated local `/tools` screenshot confirms the page header and tool cards render while removed banner title/copy/link text are absent.
-
-## Evidence
-
-- Authenticated `/tools` screenshot: `/private/tmp/flowfox-issue-943-tools-authenticated-final.png`
+- MEDIUM: private process documentation changes future Flowfox publication behavior by removing the separate approval step for completed LOW/MEDIUM issue work.
 
 ## Next Action
 
-- Await explicit approval before any commit, push, or PR.
+- Use this workflow on the next completed LOW/MEDIUM Flowfox issue: implement, verify, capture local visual evidence, commit task-scoped public files, push, create/update the PR, and send both PR and local site URLs.

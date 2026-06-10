@@ -1,17 +1,20 @@
 {
-  "risk_class": "low",
+  "risk_class": "medium",
   "reasons": [
-    "Removes one static informational banner from a dashboard UI component.",
-    "No backend, data model, permission, auth, billing, payment, dependency, migration, webhook, or production infrastructure changes.",
-    "The page title, tools grid, navigation personalization action, and pin controls remain intact."
+    "Changes private agent process guidance to allow automated Flowfox commit, push, and PR creation for completed LOW/MEDIUM issue work without a separate approval step.",
+    "Touches documentation and task artifacts only.",
+    "Preserves stop rules for HIGH risk, protected paths, failed checks/blockers, private files, secrets, auto-merge, deploy, and public mentions of agents/Codex/AI/automation.",
+    "Does not touch target Flowfox application code, auth rules, billing, payments, secrets, dependencies, migrations, webhooks, production infrastructure, or real GitHub publication."
   ],
   "changed_areas": [
-    "Flowfox Toolbox dashboard UI",
-    "private agent process artifacts",
-    "private Flowfox issue journal",
-    "agent persistent UI-removal sweep guidance"
+    "AGENTS.md Flowfox rules",
+    "docs/git-and-logs.md Flowfox git workflow",
+    "docs/graph/workflows.md Flowfox workflow graph",
+    "docs/graph/agents.md Flowfox publication handoff",
+    "docs/projects/flowfox/privacy.md Flowfox privacy policy",
+    "docs/projects/README.md project publication framing",
+    "task artifacts"
   ],
   "protected_paths_touched": false,
-  "autonomy_allowed": true,
-  "approval_required_before_publish": true
+  "autonomy_allowed": true
 }

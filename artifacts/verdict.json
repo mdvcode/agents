@@ -1,36 +1,14 @@
 {
-  "action": "await_approval",
-  "task": "Flowfox issue 943 - remove Tools & Utilities information banner",
-  "risk_class": "low",
-  "checks_passed": false,
-  "blockers": [
-    "detect-secrets is not installed; fallback marker scan passed.",
-    "bun audit reports the existing dependency baseline: 105 vulnerabilities, including 2 critical."
-  ],
-  "warnings": [
-    "next dev cold start took 173.6s on port 3020.",
-    "Production next build attempt was stopped after Google Fonts socket failures under sandbox networking."
-  ],
-  "protected_paths_touched": [],
-  "flowfox_visual_evidence": {
-    "required": true,
-    "provided": true,
-    "items": [
-      {
-        "type": "screenshot",
-        "path": "/private/tmp/flowfox-issue-943-tools-authenticated-final.png",
-        "description": "Authenticated local /tools screenshot confirming the information banner is absent."
-      }
-    ]
-  },
-  "approval_required_before_publish": true,
-  "reasoning_summary": [
-    "Implemented a narrow UI patch removing the static Toolbox information banner.",
-    "Verified the removed banner text and neighboring copy no longer exist in UI code.",
-    "Authenticated local /tools screenshot confirms the page renders without the removed banner."
-  ],
+  "action": "patch",
+  "task": "Flowfox automated publication rules",
+  "risk_class": "medium",
+  "checks_passed": true,
+  "blockers": [],
+  "warnings": [],
+  "protected_paths_touched": false,
+  "reasoning_summary": "Changed Flowfox process guidance so completed LOW/MEDIUM issue work is automatically committed, pushed, and opened/updated as a PR after verification and local evidence, while preserving configured git identity, authenticated GitHub account usage, private-file exclusions, no agent/Codex/AI/automation public wording, and HIGH/protected stop rules.",
   "next_actions": [
-    "After explicit user approval of the verified state, stage only approved public Flowfox project files, commit with configured git identity, push, and create/update the PR."
+    "Use the automated publication workflow on future completed LOW/MEDIUM Flowfox issue work."
   ],
-  "lessons_updated": true
+  "lessons_updated": false
 }
