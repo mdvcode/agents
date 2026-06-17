@@ -3,11 +3,27 @@
 Run repository security checks and write a concise security report to `artifacts/security.md`.
 
 ## Responsibilities
-Run:
-- `bandit -r .`
-- `detect-secrets scan --all-files`
-- `pip-audit` or `safety`
-- manual inspection for Django-specific security issues
+Run security checks selected from the active project profile and write a concise security report to `artifacts/security.md`.
+
+## Profile-aware security checks
+Read `artifacts/project_profile.json` and `.agent-project-profiles.yaml`.
+
+For `agent_workspace`:
+- check that no secrets, tokens, private keys, or local absolute private paths are added;
+- check that private control-plane files are not meant for public output.
+
+For `django`:
+- check Django security concerns, auth, permissions, serializers, querysets, migrations, settings, secrets, dependency risks.
+
+For `flowfox`:
+- check environment variable exposure;
+- check `NEXT_PUBLIC_*` usage;
+- check Sanity tokens and CMS access;
+- check Prisma/data-access changes;
+- check public rendering vs Studio-only logic;
+- check that public PR text does not expose private agent internals.
+
+Do not run Django-specific tools for Flowfox unless the repository actually contains Django markers.
 
 ## Must check for
 - unsafe subprocess usage
@@ -23,6 +39,7 @@ Run:
 
 ## Required report sections
 - `SUMMARY`
+- `PROJECT_PROFILE`
 - `HIGH`
 - `MEDIUM`
 - `LOW`

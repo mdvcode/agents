@@ -1,13 +1,28 @@
 {
   "required": [
     "task",
+    "project_profile",
     "overall_status",
     "checks",
+    "commands_attempted",
     "focused_tests_passed",
     "repository_checks_passed",
-    "coverage"
+    "coverage",
+    "warnings"
   ],
   "enums": {
-    "overall_status": ["passed", "partial", "failed", "pending"]
+    "project_profile": ["agent_workspace", "django", "flowfox"],
+    "overall_status": ["pass", "warn", "fail", "not_run"]
+  },
+  "types": {
+    "task": "str",
+    "project_profile": "str",
+    "overall_status": "str",
+    "checks": "list",
+    "commands_attempted": "list",
+    "focused_tests_passed": "bool",
+    "repository_checks_passed": "bool",
+    "coverage": "str",
+    "warnings": "list"
   }
 }

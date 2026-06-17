@@ -1,33 +1,41 @@
 {
-  "task": "Normalize agent autonomy contract",
-  "overall_status": "passed",
+  "task": "Add project profiles for agent workspace, Django, and Flowfox.",
+  "project_profile": "agent_workspace",
+  "overall_status": "pass",
   "checks": [
     {
-      "name": "artifact_validation",
+      "name": "validate-artifacts",
       "command": "make validate-artifacts",
-      "status": "passed",
-      "details": "Artifact validation passed with stricter type and nested-field checks plus policy-file presence checks."
+      "status": "pass",
+      "notes": "Artifact schemas and JSON files validated, including project_profile.json."
     },
     {
       "name": "diff_check",
       "command": "git diff --check",
-      "status": "passed",
-      "details": "No whitespace errors."
+      "status": "pass",
+      "notes": "No whitespace errors."
     },
     {
       "name": "security_placeholder",
       "command": "make security",
-      "status": "passed",
-      "details": "Documentation-only security check passed; protected-path and artifact checks remain policy-gated."
+      "status": "pass",
+      "notes": "Documentation-only security check passed for the agent_workspace profile."
     },
     {
-      "name": "repository_check",
+      "name": "make-check",
       "command": "make check",
-      "status": "passed",
-      "details": "Artifact validation, JSON validation, and diff hygiene checks passed."
+      "status": "pass",
+      "notes": "Repository checks completed for the agent_workspace profile."
     }
+  ],
+  "commands_attempted": [
+    "make validate-artifacts",
+    "git diff --check",
+    "make security",
+    "make check"
   ],
   "focused_tests_passed": true,
   "repository_checks_passed": true,
-  "coverage": "No application tests required for documentation and prompt guidance changes."
+  "coverage": "not measured",
+  "warnings": []
 }

@@ -2,12 +2,20 @@
 
 ## Summary
 
-- Added `.agent-policy.yaml` as the machine-readable source of truth for autonomy, publication, protected paths, and human approval gates.
-- Replaced the remaining Flowfox approve-gated prompt/skill paths with automated commit, push, and PR creation for completed LOW/MEDIUM issue work after verification and required local evidence.
-- Added the explicit `Autonomy and publication` rule in `AGENTS.md` and the explicit `Flowfox publication policy` block in the orchestrator prompt.
-- Required every task-scoped changed/added/deleted public Flowfox file to be included in the commit, using configured `user.name` / `user.email` and the authenticated GitHub account.
-- Preserved private-file exclusions, public-safe branch names and sanitized public wording with no agent/Codex/AI/automation mentions, HIGH/protected stop rules, no auto-merge, and no deploy.
-- Strengthened `risk.json` and `verdict.json` schemas, and taught artifact validation to enforce simple types, required nested fields, and `.agent-policy.yaml` presence.
+- Added `.agent-project-profiles.yaml` with `agent_workspace`, `django`, and `flowfox` profiles.
+- Added `artifacts/project_profile.json` and `schemas/project_profile.schema.json`.
+- Updated planner, quality runner, test generator, security agent, reviewer, report agent, and orchestrator prompts to use project profiles before selecting checks or publication actions.
+- Updated `schemas/quality.schema.json` and `artifacts/quality.json` to require `project_profile` and `commands_attempted`.
+- Updated artifact validation and `make check` so `project_profile.json` and `.agent-project-profiles.yaml` are part of the required contract.
+
+## Project profile
+
+- Selected profile: `agent_workspace`
+- Reason: task changes the agent control-plane repository, not a Django or Flowfox application repository.
+- Quality commands attempted: `make validate-artifacts`, `git diff --check`, `make security`, `make check`
+- Security commands attempted: `make security`
+- Frontend evidence required: false
+- Frontend evidence provided: not applicable
 
 ## Checks
 
@@ -18,8 +26,8 @@
 
 ## Risk
 
-- MEDIUM: private process documentation and schemas change future Flowfox publication behavior by removing the separate approval step for completed LOW/MEDIUM issue work.
+- MEDIUM: private process prompts and schemas change future command selection and publication gates across project types.
 
 ## Next Action
 
-- Use this workflow on the next completed LOW/MEDIUM Flowfox issue: implement, verify, capture local visual evidence when required, commit task-scoped public files, push, create/update the PR, and send both PR and local site URLs.
+- Use project profiles before selecting quality checks, security checks, tests, review expectations, or publication gates on future tasks.

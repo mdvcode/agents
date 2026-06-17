@@ -2,51 +2,54 @@
 
 ## GOAL
 
-- Normalize the agent autonomy contract so non-HIGH Flowfox work can automatically commit, push, and create/update a PR after required gates pass.
+- Add project profiles for the agent workspace, Django, and Flowfox so planning, tests, quality checks, security checks, review, report, and publication gates are profile-aware.
+
+## PROJECT_PROFILE
+
+- Selected profile: `agent_workspace`
+- Reason: this task changes the agent control-plane repository under `/Users/user/agents`, including prompts, schemas, artifacts, docs, and validation scripts.
+- Quality commands: `make validate-artifacts`, `make check`
+- Security commands: none required for `agent_workspace`; use the documentation-only `make security` placeholder and manual private-file/secrets review.
+- Frontend evidence required: false
+- Matched markers: `AGENTS.md`, `.agents/**`, `schemas/**`, `artifacts/**`, `scripts/validate_artifacts.py`, `Makefile`
 
 ## CONTEXT
 
-- User corrected the proposed hybrid model: LOW and MEDIUM Flowfox work should both be able to commit, push, and create/update a PR autonomously.
-- User wants every task-scoped changed/added/deleted file included in publication after completion.
-- User wants commits and PRs to use the repository's configured `user.name` / `user.email` and the authenticated GitHub account.
-- User wants no public mention of agents, Codex, AI assistance, or automation.
-- User wants public branch/commit/PR metadata to avoid agent/Codex/AI/automation wording.
-- User wants a local website URL after publication so the issue can be checked.
-- Existing orchestrator and git workflow guidance still require explicit approval before commit/push/PR and must be changed.
-- Risk and verdict schemas are too weak to enforce structured autonomy decisions.
+- Current agent prompts are partly Django-centric and can choose Python/Django checks for Flowfox tasks.
+- Flowfox needs Next.js / React / Prisma / Sanity / Bun / TypeScript checks, not default Django tooling.
+- This agent workspace needs artifact/schema validation, not Django or Flowfox application checks.
+- The selected project profile must be recorded in `artifacts/project_profile.json` and reflected in quality, report, and verdict artifacts.
 
 ## CONSTRAINTS
 
-- Do not hardcode git `user.name` or `user.email`.
-- Do not auto-publish HIGH-risk or protected-path work.
-- Do not publish private screenshots, issue notes, secrets, internal memory, agent files, or control-plane paths.
-- Do not mention agents, Codex, AI assistance, automation, `.agents`, `artifacts`, `external/agents`, or `/Users/user/agents` in public Flowfox commit/PR text.
-- Do not allow auto-merge, deploy, protected-path changes, or scope expansion.
+- Do not add new agents, model routers, frontend QA agents, eval runners, LangGraph, Hermes, or OpenClaw.
+- Do not run Django/Python checks for the agent workspace task.
+- Do not run Flowfox/Bun checks for the agent workspace task.
+- Keep changes limited to harness policy, prompts, schemas, docs, validation, and artifacts.
 
 ## RISK
 
-- MEDIUM: private agent process documentation and schemas change future publication behavior by allowing non-HIGH Flowfox completed issue work to publish autonomously.
+- MEDIUM: private agent process prompts and schemas change future command selection and publication gates across project types.
 
 ## PLAN
 
-1. Add `.agent-policy.yaml` as the machine-readable source of truth for autonomy, publication, protected paths, and human approval gates.
-2. Align `AGENTS.md`, orchestrator prompt, repo policy skill, and git workflow skill with the policy.
-3. Set Flowfox LOW and MEDIUM policy to allow commit/push and PR creation after required gates pass; keep HIGH/protected/manual blockers.
-4. Strengthen risk and verdict schemas plus artifact validation for required types and nested fields.
-5. Update current task artifacts and durable workflow/privacy docs.
-6. Run artifact validation, security placeholder, repository check, and diff hygiene checks.
+1. Add `.agent-project-profiles.yaml` with `agent_workspace`, `django`, and `flowfox` profiles.
+2. Add `artifacts/project_profile.json` and `schemas/project_profile.schema.json`.
+3. Update artifact validation and `make check` to validate the project profile artifact.
+4. Update `AGENTS.md` and planner, quality, test, security, review, report, and orchestrator prompts to use profiles.
+5. Update `schemas/quality.schema.json` and `artifacts/quality.json` to include `project_profile` and `commands_attempted`.
+6. Update current risk, report, review, security, verdict, kanban, and audit artifacts.
+7. Run profile-selected checks for `agent_workspace`: `make validate-artifacts`, `make security`, `make check`, and `git diff --check`.
 
 ## DONE WHEN
 
-- `.agent-policy.yaml` exists and is the source of truth for autonomy/publication gates.
-- Flowfox completed LOW/MEDIUM issue work no longer waits for a separate user approval before commit/push/PR when checks/evidence/protected-path gates pass.
-- All task-scoped changed/added/deleted public project files are included in the commit.
-- Commit/PR publication uses configured git identity and authenticated GitHub account.
-- Public publication wording remains free of agent/Codex/AI/automation references.
-- Public Flowfox branch names also remain free of agent/Codex/AI/automation references.
-- Privacy, protected-path, HIGH-risk, no-auto-merge, and no-deploy limits remain intact.
-- Risk/verdict artifacts use strict structured shapes.
-- Durable docs no longer contradict `.agent-policy.yaml` about Flowfox automated publication.
+- `.agent-project-profiles.yaml` exists and defines `agent_workspace`, `django`, and `flowfox`.
+- `artifacts/project_profile.json` records `agent_workspace` for this task.
+- `schemas/project_profile.schema.json` and `schemas/quality.schema.json` enforce profile-aware artifact fields.
+- Planner, quality runner, test generator, security agent, reviewer, report agent, and orchestrator prompts are profile-aware.
+- Flowfox tasks are guided toward Bun/TypeScript/focused tests and visual evidence rather than Django checks.
+- Agent workspace tasks are guided toward artifact/schema validation.
+- `make validate-artifacts` and `make check` pass.
 
 ## VERIFY
 

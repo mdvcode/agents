@@ -2,7 +2,13 @@
 
 ## SUMMARY
 
-- Documentation/policy/process-only change. No application code, secrets, auth, billing, production settings, or infrastructure changed.
+- Documentation/profile/process-only change. No application code, secrets, auth, billing, production settings, or infrastructure changed.
+
+## PROJECT_PROFILE
+
+- Selected profile: `agent_workspace`
+- Security commands selected: none required by `.agent-project-profiles.yaml`; `make security` was used as the repository placeholder.
+- Frontend evidence required: false.
 
 ## HIGH
 
@@ -10,7 +16,7 @@
 
 ## MEDIUM
 
-- Flowfox publication rules now allow automated commit, push, and PR creation for completed LOW/MEDIUM issue work without a separate approval step. `.agent-policy.yaml` still blocks HIGH-risk work, protected paths, secrets, private control-plane files, auto-merge, deploy, and public wording that exposes agent/Codex/AI/automation involvement.
+- Project profile rules affect future command selection and publication gates. `.agent-project-profiles.yaml` separates agent workspace, Django, and Flowfox checks and keeps HIGH-risk/protected publication gates under `.agent-policy.yaml`.
 
 ## LOW
 
@@ -30,4 +36,4 @@
 
 ## RECOMMENDED_ACTION
 
-- Keep control-plane files private by default; commit/push only task-scoped public Flowfox project files after required verification and use normal product/engineering wording.
+- Keep control-plane files private by default; use the selected project profile before running checks or publishing future work.

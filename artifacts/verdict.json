@@ -1,6 +1,7 @@
 {
   "action": "patch",
-  "task": "Normalize agent autonomy contract",
+  "task": "Add project profiles for agent workspace, Django, and Flowfox",
+  "project_profile": "agent_workspace",
   "risk_class": "medium",
   "checks_passed": true,
   "blockers": [],
@@ -13,13 +14,13 @@
   },
   "approval_required_before_publish": false,
   "reasoning_summary": [
-    "Added `.agent-policy.yaml` as the source of truth for autonomy and publication gates.",
-    "Changed Flowfox policy so completed LOW/MEDIUM issue work may commit, push, and create/update a PR after checks and required evidence without a separate approval step.",
-    "Preserved configured git identity, authenticated GitHub account usage, private-file exclusions, no agent/Codex/AI/automation public wording, and HIGH/protected stop rules.",
-    "Strengthened risk and verdict schemas plus artifact validation for types and nested required fields."
+    "Added `.agent-project-profiles.yaml` with agent_workspace, django, and flowfox profiles.",
+    "Recorded the selected agent_workspace profile in `artifacts/project_profile.json`.",
+    "Updated planner, quality, test, security, review, report, and orchestrator prompts to select checks by profile.",
+    "Strengthened quality and project_profile schemas plus artifact validation so profile data is required before publication."
   ],
   "next_actions": [
-    "Use the automated publication workflow on future completed LOW/MEDIUM Flowfox issue work."
+    "Use project profiles before choosing checks or publication gates on future tasks."
   ],
   "lessons_updated": false
 }

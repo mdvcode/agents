@@ -1,0 +1,131 @@
+version: 1
+default_profile: agent_workspace
+selection_order:
+  - explicit_user_or_issue_profile
+  - changed_files
+  - repository_markers
+  - fallback_default_profile
+profiles:
+  agent_workspace:
+    description: "This repository: agent prompts, skills, schemas, artifacts, memory, wiki, and harness docs."
+    kind: agent_control_plane
+    path_markers:
+      - "AGENTS.md"
+      - ".agent-policy.yaml"
+      - ".agents/**"
+      - "schemas/**"
+      - "artifacts/**"
+      - "docs/**"
+      - "scripts/validate_artifacts.py"
+      - "Makefile"
+    quality_commands:
+      required:
+        - "make validate-artifacts"
+        - "make check"
+      optional:
+        - "python3 -m json.tool artifacts/risk.json >/dev/null"
+        - "python3 -m json.tool artifacts/quality.json >/dev/null"
+        - "python3 -m json.tool artifacts/verdict.json >/dev/null"
+    security_commands:
+      required: []
+      optional:
+        - 'grep -R "sk-\|BEGIN PRIVATE KEY\|password\|token" -n . --exclude-dir=.git || true'
+    test_strategy:
+      primary: "artifact validation"
+      focused_tests: []
+      repository_checks:
+        - "make validate-artifacts"
+        - "make check"
+    frontend_evidence:
+      required: false
+      reason: "Agent workspace is not a frontend application."
+  django:
+    description: "Python / Django / Django REST Framework project."
+    kind: python_django_drf
+    path_markers:
+      - "manage.py"
+      - "pyproject.toml"
+      - "requirements.txt"
+      - "requirements/*.txt"
+      - "**/settings.py"
+      - "**/models.py"
+      - "**/serializers.py"
+      - "**/views.py"
+    quality_commands:
+      required:
+        - "ruff check ."
+        - "ruff format --check ."
+        - "mypy ."
+        - "pytest --tb=short --maxfail=1"
+      optional:
+        - "coverage run -m pytest"
+        - "coverage report"
+    security_commands:
+      required:
+        - "python manage.py check --deploy"
+      optional:
+        - "bandit -r ."
+        - "detect-secrets scan --all-files"
+        - "pip-audit"
+    test_strategy:
+      primary: "pytest"
+      focused_tests:
+        - "pytest path/to/test_file.py::test_name --tb=short"
+      repository_checks:
+        - "ruff check ."
+        - "mypy ."
+        - "pytest --tb=short --maxfail=1"
+    frontend_evidence:
+      required: false
+      reason: "Django profile does not require browser evidence unless the task explicitly changes UI behavior."
+  flowfox:
+    description: "Flowfox: Next.js / React / Prisma / Sanity / Bun / TypeScript project."
+    kind: nextjs_react_prisma_sanity_bun
+    path_markers:
+      - "package.json"
+      - "bun.lockb"
+      - "next.config.*"
+      - "prisma/schema.prisma"
+      - "sanity.config.*"
+      - "apps/web/**"
+      - "apps/studio/**"
+      - "components/**"
+      - "app/**"
+      - "pages/**"
+    quality_commands:
+      required:
+        - "bun node_modules/typescript/lib/tsc.js --noEmit"
+        - "git diff --check"
+      optional:
+        - "bun lint"
+        - "bun test"
+        - "bun test --run <focused-test>"
+        - "bun node_modules/typescript/lib/tsc.js --noEmit -p apps/studio/tsconfig.json --incremental false"
+    security_commands:
+      required:
+        - "git diff --check"
+      optional:
+        - 'grep -R "NEXT_PUBLIC_.*SECRET\|SANITY_AUTH_TOKEN\|DATABASE_URL" -n . --exclude-dir=.git || true'
+    test_strategy:
+      primary: "TypeScript + focused tests"
+      focused_tests:
+        - "bun test --run <focused-test>"
+      repository_checks:
+        - "bun node_modules/typescript/lib/tsc.js --noEmit"
+        - "git diff --check"
+    frontend_evidence:
+      required_for:
+        - "ui"
+        - "routing"
+        - "public_cms_rendering"
+        - "studio_ui"
+        - "dashboard_ui"
+        - "user_visible_behavior"
+      evidence_types:
+        - "local_url"
+        - "screenshot"
+        - "console_errors"
+        - "network_errors"
+        - "notes"
+      allow_pr_if_evidence_unavailable: true
+      unavailable_evidence_requires_warning: true

@@ -12,6 +12,16 @@ ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "artifacts"
 SCHEMAS = ROOT / "schemas"
 POLICY = ROOT / ".agent-policy.yaml"
+PROJECT_PROFILES = ROOT / ".agent-project-profiles.yaml"
+JSON_ARTIFACTS = {
+    "risk": (ARTIFACTS / "risk.json", SCHEMAS / "risk.schema.json"),
+    "quality": (ARTIFACTS / "quality.json", SCHEMAS / "quality.schema.json"),
+    "verdict": (ARTIFACTS / "verdict.json", SCHEMAS / "verdict.schema.json"),
+    "project_profile": (
+        ARTIFACTS / "project_profile.json",
+        SCHEMAS / "project_profile.schema.json",
+    ),
+}
 
 
 def load_json(path: Path) -> Any:
@@ -68,11 +78,11 @@ def validate_object_required(data: dict[str, Any], schema: dict[str, Any], label
     return errors
 
 
-def validate_json_artifact(name: str) -> list[str]:
-    data = load_json(ARTIFACTS / f"{name}.json")
+def validate_json_artifact(name: str, artifact_path: Path, schema_path: Path) -> list[str]:
+    data = load_json(artifact_path)
     if not isinstance(data, dict):
         return [f"{name}.json: top-level value must be an object"]
-    schema = load_json(SCHEMAS / f"{name}.schema.json")
+    schema = load_json(schema_path)
     return validate_required(data, schema, f"{name}.json")
 
 
@@ -108,12 +118,34 @@ def validate_policy_file() -> list[str]:
     return errors
 
 
+def validate_project_profiles_file() -> list[str]:
+    if not PROJECT_PROFILES.exists():
+        return ["missing .agent-project-profiles.yaml"]
+    text = PROJECT_PROFILES.read_text(encoding="utf-8")
+    errors: list[str] = []
+    required_markers = [
+        "version:",
+        "profiles:",
+        "agent_workspace:",
+        "django:",
+        "flowfox:",
+        "quality_commands:",
+        "security_commands:",
+        "frontend_evidence:",
+    ]
+    for marker in required_markers:
+        if marker not in text:
+            errors.append(f".agent-project-profiles.yaml missing marker: {marker}")
+    return errors
+
+
 def main() -> int:
     errors: list[str] = []
-    for name in ("risk", "quality", "verdict"):
-        errors.extend(validate_json_artifact(name))
+    for name, (artifact_path, schema_path) in JSON_ARTIFACTS.items():
+        errors.extend(validate_json_artifact(name, artifact_path, schema_path))
     errors.extend(validate_audit_log())
     errors.extend(validate_policy_file())
+    errors.extend(validate_project_profiles_file())
 
     if errors:
         for error in errors:

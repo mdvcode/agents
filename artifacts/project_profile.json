@@ -1,0 +1,23 @@
+{
+  "project_profile": "agent_workspace",
+  "confidence": "high",
+  "reasons": [
+    "Task touches agent control-plane files.",
+    "Repository contains .agents, schemas, artifacts, docs, and AGENTS.md.",
+    "No Flowfox application source files are present in this repository."
+  ],
+  "matched_markers": [
+    "AGENTS.md",
+    ".agents/**",
+    "schemas/**",
+    "artifacts/**",
+    "scripts/validate_artifacts.py"
+  ],
+  "quality_commands_selected": [
+    "make validate-artifacts",
+    "make check"
+  ],
+  "security_commands_selected": [],
+  "frontend_evidence_required": false,
+  "warnings": []
+}

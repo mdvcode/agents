@@ -4,6 +4,7 @@ check: validate-artifacts
 	python3 -m json.tool artifacts/risk.json >/dev/null
 	python3 -m json.tool artifacts/quality.json >/dev/null
 	python3 -m json.tool artifacts/verdict.json >/dev/null
+	python3 -m json.tool artifacts/project_profile.json >/dev/null
 	git diff --check
 
 security:

@@ -34,6 +34,16 @@ Build safe, reviewable improvements to this Django repository with minimal diffs
 - Never auto-merge or deploy without explicit human approval.
 - Never publish private control-plane files, private memory, issue journals, raw traces, secrets, or agent internals.
 
+## Project profiles
+- The source of truth for project-specific commands and validation strategy is `.agent-project-profiles.yaml`.
+- Before planning, implementing, testing, reviewing, or publishing, agents must determine the active project profile:
+  - `agent_workspace` for this agent control-plane repository;
+  - `django` for Python / Django / DRF projects;
+  - `flowfox` for Flowfox Next.js / React / Prisma / Sanity / Bun work.
+- Agents must not run Django/Python quality commands on Flowfox tasks unless the task explicitly touches a Django project.
+- Agents must not run Flowfox/Bun/Next.js commands on this agent workspace unless the task explicitly targets a Flowfox repository.
+- The selected profile must be recorded in `artifacts/project_profile.json` and referenced in `artifacts/quality.json`, `artifacts/report.md`, and `artifacts/verdict.json`.
+
 ## Global operating rules
 - Prefer minimal, reversible changes.
 - Never claim success without running verification tools.
@@ -129,7 +139,7 @@ For every non-trivial task:
 - Validate external input.
 - Use the ORM or parameterized queries only.
 - Do not touch auth, billing, secrets, or production infrastructure autonomously.
-- `detect-secrets` and dependency audit must be part of the pipeline.
+- `detect-secrets` and dependency audit must be part of the pipeline when the selected project profile requires them.
 
 ## Autonomy gates
 - Follow `.agent-policy.yaml` for exact autonomy permissions by risk class and project.
@@ -162,6 +172,7 @@ Treat changes touching any of the following as HIGH risk and protected:
 ## Required artifacts
 - `artifacts/plan.md`
 - `artifacts/risk.json`
+- `artifacts/project_profile.json`
 - `artifacts/review.md`
 - `artifacts/quality.json`
 - `artifacts/security.md`

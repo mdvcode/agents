@@ -2,7 +2,7 @@
 
 ## SUMMARY
 
-- Process-only update normalizing the agent autonomy contract, adding `.agent-policy.yaml`, and changing remaining Flowfox completed LOW/MEDIUM issue publication guidance from approve-gated to policy-driven automated commit, push, and PR creation.
+- Process-only update adding project profiles for the agent workspace, Django, and Flowfox so checks and publication gates are selected by repository/task type.
 
 ## CORRECTNESS_FINDINGS
 
@@ -15,8 +15,14 @@
 ## ARCHITECTURE_FINDINGS
 
 - The new policy and rules commit every task-scoped changed/added/deleted public Flowfox file, use configured git identity plus the authenticated GitHub account, keep private control-plane files out of Flowfox commits and PRs, and require public branch/text metadata to omit agent/Codex/AI/automation wording.
-- Durable workflow/privacy docs now match the new automated publication path.
-- `risk.json` and `verdict.json` now use structured list/object fields that the validator checks.
+- Project profile guidance preserves the Flowfox publication rules while preventing Django-centric checks from becoming the default for Flowfox tasks.
+- `quality.json` and `project_profile.json` now use structured fields that the validator checks.
+
+## PROJECT_PROFILE_FINDINGS
+
+- Selected profile `agent_workspace` is correct for changes under `/Users/user/agents`.
+- Selected quality commands match `.agent-project-profiles.yaml`: `make validate-artifacts` and `make check`.
+- No Django/Python or Flowfox/Bun commands are used as the main quality signal for this agent workspace task.
 
 ## POLICY_VIOLATIONS
 
@@ -32,4 +38,4 @@
 
 ## NOTES
 
-- Publishing is automated only for completed LOW/MEDIUM Flowfox issue work after verification and local evidence. HIGH-risk work, protected paths, auto-merge, deploy, secrets, and private files remain blocked.
+- Publishing remains gated by `.agent-policy.yaml` and now also by the presence and consistency of `artifacts/project_profile.json`.

@@ -44,6 +44,7 @@ This repository is the local operating base for agents working on the Django cod
 ## Runtime Artifacts
 - `artifacts/plan.md`
 - `artifacts/risk.json`
+- `artifacts/project_profile.json`
 - `artifacts/review.md`
 - `artifacts/quality.json`
 - `artifacts/security.md`
