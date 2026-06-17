@@ -2,7 +2,7 @@
 
 ## SUMMARY
 
-- Documentation/process-only change. No application code, secrets, auth, billing, production settings, or infrastructure changed.
+- Documentation/policy/process-only change. No application code, secrets, auth, billing, production settings, or infrastructure changed.
 
 ## HIGH
 
@@ -10,7 +10,7 @@
 
 ## MEDIUM
 
-- Flowfox publication rules now allow automated commit, push, and PR creation for completed LOW/MEDIUM issue work without a separate approval step. The policy still blocks HIGH-risk work, protected paths, secrets, private control-plane files, auto-merge, deploy, and public wording that exposes agent/Codex/AI/automation involvement.
+- Flowfox publication rules now allow automated commit, push, and PR creation for completed LOW/MEDIUM issue work without a separate approval step. `.agent-policy.yaml` still blocks HIGH-risk work, protected paths, secrets, private control-plane files, auto-merge, deploy, and public wording that exposes agent/Codex/AI/automation involvement.
 
 ## LOW
 

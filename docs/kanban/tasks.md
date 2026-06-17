@@ -19,6 +19,7 @@
 - Flowfox issue 493: Pre-image attribution for Advertorial Content Sections.
 
 ## Done
+- P0: Normalize agent autonomy contract, publication policy, and artifact schemas.
 - Git repository exists for agent workspace history.
 - Durable docs store created under `docs/`.
 - Kanban boards created under `docs/kanban/`.

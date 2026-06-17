@@ -4,6 +4,7 @@
 - Git is the chronological record of agent work.
 - Each GitHub issue should have its own branch, usually `codex/issue-<number>-<short-name>` unless the project has stricter public naming rules.
 - Each issue branch should have one matching journal: `docs/issues/issue-<number>.md`.
+- `.agent-policy.yaml` is the source of truth for autonomy, publication, protected paths, and human approval gates.
 - Commit, push, and PR creation stay manual unless the user explicitly asks or the target project's rules allow automated publication.
 - For Flowfox, completed LOW/MEDIUM issue work is automatically published after implementation, checks, risk classification, and required local visual evidence. Do not wait for a separate user approval unless the work is HIGH risk, touches protected paths, has unresolved blockers, or fails required checks without a recorded accepted blocker.
 - Flowfox commits must use the repository's configured `git config user.name` and `git config user.email`. Do not hardcode or silently change identity; if either value is missing, stop and ask the user to configure it.

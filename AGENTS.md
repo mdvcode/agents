@@ -28,6 +28,12 @@ Build safe, reviewable improvements to this Django repository with minimal diffs
 - Project privacy policy lives in `docs/projects/<project>/privacy.md` and must be read before work on that project.
 - A GitHub issue is not worked automatically when it appears. Start issue work only when the user explicitly gives a project and issue number, unless the user has created a separate automation for monitoring.
 
+## Autonomy and publication
+- The source of truth for autonomy, publication, protected paths, and human approval gates is `.agent-policy.yaml`.
+- If `AGENTS.md`, agent prompts, artifacts, or project docs conflict with `.agent-policy.yaml`, follow `.agent-policy.yaml`.
+- Never auto-merge or deploy without explicit human approval.
+- Never publish private control-plane files, private memory, issue journals, raw traces, secrets, or agent internals.
+
 ## Global operating rules
 - Prefer minimal, reversible changes.
 - Never claim success without running verification tools.
@@ -40,7 +46,7 @@ Build safe, reviewable improvements to this Django repository with minimal diffs
 - Treat Flowfox as a Next.js 15 / React 19 / Prisma / Sanity repository, not a Django repository.
 - Preserve the existing app-router layout under `app/`, shared helpers under `lib/`, and CMS components under `components/cms/`.
 - For Flowfox issue completion, provide visual local-site evidence before publication whenever the change affects UI, routing, public CMS rendering, Studio UI, dashboard UI, or user-visible behavior. Start or reuse the local dev server, open the affected local URL, and attach at least one screenshot; capture a short video/trace when motion, multi-step interaction, responsive behavior, modal flows, or before/after behavior matters. If local visual evidence is impossible, record the blocker and do not publish the issue as complete.
-- Flowfox automated publication gate: after implementation, verification, risk classification, and required local visual evidence, automatically commit, push, and create or update a PR without waiting for a separate user approval, unless the work is HIGH risk, touches protected paths, has unresolved blockers, or fails required checks without a recorded accepted blocker.
+- Flowfox automated publication gate follows `.agent-policy.yaml`: after implementation, verification, risk classification, and required local visual evidence, automatically commit, push, and create or update a PR when policy allows it, without waiting for a separate user approval.
 - For Flowfox publication, commit every task-scoped changed/added/deleted public project file exactly once in a minimal reviewable commit. Use the repository's configured identity from `git config user.name` and `git config user.email`; do not hardcode another name/email and do not change git identity unless the user explicitly asks. If either value is missing, stop and ask the user to configure it.
 - Never commit, push, or include in a Flowfox PR any private control-plane files or paths such as `/Users/user/agents`, `external/agents/`, `.agents/`, `artifacts/`, private `docs/projects/*/issues/`, private `docs/projects/*/memory/`, private `docs/projects/*/wiki/`, private `docs/projects/*/graph/`, screenshots/traces with sensitive data, or agent prompt/skill/audit files. Before staging, inspect `git status --short` and stage only task-scoped public Flowfox project files.
 - After the automated Flowfox commit succeeds, push the current issue branch to the user's GitHub remote and create or update a PR from that branch. The PR must use the authenticated GitHub account already available to `git`/`gh`, include a sanitized product/engineering summary, checks, risk, and safe local visual evidence references, and exclude private issue notes, secrets, raw screenshots with sensitive data, internal reasoning, agent files, and any mention that agents, Codex, AI, or automation performed the work.
@@ -126,8 +132,9 @@ For every non-trivial task:
 - `detect-secrets` and dependency audit must be part of the pipeline.
 
 ## Autonomy gates
-- LOW risk: may patch locally and, for Flowfox issue work, may automatically commit, push, and create or update a PR after required verification and local evidence.
-- MEDIUM risk: may patch locally and, for Flowfox issue work, may automatically commit, push, and create or update a PR after required verification and local evidence, provided protected paths are not touched and blockers are recorded.
+- Follow `.agent-policy.yaml` for exact autonomy permissions by risk class and project.
+- LOW risk: may patch locally and, when policy allows, automatically commit, push, and create or update a PR after required verification and local evidence.
+- MEDIUM risk: may patch locally and, when policy allows, automatically commit, push, and create or update a PR after required verification and local evidence, provided protected paths are not touched and blockers are recorded.
 - HIGH risk: may analyze and prepare a patch only, and must await human approval.
 - Flowfox publication exception: completed LOW or MEDIUM Flowfox issue work does not need a separate approve/approved/аппрув/одобряю reply before commit, push, or PR creation. This exception never allows auto-merge, deployment, protected-path changes, secret publication, HIGH-risk publication, or unapproved scope expansion.
 - Flowfox publication text rule: branch names, commit messages, branch descriptions, PR titles, PR bodies, issue comments, and release notes must not mention agents, Codex, AI assistance, automation, private control-plane files, `/Users/user/agents`, `external/agents`, `.agents`, or `artifacts`. Write them as normal human-authored product/engineering changes.

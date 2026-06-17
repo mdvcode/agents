@@ -8,5 +8,22 @@
   ],
   "enums": {
     "risk_class": ["low", "medium", "high"]
+  },
+  "types": {
+    "risk_class": "str",
+    "reasons": "list",
+    "changed_areas": "list",
+    "protected_paths_touched": "list",
+    "autonomy_allowed": "dict"
+  },
+  "object_required": {
+    "autonomy_allowed": [
+      "patch",
+      "commit_push",
+      "open_pr",
+      "auto_merge",
+      "deploy_staging",
+      "deploy_production"
+    ]
   }
 }

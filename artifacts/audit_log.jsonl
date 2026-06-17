@@ -69,3 +69,5 @@
 {"time":"2026-06-04T13:08:00+02:00","agent":"codex","action":"flowfox-issue-943-remove-tools-utilities-banner","commit_sha":"","verdict":"await_approval","checks_passed":false,"focused_checks_passed":true,"visual_evidence":"blocked_by_auth"}
 {"time":"2026-06-04T13:22:00+02:00","agent":"codex","action":"flowfox-issue-943-authenticated-visual-evidence","commit_sha":"","verdict":"await_approval","checks_passed":false,"focused_checks_passed":true,"visual_evidence":"provided"}
 {"time":"2026-06-10T10:07:31+02:00","agent":"codex","action":"flowfox-automated-publication-rules","commit_sha":"","verdict":"patch","checks_passed":true,"focused_checks_passed":true}
+{"time":"2026-06-17T15:01:00+02:00","agent":"codex","action":"normalize-agent-autonomy-contract","commit_sha":"","verdict":"patch","checks_passed":true,"focused_checks_passed":true}
+{"time":"2026-06-17T15:04:40+02:00","agent":"codex","action":"normalize-agent-autonomy-contract-final-alignment","commit_sha":"","verdict":"patch","checks_passed":true,"focused_checks_passed":true}

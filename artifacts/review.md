@@ -2,7 +2,7 @@
 
 ## SUMMARY
 
-- Process-only update changing Flowfox completed LOW/MEDIUM issue publication from approve-gated to automated commit, push, and PR creation.
+- Process-only update normalizing the agent autonomy contract, adding `.agent-policy.yaml`, and changing remaining Flowfox completed LOW/MEDIUM issue publication guidance from approve-gated to policy-driven automated commit, push, and PR creation.
 
 ## CORRECTNESS_FINDINGS
 
@@ -14,8 +14,9 @@
 
 ## ARCHITECTURE_FINDINGS
 
-- The new rules commit every task-scoped changed/added/deleted public Flowfox file, use configured git identity plus the authenticated GitHub account, keep private control-plane files out of Flowfox commits and PRs, and require public branch/text metadata to omit agent/Codex/AI/automation wording.
+- The new policy and rules commit every task-scoped changed/added/deleted public Flowfox file, use configured git identity plus the authenticated GitHub account, keep private control-plane files out of Flowfox commits and PRs, and require public branch/text metadata to omit agent/Codex/AI/automation wording.
 - Durable workflow/privacy docs now match the new automated publication path.
+- `risk.json` and `verdict.json` now use structured list/object fields that the validator checks.
 
 ## POLICY_VIOLATIONS
 

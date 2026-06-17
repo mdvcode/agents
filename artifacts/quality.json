@@ -1,12 +1,12 @@
 {
-  "task": "Flowfox automated publication rules",
+  "task": "Normalize agent autonomy contract",
   "overall_status": "passed",
   "checks": [
     {
       "name": "artifact_validation",
       "command": "make validate-artifacts",
       "status": "passed",
-      "details": "Artifact validation passed. macOS sandbox emitted non-blocking xcrun cache warnings."
+      "details": "Artifact validation passed with stricter type and nested-field checks plus policy-file presence checks."
     },
     {
       "name": "diff_check",
@@ -18,7 +18,7 @@
       "name": "security_placeholder",
       "command": "make security",
       "status": "passed",
-      "details": "Documentation-only security check passed; protected-path and artifact checks are enforced by AGENTS.md and make check."
+      "details": "Documentation-only security check passed; protected-path and artifact checks remain policy-gated."
     },
     {
       "name": "repository_check",

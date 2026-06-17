@@ -7,6 +7,8 @@
     "blockers",
     "warnings",
     "protected_paths_touched",
+    "flowfox_visual_evidence",
+    "approval_required_before_publish",
     "reasoning_summary",
     "next_actions",
     "lessons_updated"
@@ -14,5 +16,26 @@
   "enums": {
     "action": ["reject", "patch", "commit_push", "open_pr", "await_approval"],
     "risk_class": ["low", "medium", "high"]
+  },
+  "types": {
+    "action": "str",
+    "task": "str",
+    "risk_class": "str",
+    "checks_passed": "bool",
+    "blockers": "list",
+    "warnings": "list",
+    "protected_paths_touched": "list",
+    "flowfox_visual_evidence": "dict",
+    "approval_required_before_publish": "bool",
+    "reasoning_summary": "list",
+    "next_actions": "list",
+    "lessons_updated": "bool"
+  },
+  "object_required": {
+    "flowfox_visual_evidence": [
+      "required",
+      "provided",
+      "items"
+    ]
   }
 }

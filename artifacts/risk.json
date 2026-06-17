@@ -1,13 +1,21 @@
 {
   "risk_class": "medium",
   "reasons": [
-    "Changes private agent process guidance to allow automated Flowfox commit, push, and PR creation for completed LOW/MEDIUM issue work without a separate approval step.",
-    "Touches documentation and task artifacts only.",
+    "Changes private agent process guidance and schemas to allow automated Flowfox commit, push, and PR creation for non-HIGH completed issue work without a separate approval step.",
+    "Adds a machine-readable autonomy and publication policy.",
+    "Touches private control-plane documentation, prompts, skills, schemas, validation, and task artifacts only.",
     "Preserves stop rules for HIGH risk, protected paths, failed checks/blockers, private files, secrets, auto-merge, deploy, and public mentions of agents/Codex/AI/automation.",
     "Does not touch target Flowfox application code, auth rules, billing, payments, secrets, dependencies, migrations, webhooks, production infrastructure, or real GitHub publication."
   ],
   "changed_areas": [
+    ".agent-policy.yaml",
     "AGENTS.md Flowfox rules",
+    ".agents/prompts/orchestrator.md autonomy rules",
+    ".agents/skills/git-workflow/SKILL.md publication workflow",
+    ".agents/skills/repo-policy/SKILL.md policy source of truth",
+    "schemas/risk.schema.json",
+    "schemas/verdict.schema.json",
+    "scripts/validate_artifacts.py",
     "docs/git-and-logs.md Flowfox git workflow",
     "docs/graph/workflows.md Flowfox workflow graph",
     "docs/graph/agents.md Flowfox publication handoff",
@@ -15,6 +23,13 @@
     "docs/projects/README.md project publication framing",
     "task artifacts"
   ],
-  "protected_paths_touched": false,
-  "autonomy_allowed": true
+  "protected_paths_touched": [],
+  "autonomy_allowed": {
+    "patch": true,
+    "commit_push": false,
+    "open_pr": false,
+    "auto_merge": false,
+    "deploy_staging": false,
+    "deploy_production": false
+  }
 }

@@ -1,0 +1,86 @@
+version: 1
+
+default:
+  auto_merge: false
+  deploy_staging: false
+  deploy_production: false
+  require_human_for_high_risk: true
+  require_human_for_protected_paths: true
+
+risk_classes:
+  low:
+    patch: true
+    commit_push: true
+    open_pr: true
+    auto_merge: false
+    deploy_staging: false
+    deploy_production: false
+  medium:
+    patch: true
+    commit_push: true
+    open_pr: true
+    auto_merge: false
+    deploy_staging: false
+    deploy_production: false
+  high:
+    patch: true
+    commit_push: false
+    open_pr: false
+    auto_merge: false
+    deploy_staging: false
+    deploy_production: false
+
+projects:
+  flowfox:
+    publication:
+      low:
+        commit_push: true
+        open_pr: true
+      medium:
+        commit_push: true
+        open_pr: true
+      high:
+        commit_push: false
+        open_pr: false
+    require_visual_evidence_for:
+      - ui
+      - routing
+      - public_cms_rendering
+      - studio_ui
+      - dashboard_ui
+      - user_visible_behavior
+    protected_paths:
+      - ".agents/**"
+      - "artifacts/**"
+      - "docs/projects/*/issues/**"
+      - "docs/projects/*/memory/**"
+      - "docs/projects/*/wiki/**"
+      - "docs/projects/*/graph/**"
+      - "external/agents/**"
+      - ".env"
+      - ".env.*"
+      - "**/*.pem"
+      - "**/*.key"
+      - "**/*secret*"
+      - "**/*token*"
+      - "**/migrations/**"
+      - "**/infra/prod/**"
+      - "**/terraform/**"
+      - "**/k8s/prod/**"
+      - "**/auth/**"
+      - "**/billing/**"
+      - "**/payments/**"
+      - "**/credentials/**"
+      - "**/secrets/**"
+      - "**/settings_prod.py"
+      - "**/settings/production.py"
+    public_output_forbidden_terms:
+      - "agent"
+      - "agents"
+      - "Codex"
+      - "AI"
+      - "automation"
+      - "/Users/user/agents"
+      - "external/agents"
+      - ".agents"
+      - "artifacts"

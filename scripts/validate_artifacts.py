@@ -11,6 +11,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "artifacts"
 SCHEMAS = ROOT / "schemas"
+POLICY = ROOT / ".agent-policy.yaml"
 
 
 def load_json(path: Path) -> Any:
@@ -26,6 +27,44 @@ def validate_required(data: dict[str, Any], schema: dict[str, Any], label: str) 
     for field, allowed in schema.get("enums", {}).items():
         if field in data and data[field] not in allowed:
             errors.append(f"{label}: field {field!r} has invalid value {data[field]!r}")
+    errors.extend(validate_types(data, schema, label))
+    errors.extend(validate_object_required(data, schema, label))
+    return errors
+
+
+def validate_types(data: dict[str, Any], schema: dict[str, Any], label: str) -> list[str]:
+    errors: list[str] = []
+    type_map = {
+        "str": str,
+        "bool": bool,
+        "list": list,
+        "dict": dict,
+    }
+    for field, type_name in schema.get("types", {}).items():
+        if field not in data:
+            continue
+        expected_type = type_map.get(type_name)
+        if expected_type is None:
+            errors.append(f"{label}: schema uses unknown type {type_name!r} for {field!r}")
+            continue
+        if not isinstance(data[field], expected_type):
+            actual_type = type(data[field]).__name__
+            errors.append(f"{label}: field {field!r} must be {type_name}, got {actual_type}")
+    return errors
+
+
+def validate_object_required(data: dict[str, Any], schema: dict[str, Any], label: str) -> list[str]:
+    errors: list[str] = []
+    for field, required_children in schema.get("object_required", {}).items():
+        if field not in data:
+            continue
+        value = data[field]
+        if not isinstance(value, dict):
+            errors.append(f"{label}: field {field!r} must be an object")
+            continue
+        for child in required_children:
+            if child not in value:
+                errors.append(f"{label}: field {field!r} missing child {child!r}")
     return errors
 
 
@@ -58,11 +97,23 @@ def validate_audit_log() -> list[str]:
     return errors
 
 
+def validate_policy_file() -> list[str]:
+    if not POLICY.exists():
+        return [".agent-policy.yaml: missing"]
+    text = POLICY.read_text(encoding="utf-8")
+    errors: list[str] = []
+    for marker in ("version:", "default:", "risk_classes:", "projects:", "flowfox:"):
+        if marker not in text:
+            errors.append(f".agent-policy.yaml: missing marker {marker!r}")
+    return errors
+
+
 def main() -> int:
     errors: list[str] = []
     for name in ("risk", "quality", "verdict"):
         errors.extend(validate_json_artifact(name))
     errors.extend(validate_audit_log())
+    errors.extend(validate_policy_file())
 
     if errors:
         for error in errors:
