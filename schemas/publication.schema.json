@@ -1,0 +1,34 @@
+{
+  "required": [
+    "execution_status",
+    "branch",
+    "commit_created",
+    "commit_sha",
+    "branch_pushed",
+    "pr_created_or_updated",
+    "pr_number",
+    "pr_url",
+    "pr_state",
+    "dry_run",
+    "warnings",
+    "errors"
+  ],
+  "enums": {
+    "execution_status": ["planned", "running", "completed", "blocked", "failed"],
+    "pr_state": ["ready", "draft", "not_created"]
+  },
+  "types": {
+    "execution_status": "str",
+    "branch": "str",
+    "commit_created": "bool",
+    "commit_sha": "str",
+    "branch_pushed": "bool",
+    "pr_created_or_updated": "bool",
+    "pr_number": "int",
+    "pr_url": "str",
+    "pr_state": "str",
+    "dry_run": "bool",
+    "warnings": "list",
+    "errors": "list"
+  }
+}

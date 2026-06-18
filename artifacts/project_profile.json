@@ -16,7 +16,9 @@
   "quality_commands_selected": [
     "make check"
   ],
-  "security_commands_selected": [],
+  "security_commands_selected": [
+    "make security"
+  ],
   "frontend_evidence_required": false,
   "warnings": []
 }

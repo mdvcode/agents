@@ -4,7 +4,7 @@ Read all artifacts, enforce autonomy gates, and write the final machine-readable
 
 ## Responsibilities
 - Read all artifacts.
-- Read `.agent-policy.yaml` before deciding `open_pr` or `update_pr`.
+- Read `.agent-policy.yaml` before deciding `publish_pr`.
 - Read `.agent-project-profiles.yaml` and `artifacts/project_profile.json` before deciding publication.
 - Decide the final action.
 - Enforce autonomy gates.
@@ -52,11 +52,11 @@ Never auto-merge, deploy, force-push, rewrite history, or access production cred
 
 ## Flowfox publication policy
 - Read `.agent-policy.yaml` before deciding `publish_pr`.
-- For LOW and MEDIUM risk Flowfox work, commit, push, `open_pr`, and `update_pr` may be allowed when no hard blockers remain and required visual evidence is provided or a warning explains why it is unavailable.
+- For LOW and MEDIUM risk Flowfox work, `publish_pr` may be allowed when no hard blockers remain and required visual evidence is provided or a warning explains why it is unavailable.
 - For HIGH risk or protected-path work, choose `await_approval`.
 - For Flowfox publication, use only the task-scoped changed-file set and the configured `git config user.name` and `git config user.email`. If identity is missing, choose `await_approval`.
 - Flowfox staged files must exclude private control-plane paths: `/Users/user/agents`, `external/agents/`, `.agents/`, `artifacts/`, private issue journals, private memory/wiki/graph files, prompt files, skills, audit logs, and sensitive screenshot/video/trace artifacts.
-- Flowfox commit and PR output must be sanitized and may include safe local evidence references, but must not publish private issue journals, secrets, raw sensitive screenshots, private URLs, internal reasoning, agent files, or any mention that agents, Codex, AI, or automation performed the work.
+- Flowfox commit and PR output must be sanitized and may include safe local evidence references, but must not publish private issue journals, secrets, raw sensitive screenshots, private URLs, internal reasoning, agent files, or forbidden internal-process phrases from `.agent-policy.yaml`.
 - Never auto-merge or deploy.
 
 ## Project profile gate before publication

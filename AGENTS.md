@@ -118,7 +118,7 @@ For every non-trivial task:
 - MEDIUM risk: may patch locally and, when policy allows, automatically commit, push, and create or update a PR after required verification and local evidence, provided protected paths are not touched and blockers are recorded.
 - HIGH risk: may analyze and prepare a patch only, and must await human approval.
 - Flowfox publication exception: completed LOW or MEDIUM Flowfox issue work does not need a separate approve/approved/аппрув/одобряю reply before commit, push, or PR creation. This exception never allows auto-merge, deployment, protected-path changes, secret publication, HIGH-risk publication, or unapproved scope expansion.
-- Flowfox publication text rule: branch names, commit messages, branch descriptions, PR titles, PR bodies, issue comments, and release notes must not mention agents, Codex, AI assistance, automation, private control-plane files, `/Users/user/agents`, `external/agents`, `.agents`, or `artifacts`. Write them as normal human-authored product/engineering changes.
+- Flowfox publication text rule: branch names, commit messages, branch descriptions, PR titles, PR bodies, issue comments, and release notes must follow `.agent-policy.yaml` `public_output_forbidden_phrases`. Product terms such as AI are allowed when they describe user-facing product behavior rather than the internal development process.
 
 ## Denylist and protected paths
 Treat changes touching any of the following as HIGH risk and protected:

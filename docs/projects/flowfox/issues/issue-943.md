@@ -35,6 +35,5 @@
 
 ## Approval Gate
 
-- Stop before publish and wait for explicit user approval of the verified state.
-- Do not commit, push, or create/update a PR until the user explicitly approves the verified state.
+- Superseded by `.agent-policy.yaml` on 2026-06-10: LOW/MEDIUM Flowfox work may publish autonomously when policy gates, checks, and evidence rules allow it.
 - After approval, stage only approved public Flowfox project files and publish with normal product/engineering wording.

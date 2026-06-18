@@ -2,34 +2,38 @@
 
 ## Summary
 
-- Split publication autonomy into separate `commit`, `push`, `open_pr`, and `update_pr` permissions.
-- Updated risk classifier, risk schema, risk artifact, orchestrator prompt, verdict schema, and verdict artifact to use the stricter contract.
-- Added semantic validation for risk invariants, verdict invariants, cross-artifact profile/risk consistency, and structurally parsed YAML policies.
-- Made implementation and test prompts fully profile-aware.
-- Added `requirements-dev.txt` for PyYAML/pytest, regression tests for the artifact validator, a real `make security` scanner, and a git-safe `make check`.
-- Shortened root `AGENTS.md`, moved Flowfox-specific rules to `docs/projects/flowfox/AGENTS.md`, added `.gitignore`, and removed `.idea/` metadata from git tracking.
+- Added `scripts/publish_pr.py`, an executable commit/push/PR publication path with preflight gates, dry-run mode, allowlisted staging, existing-PR update, PR creation, partial failure recording, verdict updates, and audit logging.
+- Added `artifacts/change_set.json`, `artifacts/publication.json`, their schemas, `.agent-workflows.yaml`, and `.github/workflows/agent-harness-checks.yml`.
+- Made `scripts/security_scan.py` profile-aware: private workspace artifacts are allowed for `agent_workspace`, while target repositories still block private artifacts and project memory.
+- Strengthened validation for nested object types/enums, selected profile commands, policy public-output phrase rules, workflow config, and publication/change-set artifacts.
+- Updated stale security/plan wording and marked the old Flowfox issue 943 approval gate as superseded by `.agent-policy.yaml`.
 
 ## Project profile
 
 - Selected profile: `agent_workspace`
-- Reason: task changes the agent control-plane repository, not a Django or Flowfox application repository.
-- Quality commands attempted: `make validate-artifacts`, `python3 -m pytest tests/test_validate_artifacts.py`, `git diff HEAD --check`, `make security`, `make check`
-- Security commands attempted: `make security` via `scripts/security_scan.py`
+- Reason: task changes private agent harness files, not a Django or Flowfox application repository.
+- Quality commands attempted: `make validate-artifacts`, `make security`, `python3 -m pytest tests`, `make check`, `git diff HEAD --check`
+- Security commands attempted: `make security`
 - Frontend evidence required: false
 - Frontend evidence provided: not applicable
 
 ## Checks
 
 - Passed: `make validate-artifacts`
-- Passed: `python3 -m pytest tests/test_validate_artifacts.py` (15 tests)
-- Passed: `git diff HEAD --check`
 - Passed: `make security`
+- Passed: `python3 -m pytest tests` (33 tests)
 - Passed: `make check`
+- Passed: `git diff HEAD --check`
 
 ## Risk
 
-- MEDIUM: private agent harness contracts and validation semantics change future autonomy and publication behavior.
+- MEDIUM: this adds an autonomous Git/GitHub executor to the private harness, but all hard publication blockers remain enforced and no production systems are touched.
+
+## Publication
+
+- Live commit/push/PR was not executed in this implementation run.
+- Executor state remains `planned`; `scripts/publish_pr.py --dry-run` is available for preflight without mutations.
 
 ## Next Action
 
-- Use the hardened validator and verdict contract before autonomous commit, push, and PR publication on future LOW/MEDIUM tasks.
+- Use `scripts/publish_pr.py` from a non-default task branch with a reviewed `artifacts/change_set.json` to perform autonomous publication when policy gates pass.

@@ -14,7 +14,7 @@
 
 ## ARCHITECTURE_FINDINGS
 
-- The new policy and rules commit every task-scoped changed/added/deleted public Flowfox file, use configured git identity plus the authenticated GitHub account, keep private control-plane files out of Flowfox commits and PRs, and require public branch/text metadata to omit agent/Codex/AI/automation wording.
+- The publication policy stages only task-scoped public Flowfox files, uses configured git identity plus the authenticated GitHub account, keeps private control-plane files out of Flowfox commits and PRs, and filters public branch/text metadata using `.agent-policy.yaml` `public_output_forbidden_phrases`.
 - Project profile guidance preserves the Flowfox publication rules while preventing Django-centric checks from becoming the default for Flowfox tasks.
 - Risk and verdict contracts now require high-risk triggers, protected actions, separate commit/push/open/update PR permissions, and PR state.
 - Validator tests cover the semantic invariants that guard LOW/MEDIUM vs HIGH publication behavior, PR state, profile consistency, and YAML parsing.

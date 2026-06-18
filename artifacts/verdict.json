@@ -1,13 +1,15 @@
 {
   "decision": "publish_pr",
   "execution_status": "planned",
-  "task": "Harden autonomy and project profile contracts.",
+  "task": "Add autonomous Git and PR publication executor.",
   "project_profile": "agent_workspace",
   "risk_class": "medium",
   "checks_attempted": true,
   "checks_passed": true,
   "blockers": [],
-  "warnings": [],
+  "warnings": [
+    "Live commit, push, and PR creation were not executed during this implementation run; executor remains planned until invoked."
+  ],
   "high_risk_triggers": [],
   "protected_paths_touched": [],
   "publication_result": {
@@ -25,15 +27,14 @@
     "items": []
   },
   "reasoning_summary": [
-    "The task is MEDIUM risk.",
-    "Policy permits autonomous commit, push, and PR creation.",
+    "The task is MEDIUM risk in the private agent workspace.",
+    "The executor now supports policy-gated commit, push, and PR publication.",
     "Merge and deploy remain human-controlled."
   ],
   "next_actions": [
-    "Create commit.",
-    "Push task branch.",
-    "Create or update PR.",
-    "Update verdict with the PR URL."
+    "Review artifacts/change_set.json before live publication.",
+    "Run python3 scripts/publish_pr.py --dry-run for a no-mutation preflight.",
+    "Run python3 scripts/publish_pr.py from a task branch when preflight has no hard blockers."
   ],
   "lessons_updated": false
 }

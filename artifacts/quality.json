@@ -1,5 +1,5 @@
 {
-  "task": "Harden autonomy and project profile contracts.",
+  "task": "Add autonomous Git and PR publication executor.",
   "project_profile": "agent_workspace",
   "overall_status": "pass",
   "checks": [
@@ -7,39 +7,39 @@
       "name": "validate-artifacts",
       "command": "make validate-artifacts",
       "status": "pass",
-      "notes": "Artifact schemas and JSON files validated, including project_profile.json."
+      "notes": "Artifact schemas, nested object contracts, policy, project profiles, workflow config, and cross-artifact invariants validated."
     },
     {
-      "name": "validator-regression-tests",
-      "command": "python3 -m pytest tests/test_validate_artifacts.py",
+      "name": "security_scan",
+      "command": "make security",
       "status": "pass",
-      "notes": "Validator semantic invariant regression tests passed."
+      "notes": "Profile-aware scanner found no obvious secrets, private keys, private paths, environment files, or protected staged files."
+    },
+    {
+      "name": "harness-tests",
+      "command": "python3 -m pytest tests",
+      "status": "pass",
+      "notes": "33 tests passed for validator, security scanner, and publication executor behavior."
+    },
+    {
+      "name": "make-check",
+      "command": "make check",
+      "status": "pass",
+      "notes": "Full agent_workspace profile check passed, including artifact validation, security, JSON parsing, tests, and git diff whitespace check."
     },
     {
       "name": "diff_check",
       "command": "git diff HEAD --check",
       "status": "pass",
       "notes": "No whitespace errors."
-    },
-    {
-      "name": "security_placeholder",
-      "command": "make security",
-      "status": "pass",
-      "notes": "Repository-local security scanner found no obvious secrets, private keys, private paths, or protected staged files."
-    },
-    {
-      "name": "make-check",
-      "command": "make check",
-      "status": "pass",
-      "notes": "Repository checks completed for the agent_workspace profile."
     }
   ],
   "commands_attempted": [
     "make validate-artifacts",
-    "python3 -m pytest tests/test_validate_artifacts.py",
-    "git diff HEAD --check",
     "make security",
-    "make check"
+    "python3 -m pytest tests",
+    "make check",
+    "git diff HEAD --check"
   ],
   "focused_tests_passed": true,
   "repository_checks_passed": true,

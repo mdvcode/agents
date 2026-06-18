@@ -1,0 +1,41 @@
+version: 1
+workflows:
+  publish_pr:
+    description: "Validate, stage an allowlisted change set, commit, push, and create or update a PR when policy gates allow it."
+    executor: "python3 scripts/publish_pr.py"
+    required_artifacts:
+      - "artifacts/risk.json"
+      - "artifacts/project_profile.json"
+      - "artifacts/quality.json"
+      - "artifacts/verdict.json"
+      - "artifacts/change_set.json"
+      - "artifacts/publication.json"
+    preflight:
+      - "make validate-artifacts"
+      - "profile-aware security scan"
+      - "profile-selected quality checks"
+      - "git identity check"
+      - "branch and remote check"
+      - "gh auth check"
+    publication_states:
+      ready_pr:
+        when:
+          - "checks pass"
+          - "required visual evidence is present or not required"
+      draft_pr:
+        when:
+          - "checks fail"
+          - "checks are unavailable"
+          - "required visual evidence is unavailable"
+      blocked:
+        when:
+          - "HIGH risk"
+          - "secret detected"
+          - "protected path touched"
+          - "invalid artifacts"
+          - "destructive or policy-denied action"
+    mutation_rules:
+      - "Never use git add -A."
+      - "Stage only paths listed in artifacts/change_set.json include and not matched by exclude."
+      - "Never auto-merge or deploy."
+      - "Record partial failures in artifacts/publication.json and artifacts/verdict.json."

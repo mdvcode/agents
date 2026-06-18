@@ -58,5 +58,22 @@
       "provided",
       "items"
     ]
+  },
+  "object_types": {
+    "publication_result": {
+      "commit_created": "bool",
+      "branch_pushed": "bool",
+      "pr_created_or_updated": "bool",
+      "pr_url": "str",
+      "pr_state": "str"
+    },
+    "flowfox_visual_evidence": {
+      "required": "bool",
+      "provided": "bool",
+      "items": "list"
+    }
+  },
+  "object_enums": {
+    "publication_result.pr_state": ["ready", "draft", "not_created"]
   }
 }

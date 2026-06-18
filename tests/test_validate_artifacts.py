@@ -179,6 +179,46 @@ def test_missing_visual_evidence_ready_pr_fails() -> None:
     assert any("pr_state=ready requires required visual evidence" in error for error in errors)
 
 
+def test_nested_publication_result_type_validation_fails() -> None:
+    schema = validator.load_json(Path(__file__).resolve().parents[1] / "schemas" / "verdict.schema.json")
+    errors = validator.validate_required(
+        verdict_payload(publication_result={"commit_created": "yes"}),
+        schema,
+        "verdict.json",
+    )
+    assert any("publication_result.'commit_created' must be bool" in error for error in errors)
+
+
+def test_nested_publication_result_enum_validation_fails() -> None:
+    schema = validator.load_json(Path(__file__).resolve().parents[1] / "schemas" / "verdict.schema.json")
+    errors = validator.validate_required(
+        verdict_payload(publication_result={"pr_state": "banana"}),
+        schema,
+        "verdict.json",
+    )
+    assert any("publication_result.'pr_state' has invalid value" in error for error in errors)
+
+
+def test_profile_required_commands_must_be_selected() -> None:
+    profiles = {
+        "profiles": {
+            "agent_workspace": {
+                "quality_commands": {"required": ["make check"]},
+                "security_commands": {"required": ["make security"]},
+            }
+        }
+    }
+    errors = validator.validate_profile_command_selection(
+        {
+            "project_profile": "agent_workspace",
+            "quality_commands_selected": ["make check"],
+            "security_commands_selected": [],
+        },
+        profiles,
+    )
+    assert any("security_commands_selected missing required command 'make security'" in error for error in errors)
+
+
 def test_profile_mismatch_across_artifacts_fails() -> None:
     errors = validator.validate_cross_artifact_invariants(
         {

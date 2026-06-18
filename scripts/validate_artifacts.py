@@ -15,6 +15,7 @@ ARTIFACTS = ROOT / "artifacts"
 SCHEMAS = ROOT / "schemas"
 POLICY = ROOT / ".agent-policy.yaml"
 PROJECT_PROFILES = ROOT / ".agent-project-profiles.yaml"
+AGENT_WORKFLOWS = ROOT / ".agent-workflows.yaml"
 DEPRECATED_COMBINED_PUBLICATION_KEY = "commit" + "_push"
 JSON_ARTIFACTS = {
     "risk": (ARTIFACTS / "risk.json", SCHEMAS / "risk.schema.json"),
@@ -24,6 +25,8 @@ JSON_ARTIFACTS = {
         ARTIFACTS / "project_profile.json",
         SCHEMAS / "project_profile.schema.json",
     ),
+    "change_set": (ARTIFACTS / "change_set.json", SCHEMAS / "change_set.schema.json"),
+    "publication": (ARTIFACTS / "publication.json", SCHEMAS / "publication.schema.json"),
 }
 
 
@@ -52,6 +55,8 @@ def validate_required(data: dict[str, Any], schema: dict[str, Any], label: str) 
             errors.append(f"{label}: field {field!r} has invalid value {data[field]!r}")
     errors.extend(validate_types(data, schema, label))
     errors.extend(validate_object_required(data, schema, label))
+    errors.extend(validate_object_types(data, schema, label))
+    errors.extend(validate_object_enums(data, schema, label))
     return errors
 
 
@@ -62,6 +67,7 @@ def validate_types(data: dict[str, Any], schema: dict[str, Any], label: str) -> 
         "bool": bool,
         "list": list,
         "dict": dict,
+        "int": int,
     }
     for field, type_name in schema.get("types", {}).items():
         if field not in data:
@@ -88,6 +94,56 @@ def validate_object_required(data: dict[str, Any], schema: dict[str, Any], label
         for child in required_children:
             if child not in value:
                 errors.append(f"{label}: field {field!r} missing child {child!r}")
+    return errors
+
+
+def validate_object_types(data: dict[str, Any], schema: dict[str, Any], label: str) -> list[str]:
+    errors: list[str] = []
+    type_map = {
+        "str": str,
+        "bool": bool,
+        "list": list,
+        "dict": dict,
+        "int": int,
+    }
+    for field, children in schema.get("object_types", {}).items():
+        value = data.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, dict):
+            errors.append(f"{label}: field {field!r} must be an object")
+            continue
+        for child, type_name in children.items():
+            if child not in value:
+                continue
+            expected_type = type_map.get(type_name)
+            if expected_type is None:
+                errors.append(
+                    f"{label}: schema uses unknown type {type_name!r} for {field}.{child}"
+                )
+                continue
+            if not isinstance(value[child], expected_type):
+                actual_type = type(value[child]).__name__
+                errors.append(
+                    f"{label}: field {field}.{child!r} must be {type_name}, got {actual_type}"
+                )
+    return errors
+
+
+def validate_object_enums(data: dict[str, Any], schema: dict[str, Any], label: str) -> list[str]:
+    errors: list[str] = []
+    for dotted_field, allowed in schema.get("object_enums", {}).items():
+        parent, _, child = dotted_field.partition(".")
+        if not parent or not child:
+            errors.append(f"{label}: invalid object enum path {dotted_field!r}")
+            continue
+        value = data.get(parent)
+        if not isinstance(value, dict) or child not in value:
+            continue
+        if value[child] not in allowed:
+            errors.append(
+                f"{label}: field {parent}.{child!r} has invalid value {value[child]!r}"
+            )
     return errors
 
 
@@ -192,6 +248,14 @@ def validate_policy_data(policy: Any, label: str = ".agent-policy.yaml") -> list
     evidence = flowfox.get("require_visual_evidence_for")
     if not isinstance(evidence, list) or not evidence:
         errors.append(f"{label}: projects.flowfox.require_visual_evidence_for must be a non-empty list")
+    forbidden_phrases = flowfox.get("public_output_forbidden_phrases")
+    if not isinstance(forbidden_phrases, list) or not forbidden_phrases:
+        errors.append(f"{label}: projects.flowfox.public_output_forbidden_phrases must be a non-empty list")
+    if "AI" in forbidden_phrases:
+        errors.append(f"{label}: projects.flowfox.public_output_forbidden_phrases must not ban the product term 'AI'")
+    applies_to = flowfox.get("public_output_filter_applies_to")
+    if not isinstance(applies_to, list) or not applies_to:
+        errors.append(f"{label}: projects.flowfox.public_output_filter_applies_to must be a non-empty list")
     return errors
 
 
@@ -229,6 +293,28 @@ def validate_project_profiles_file(path: Path = PROJECT_PROFILES) -> list[str]:
     if errors:
         return errors
     return validate_project_profiles_data(profiles_doc)
+
+
+def validate_agent_workflows_data(
+    workflows_doc: Any, label: str = ".agent-workflows.yaml"
+) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(workflows_doc, dict):
+        return [f"{label}: top-level value must be an object"]
+    if workflows_doc.get("version") != 1:
+        errors.append(f"{label}: version must be 1")
+    workflows = workflows_doc.get("workflows")
+    if not isinstance(workflows, dict):
+        return errors + [f"{label}: missing object 'workflows'"]
+    publish_pr = workflows.get("publish_pr")
+    if not isinstance(publish_pr, dict):
+        return errors + [f"{label}: workflows.publish_pr must be an object"]
+    if publish_pr.get("executor") != "python3 scripts/publish_pr.py":
+        errors.append(f"{label}: workflows.publish_pr.executor must be 'python3 scripts/publish_pr.py'")
+    mutation_rules = publish_pr.get("mutation_rules")
+    if not isinstance(mutation_rules, list) or not any("git add -A" in rule for rule in mutation_rules):
+        errors.append(f"{label}: workflows.publish_pr.mutation_rules must forbid git add -A")
+    return errors
 
 
 def validate_risk_invariants(risk: dict[str, Any], label: str = "risk.json") -> list[str]:
@@ -328,6 +414,33 @@ def validate_cross_artifact_invariants(artifacts: dict[str, dict[str, Any]]) -> 
     return errors
 
 
+def validate_profile_command_selection(
+    project_profile_artifact: dict[str, Any],
+    profiles_doc: dict[str, Any],
+) -> list[str]:
+    errors: list[str] = []
+    profile_name = project_profile_artifact.get("project_profile")
+    profiles = profiles_doc.get("profiles", {})
+    profile = profiles.get(profile_name)
+    if not isinstance(profile, dict):
+        return [f"project_profile.json: selected profile {profile_name!r} is not defined"]
+    for artifact_field, profile_field in (
+        ("quality_commands_selected", "quality_commands"),
+        ("security_commands_selected", "security_commands"),
+    ):
+        selected = project_profile_artifact.get(artifact_field)
+        if not isinstance(selected, list):
+            continue
+        commands = profile.get(profile_field)
+        required = commands.get("required", []) if isinstance(commands, dict) else []
+        for command in required:
+            if command not in selected:
+                errors.append(
+                    f"project_profile.json: {artifact_field} missing required command {command!r}"
+                )
+    return errors
+
+
 def main() -> int:
     errors: list[str] = []
     loaded_artifacts: dict[str, dict[str, Any]] = {}
@@ -338,8 +451,18 @@ def main() -> int:
             loaded_artifacts[name] = data
 
     errors.extend(validate_audit_log())
-    errors.extend(validate_policy_file())
-    errors.extend(validate_project_profiles_file())
+    policy_doc, policy_errors = load_yaml(POLICY, ".agent-policy.yaml")
+    errors.extend(policy_errors)
+    if policy_doc is not None:
+        errors.extend(validate_policy_data(policy_doc))
+    profiles_doc, profile_errors = load_yaml(PROJECT_PROFILES, ".agent-project-profiles.yaml")
+    errors.extend(profile_errors)
+    if profiles_doc is not None:
+        errors.extend(validate_project_profiles_data(profiles_doc))
+    workflows_doc, workflow_errors = load_yaml(AGENT_WORKFLOWS, ".agent-workflows.yaml")
+    errors.extend(workflow_errors)
+    if workflows_doc is not None:
+        errors.extend(validate_agent_workflows_data(workflows_doc))
 
     risk = loaded_artifacts.get("risk")
     verdict = loaded_artifacts.get("verdict")
@@ -349,6 +472,8 @@ def main() -> int:
         errors.extend(validate_verdict_invariants(verdict))
     if {"risk", "quality", "verdict", "project_profile"}.issubset(loaded_artifacts):
         errors.extend(validate_cross_artifact_invariants(loaded_artifacts))
+    if profiles_doc is not None and "project_profile" in loaded_artifacts:
+        errors.extend(validate_profile_command_selection(loaded_artifacts["project_profile"], profiles_doc))
 
     if errors:
         for error in errors:

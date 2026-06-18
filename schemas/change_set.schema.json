@@ -1,0 +1,19 @@
+{
+  "required": [
+    "target_repository",
+    "project_profile",
+    "task_id",
+    "include",
+    "exclude"
+  ],
+  "enums": {
+    "project_profile": ["agent_workspace", "django", "flowfox"]
+  },
+  "types": {
+    "target_repository": "str",
+    "project_profile": "str",
+    "task_id": "str",
+    "include": "list",
+    "exclude": "list"
+  }
+}

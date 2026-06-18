@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Small repository-local security scanner for the agent workspace."""
+"""Small profile-aware security scanner for agent-managed repositories."""
 
 from __future__ import annotations
 
+import argparse
+import json
 import re
 import subprocess
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PROJECT_PROFILE_ARTIFACT = ROOT / "artifacts" / "project_profile.json"
 EXCLUDED_DIRS = {
     ".git",
     ".idea",
@@ -28,19 +31,31 @@ SECRET_PATTERNS = [
     re.compile(r"(?i)\b(?:password|token|credential|secret)\s*[:=]\s*['\"][^'\"]{8,}['\"]"),
 ]
 PRIVATE_PATH_PATTERN = re.compile(r"/Users/user/(?!agents\b)[^\s\"']+")
-PROTECTED_STAGED_PREFIXES = (
+TARGET_REPOSITORY_PROTECTED_PREFIXES = (
+    ".agents/",
     "artifacts/",
-    "docs/projects/flowfox/issues/",
-    "docs/projects/flowfox/memory/",
-    "docs/projects/flowfox/wiki/",
-    "docs/projects/flowfox/graph/",
+    "docs/projects/",
+    "external/agents/",
 )
 
 
-def iter_files() -> list[Path]:
+def load_default_profile() -> str:
+    if not PROJECT_PROFILE_ARTIFACT.exists():
+        return "agent_workspace"
+    try:
+        data = json.loads(PROJECT_PROFILE_ARTIFACT.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return "agent_workspace"
+    profile = data.get("project_profile")
+    if profile in {"agent_workspace", "django", "flowfox"}:
+        return profile
+    return "agent_workspace"
+
+
+def iter_files(repo: Path) -> list[Path]:
     files: list[Path] = []
-    for path in ROOT.rglob("*"):
-        if any(part in EXCLUDED_DIRS for part in path.relative_to(ROOT).parts):
+    for path in repo.rglob("*"):
+        if any(part in EXCLUDED_DIRS for part in path.relative_to(repo).parts):
             continue
         if not path.is_file():
             continue
@@ -50,10 +65,10 @@ def iter_files() -> list[Path]:
     return files
 
 
-def staged_files() -> list[str]:
+def staged_files(repo: Path) -> list[str]:
     result = subprocess.run(
         ["git", "diff", "--cached", "--name-only"],
-        cwd=ROOT,
+        cwd=repo,
         text=True,
         capture_output=True,
         check=False,
@@ -63,13 +78,26 @@ def staged_files() -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def scan() -> list[str]:
+def protected_staged_prefixes(profile: str) -> tuple[str, ...]:
+    if profile == "agent_workspace":
+        return ()
+    return TARGET_REPOSITORY_PROTECTED_PREFIXES
+
+
+def scan(
+    repo: Path = ROOT,
+    profile: str | None = None,
+    staged_paths: list[str] | None = None,
+) -> list[str]:
+    repo = repo.resolve()
+    active_profile = profile or load_default_profile()
     findings: list[str] = []
-    for relative in staged_files():
-        if relative.startswith(PROTECTED_STAGED_PREFIXES):
+    protected_prefixes = protected_staged_prefixes(active_profile)
+    for relative in staged_paths if staged_paths is not None else staged_files(repo):
+        if relative.startswith(protected_prefixes):
             findings.append(f"staged protected/private path: {relative}")
-    for path in iter_files():
-        relative = path.relative_to(ROOT)
+    for path in iter_files(repo):
+        relative = path.relative_to(repo)
         if relative.name.startswith(".env"):
             findings.append(f"environment file present: {relative}")
             continue
@@ -86,8 +114,21 @@ def scan() -> list[str]:
     return findings
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", type=Path, default=ROOT)
+    parser.add_argument(
+        "--profile",
+        choices=("agent_workspace", "django", "flowfox"),
+        default=None,
+        help="Project profile. Defaults to artifacts/project_profile.json.",
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
-    findings = scan()
+    args = parse_args()
+    findings = scan(repo=args.repo, profile=args.profile)
     if findings:
         for finding in findings:
             print(f"security: {finding}")

@@ -14,7 +14,7 @@
 - Commit every task-scoped changed/added/deleted public project file exactly once in a minimal reviewable commit.
 - Use the repository's configured `git config user.name` and `git config user.email`; do not hardcode or change identity.
 - Never commit, push, or include private control-plane files or paths such as `/Users/user/agents`, `external/agents/`, `.agents/`, `artifacts/`, private issue journals, private memory/wiki/graph files, screenshots/traces with sensitive data, or agent prompt/skill/audit files.
-- Branch names, commit messages, PR titles, PR bodies, issue comments, and release notes must not mention agents, Codex, AI assistance, automation, private control-plane paths, `.agents`, `artifacts`, or `external/agents`.
+- Branch names, commit messages, PR titles, PR bodies, issue comments, and release notes must follow `.agent-policy.yaml` `public_output_forbidden_phrases`. Product terms such as AI are allowed when they describe user-facing product behavior rather than the internal development process.
 - After publication, send the PR URL plus the local website URL where the completed issue can be checked.
 
 ## Evidence

@@ -2,7 +2,8 @@
 
 ## SUMMARY
 
-- Documentation/profile/validator process-only change. No application code, secrets, auth, billing, production settings, or infrastructure changed.
+- Added a profile-aware security scanner and autonomous publication executor for the private agent harness.
+- No application secrets, credentials, auth, billing, production infrastructure, migrations, or deployment paths were changed.
 
 ## PROJECT_PROFILE
 
@@ -16,12 +17,12 @@
 
 ## MEDIUM
 
-- Hardened autonomy rules affect future commit, push, and PR publication gates. `.agent-policy.yaml` still forbids auto-merge, deploy, force-push, production access, and HIGH-risk publication.
-- `scripts/security_scan.py` now checks for obvious private keys, API tokens, credential assignments, private absolute paths, `.env` files, and protected staged files.
+- `scripts/publish_pr.py` can perform commit, push, and PR publication when invoked and when preflight passes. It blocks HIGH risk, protected paths, detected secrets, invalid artifacts, default branches, detached HEAD, merge conflicts, missing git identity, missing remotes, and failed `gh auth`.
+- Target repository publication uses `artifacts/change_set.json` and stages only allowlisted files; it never uses `git add -A`.
 
 ## LOW
 
-- None.
+- `.agent-policy.yaml` now filters specific forbidden internal-process phrases in public output instead of banning the product term `AI`.
 
 ## DJANGO_SECURITY_NOTES
 
@@ -29,12 +30,12 @@
 
 ## SECRETS
 
-- No secrets added.
+- No secrets added. `make security` passed.
 
 ## DEPENDENCY_RISKS
 
-- No dependency changes.
+- No new runtime dependencies were added.
 
 ## RECOMMENDED_ACTION
 
-- Keep control-plane files private by default; keep `make security` clean before autonomous publication.
+- Use `python3 scripts/publish_pr.py --dry-run` before first live publication from a target project branch, then run without `--dry-run` only when preflight has no hard blockers.

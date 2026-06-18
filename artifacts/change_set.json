@@ -1,27 +1,38 @@
 {
-  "risk_class": "medium",
-  "reasons": [
-    "Adds an executable Git/GitHub publication path for the private agent harness.",
-    "Strengthens machine-readable publication, change-set, security, and verdict contracts.",
-    "No production credentials, deployment, billing, auth, migrations, or destructive data operations are involved."
-  ],
-  "changed_areas": [
+  "target_repository": "/Users/user/agents",
+  "project_profile": "agent_workspace",
+  "task_id": "p2-autonomous-publication-executor",
+  "include": [
     ".agent-policy.yaml",
     ".agent-project-profiles.yaml",
     ".agent-workflows.yaml",
-    ".github/workflows/agent-harness-checks.yml",
     ".agents/prompts/orchestrator.md",
+    ".gitignore",
+    ".github/workflows/agent-harness-checks.yml",
+    ".idea/.gitignore",
+    ".idea/agents.iml",
+    ".idea/inspectionProfiles/Project_Default.xml",
+    ".idea/inspectionProfiles/profiles_settings.xml",
+    ".idea/misc.xml",
+    ".idea/modules.xml",
+    ".idea/vcs.xml",
+    "AGENTS.md",
     "Makefile",
+    "artifacts/audit_log.jsonl",
     "artifacts/change_set.json",
     "artifacts/plan.md",
     "artifacts/project_profile.json",
     "artifacts/publication.json",
     "artifacts/quality.json",
     "artifacts/report.md",
+    "artifacts/review.md",
     "artifacts/risk.json",
     "artifacts/security.md",
     "artifacts/verdict.json",
+    "docs/index.md",
+    "docs/projects/flowfox/AGENTS.md",
     "docs/projects/flowfox/issues/issue-943.md",
+    "requirements-dev.txt",
     "schemas/change_set.schema.json",
     "schemas/publication.schema.json",
     "schemas/verdict.schema.json",
@@ -32,17 +43,10 @@
     "tests/test_security_scan.py",
     "tests/test_validate_artifacts.py"
   ],
-  "high_risk_triggers": [],
-  "protected_paths_touched": [],
-  "protected_actions_required": [],
-  "autonomy_allowed": {
-    "patch": true,
-    "commit": true,
-    "push": true,
-    "open_pr": true,
-    "update_pr": true,
-    "auto_merge": false,
-    "deploy_staging": false,
-    "deploy_production": false
-  }
+  "exclude": [
+    ".env",
+    ".env.*",
+    "**/*.pem",
+    "**/*.key"
+  ]
 }
