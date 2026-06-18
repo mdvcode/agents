@@ -231,6 +231,37 @@ def test_profile_mismatch_across_artifacts_fails() -> None:
     assert any("project profile mismatch" in error for error in errors)
 
 
+def test_publication_and_verdict_mismatch_fails() -> None:
+    errors = validator.validate_cross_artifact_invariants(
+        {
+            "project_profile": {"project_profile": "agent_workspace"},
+            "quality": {"project_profile": "agent_workspace"},
+            "risk": {"risk_class": "medium"},
+            "publication": {
+                "execution_status": "completed",
+                "commit_created": True,
+                "branch_pushed": True,
+                "pr_created_or_updated": True,
+                "pr_url": "https://github.com/example/repo/pull/1",
+                "pr_state": "ready",
+            },
+            "verdict": {
+                "project_profile": "agent_workspace",
+                "risk_class": "medium",
+                "execution_status": "planned",
+                "publication_result": {
+                    "commit_created": False,
+                    "branch_pushed": False,
+                    "pr_created_or_updated": False,
+                    "pr_url": "",
+                    "pr_state": "not_created",
+                },
+            },
+        }
+    )
+    assert any("publication/verdict mismatch for execution_status" in error for error in errors)
+
+
 def test_invalid_yaml_fails(tmp_path: Path) -> None:
     path = tmp_path / "bad.yaml"
     path.write_text("version: [\n", encoding="utf-8")

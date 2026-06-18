@@ -3,6 +3,17 @@ workflows:
   publish_pr:
     description: "Validate, stage an allowlisted change set, commit, push, and create or update a PR when policy gates allow it."
     executor: "python3 scripts/publish_pr.py"
+    max_iterations: 1
+    retry:
+      max_retries: 0
+      backoff_seconds: 0
+    stop_conditions:
+      - "step returncode is non-zero"
+      - "workflow reaches max_iterations"
+    trace_store: ".agent-runs/<run-id>/workflow_trace.jsonl"
+    steps:
+      - name: "publish_pr"
+        command: "python3 scripts/publish_pr.py"
     required_artifacts:
       - "artifacts/risk.json"
       - "artifacts/project_profile.json"
@@ -10,13 +21,17 @@ workflows:
       - "artifacts/verdict.json"
       - "artifacts/change_set.json"
       - "artifacts/publication.json"
+      - "artifacts/publication_payload.json"
     preflight:
       - "make validate-artifacts"
       - "profile-aware security scan"
       - "profile-selected quality checks"
+      - "profile-selected security checks"
       - "git identity check"
       - "branch and remote check"
       - "gh auth check"
+      - "orchestrator decision gate"
+      - "isolated staged set gate"
     publication_states:
       ready_pr:
         when:
@@ -37,5 +52,8 @@ workflows:
     mutation_rules:
       - "Never use git add -A."
       - "Stage only paths listed in artifacts/change_set.json include and not matched by exclude."
+      - "Block if any pre-existing staged file is outside the selected change set."
+      - "Block if git add fails or the final staged set differs from the selected change set."
+      - "Use artifacts/publication_payload.json for public PR title, body, and commit message."
       - "Never auto-merge or deploy."
       - "Record partial failures in artifacts/publication.json and artifacts/verdict.json."

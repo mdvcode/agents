@@ -9,6 +9,10 @@
   "pr_url": "",
   "pr_state": "not_created",
   "dry_run": false,
+  "run_id": "",
+  "run_dir": "",
+  "pr_comment_posted": false,
+  "command_results": [],
   "warnings": [],
   "errors": []
 }

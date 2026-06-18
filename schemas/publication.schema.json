@@ -10,6 +10,10 @@
     "pr_url",
     "pr_state",
     "dry_run",
+    "run_id",
+    "run_dir",
+    "pr_comment_posted",
+    "command_results",
     "warnings",
     "errors"
   ],
@@ -28,6 +32,10 @@
     "pr_url": "str",
     "pr_state": "str",
     "dry_run": "bool",
+    "run_id": "str",
+    "run_dir": "str",
+    "pr_comment_posted": "bool",
+    "command_results": "list",
     "warnings": "list",
     "errors": "list"
   }

@@ -19,6 +19,9 @@
 - Risk and verdict contracts now require high-risk triggers, protected actions, separate commit/push/open/update PR permissions, and PR state.
 - Validator tests cover the semantic invariants that guard LOW/MEDIUM vs HIGH publication behavior, PR state, profile consistency, and YAML parsing.
 - Publisher tests cover profile quality command execution, read-only dry-run behavior, report updates, and issue journal updates.
+- Publisher tests also cover staging isolation, git-add failures, unsafe change-set paths, missing target repositories, remote mismatch blocking, skip-checks gating, missing commands, existing PR draft/ready transitions, marker replacement, and an end-to-end temporary Git repository with bare remote plus fake gh CLI.
+- End-to-end publication now asserts tracked artifacts remain unchanged after live publication and runtime state is written under `.agent-runs`.
+- Workflow runner tests cover trace-store creation and completed workflow events.
 
 ## PROJECT_PROFILE_FINDINGS
 

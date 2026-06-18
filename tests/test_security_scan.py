@@ -43,7 +43,7 @@ def test_secret_detection_blocks_token(tmp_path: Path) -> None:
     token = "ghp_" + ("A" * 24)
     (tmp_path / "config.txt").write_text("token='" + token + "'\n", encoding="utf-8")
 
-    findings = security_scan.scan(repo=tmp_path, profile="agent_workspace", staged_paths=[])
+    findings = security_scan.scan(repo=tmp_path, profile="agent_workspace", full_repo=True)
 
     assert any("possible secret in config.txt" in finding for finding in findings)
 
@@ -51,6 +51,14 @@ def test_secret_detection_blocks_token(tmp_path: Path) -> None:
 def test_env_file_blocks_any_profile(tmp_path: Path) -> None:
     (tmp_path / ".env.local").write_text("DEBUG=1\n", encoding="utf-8")
 
-    findings = security_scan.scan(repo=tmp_path, profile="agent_workspace", staged_paths=[])
+    findings = security_scan.scan(repo=tmp_path, profile="agent_workspace", full_repo=True)
 
     assert "environment file present: .env.local" in findings
+
+
+def test_env_example_is_allowed(tmp_path: Path) -> None:
+    (tmp_path / ".env.example").write_text("DEBUG=1\n", encoding="utf-8")
+
+    findings = security_scan.scan(repo=tmp_path, profile="agent_workspace", full_repo=True)
+
+    assert findings == []

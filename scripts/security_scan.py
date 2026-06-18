@@ -15,8 +15,16 @@ PROJECT_PROFILE_ARTIFACT = ROOT / "artifacts" / "project_profile.json"
 EXCLUDED_DIRS = {
     ".git",
     ".idea",
+    ".next",
     ".pytest_cache",
+    ".cache",
     "__pycache__",
+    "node_modules",
+    "dist",
+    "build",
+    "coverage",
+    "playwright-report",
+    "test-results",
 }
 SECRET_PATTERNS = [
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
@@ -30,7 +38,8 @@ SECRET_PATTERNS = [
     re.compile(r"\bOPENAI_API_KEY\s*=\s*[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"(?i)\b(?:password|token|credential|secret)\s*[:=]\s*['\"][^'\"]{8,}['\"]"),
 ]
-PRIVATE_PATH_PATTERN = re.compile(r"/Users/user/(?!agents\b)[^\s\"']+")
+PRIVATE_PATH_PATTERN = re.compile(rf"{re.escape(str(Path.home()))}/(?!agents\b)[^\s\"']+")
+SAFE_ENV_EXAMPLES = {".env.example", ".env.sample", ".env.template"}
 TARGET_REPOSITORY_PROTECTED_PREFIXES = (
     ".agents/",
     "artifacts/",
@@ -84,10 +93,23 @@ def protected_staged_prefixes(profile: str) -> tuple[str, ...]:
     return TARGET_REPOSITORY_PROTECTED_PREFIXES
 
 
+def files_to_scan(repo: Path, staged_paths: list[str] | None, full_repo: bool) -> list[Path]:
+    if full_repo:
+        return iter_files(repo)
+    paths = staged_paths if staged_paths is not None else staged_files(repo)
+    files: list[Path] = []
+    for relative in paths:
+        path = repo / relative
+        if path.exists() and path.is_file():
+            files.append(path)
+    return files
+
+
 def scan(
     repo: Path = ROOT,
     profile: str | None = None,
     staged_paths: list[str] | None = None,
+    full_repo: bool = False,
 ) -> list[str]:
     repo = repo.resolve()
     active_profile = profile or load_default_profile()
@@ -96,9 +118,9 @@ def scan(
     for relative in staged_paths if staged_paths is not None else staged_files(repo):
         if relative.startswith(protected_prefixes):
             findings.append(f"staged protected/private path: {relative}")
-    for path in iter_files(repo):
+    for path in files_to_scan(repo, staged_paths, full_repo):
         relative = path.relative_to(repo)
-        if relative.name.startswith(".env"):
+        if relative.name.startswith(".env") and relative.name not in SAFE_ENV_EXAMPLES:
             findings.append(f"environment file present: {relative}")
             continue
         try:
@@ -117,6 +139,7 @@ def scan(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=ROOT)
+    parser.add_argument("--full-repo", action="store_true", help="Scan the full repository instead of staged files.")
     parser.add_argument(
         "--profile",
         choices=("agent_workspace", "django", "flowfox"),
@@ -128,7 +151,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    findings = scan(repo=args.repo, profile=args.profile)
+    findings = scan(repo=args.repo, profile=args.profile, full_repo=args.full_repo)
     if findings:
         for finding in findings:
             print(f"security: {finding}")

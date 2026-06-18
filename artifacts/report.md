@@ -7,6 +7,14 @@
 - Made `scripts/security_scan.py` profile-aware: private workspace artifacts are allowed for `agent_workspace`, while target repositories still block private artifacts and project memory.
 - Strengthened validation for nested object types/enums, selected profile commands, policy public-output phrase rules, workflow config, and publication/change-set artifacts.
 - Publisher preflight now runs required quality commands from the selected project profile.
+- Publisher preflight now runs required security commands from the selected project profile.
+- Added strict staging isolation: unrelated pre-staged files, missing/stale include paths, unsafe paths, git-add failures, and staged-set mismatches block publication.
+- Added portable target repository handling with `target_repository: "."` and optional `--repo` override.
+- Added public-safe `artifacts/publication_payload.json`; PR title/body/commit message no longer come from internal `artifacts/report.md`.
+- Added actual draft/ready PR state transitions and final `isDraft` verification.
+- Added marker-based replacement for publication result sections.
+- Moved live publication runtime state to `.agent-runs/<run-id>/` and PR comments so tracked artifacts are not mutated after commit/push/PR.
+- Added `scripts/run_workflow.py` as a minimal executable workflow runner with bounded iterations, retry/backoff, stop conditions, and trace storage.
 - `--dry-run` is read-only for publication artifacts, verdict, report, audit log, git index, commits, pushes, and PRs.
 - Live publication now records results in `artifacts/report.md` and matching Flowfox issue journals when applicable.
 - Updated stale security/plan wording and marked the old Flowfox issue 943 approval gate as superseded by `.agent-policy.yaml`.
@@ -24,7 +32,9 @@
 
 - Passed: `make validate-artifacts`
 - Passed: `make security`
-- Passed: `python3 -m pytest tests` (36 tests)
+- Passed: `python3 -m pytest tests` (50 tests)
+- Passed: `python3 scripts/publish_pr.py --dry-run`
+- Passed: `python3 scripts/run_workflow.py publish_pr --dry-run`
 - Passed: `make check`
 - Passed: `git diff HEAD --check`
 
@@ -35,7 +45,7 @@
 ## Publication
 
 - Live commit/push/PR was not executed in this implementation run.
-- Executor state remains `planned`; `scripts/publish_pr.py --dry-run` is available for read-only preflight without artifact, audit, git, push, or PR mutations.
+- Executor state remains `planned`; live runtime state now goes to `.agent-runs/<run-id>/` plus PR comments, avoiding post-publication tracked artifact drift.
 
 ## Next Action
 

@@ -27,6 +27,10 @@ JSON_ARTIFACTS = {
     ),
     "change_set": (ARTIFACTS / "change_set.json", SCHEMAS / "change_set.schema.json"),
     "publication": (ARTIFACTS / "publication.json", SCHEMAS / "publication.schema.json"),
+    "publication_payload": (
+        ARTIFACTS / "publication_payload.json",
+        SCHEMAS / "publication_payload.schema.json",
+    ),
 }
 
 
@@ -411,6 +415,49 @@ def validate_cross_artifact_invariants(artifacts: dict[str, dict[str, Any]]) -> 
     verdict_risk_class = artifacts.get("verdict", {}).get("risk_class")
     if risk_class != verdict_risk_class:
         errors.append("risk_class mismatch between risk.json and verdict.json")
+    publication = artifacts.get("publication")
+    verdict = artifacts.get("verdict")
+    if publication is not None and verdict is not None:
+        publication_result = verdict.get("publication_result")
+        if isinstance(publication_result, dict):
+            comparisons = {
+                "execution_status": (publication.get("execution_status"), verdict.get("execution_status")),
+                "commit_created": (
+                    publication.get("commit_created"),
+                    publication_result.get("commit_created"),
+                ),
+                "branch_pushed": (
+                    publication.get("branch_pushed"),
+                    publication_result.get("branch_pushed"),
+                ),
+                "pr_created_or_updated": (
+                    publication.get("pr_created_or_updated"),
+                    publication_result.get("pr_created_or_updated"),
+                ),
+                "pr_url": (publication.get("pr_url"), publication_result.get("pr_url")),
+                "pr_state": (publication.get("pr_state"), publication_result.get("pr_state")),
+            }
+            for field, (publication_value, verdict_value) in comparisons.items():
+                if publication_value != verdict_value:
+                    errors.append(f"publication/verdict mismatch for {field}")
+    change_set = artifacts.get("change_set")
+    if change_set is not None:
+        target_repository = change_set.get("target_repository")
+        if isinstance(target_repository, str):
+            path = Path(target_repository)
+            if path.is_absolute():
+                errors.append("change_set.json: target_repository must be relative")
+            if ".." in path.parts:
+                errors.append("change_set.json: target_repository must not contain '..'")
+        for field in ("include", "exclude"):
+            paths = change_set.get(field)
+            if isinstance(paths, list):
+                for item in paths:
+                    if not isinstance(item, str):
+                        continue
+                    path = Path(item)
+                    if path.is_absolute() or ".." in path.parts:
+                        errors.append(f"change_set.json: {field} contains unsafe path {item!r}")
     return errors
 
 

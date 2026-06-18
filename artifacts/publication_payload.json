@@ -1,0 +1,6 @@
+{
+  "title": "Harden autonomous publication executor",
+  "body": "## Summary\n\n- Hardened publication preflight, change-set staging isolation, and command error handling.\n- Added public-safe publication payload handling and idempotent publication result updates.\n- Added regression coverage for isolated staging, dry-run safety, and temporary Git repository publication flow.\n\n## Checks\n\n- make validate-artifacts\n- make security\n- python3 -m pytest tests\n- make check",
+  "commit_message": "Harden autonomous publication executor",
+  "base_branch": "feat/v2"
+}

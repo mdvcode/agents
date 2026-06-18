@@ -3,6 +3,7 @@
     "target_repository",
     "project_profile",
     "task_id",
+    "expected_remote",
     "include",
     "exclude"
   ],
@@ -13,6 +14,7 @@
     "target_repository": "str",
     "project_profile": "str",
     "task_id": "str",
+    "expected_remote": "str",
     "include": "list",
     "exclude": "list"
   }

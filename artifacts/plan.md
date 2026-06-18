@@ -2,7 +2,9 @@
 
 ## GOAL
 
-- Add an executable autonomous publication layer that can validate, security-check, stage an allowlisted change set, commit, push, and create or update a PR when policy gates allow it.
+- Harden the autonomous publication executor so live use is safer: isolated staging, strict policy gates, portable target repositories, public-safe PR payloads, command error handling, and end-to-end Git/PR tests.
+- Resolve agent_workspace runtime-state circularity by keeping live publication results out of tracked artifacts and writing them to `.agent-runs/<run-id>/` plus PR comments.
+- Add a minimal executable workflow runner with bounded iterations, retry/backoff, stop conditions, and run-level traces.
 
 ## PROJECT_PROFILE
 
@@ -43,6 +45,12 @@
 8. Run required profile quality commands during publisher preflight.
 9. Keep `--dry-run` read-only for publication artifacts, verdict, report, and audit log.
 10. Record live publication results in `artifacts/report.md` and Flowfox issue journals when an issue journal exists.
+11. Block unrelated pre-staged files, stale change-set paths, unsafe paths, git-add failures, and staged-set mismatches.
+12. Use `artifacts/publication_payload.json` for public PR title/body/commit message.
+13. Verify actual PR draft/ready state after create/update.
+14. Replace publication result sections by marker instead of appending duplicates.
+15. Move live runtime publication state to `.agent-runs/<run-id>/` and post the result as a PR comment instead of mutating tracked artifacts after publication.
+16. Add `scripts/run_workflow.py` for bounded workflow execution and trace capture.
 
 ## DONE WHEN
 
@@ -50,6 +58,12 @@
 - Publication stages only paths listed in `artifacts/change_set.json`.
 - `artifacts/publication.json` records branch, commit, push, PR URL/state, warnings, and errors.
 - Publisher preflight runs the required quality commands from the selected project profile.
+- Publisher preflight runs the required security commands from the selected project profile.
+- Publication blocks unrelated staged files, stale/missing include paths, unsafe absolute/parent paths, git-add failures, and staged-set mismatches.
+- Public PR title/body/commit message come from `artifacts/publication_payload.json`.
+- Publication result sections are marker-replaced and idempotent.
+- Live publication writes runtime state to `.agent-runs/<run-id>/` and does not mutate tracked artifacts after commit/push/PR.
+- Workflow runner writes `.agent-runs/<run-id>/workflow_trace.jsonl`.
 - `--dry-run` does not mutate publication artifacts, verdict, report, audit log, git index, commits, pushes, or PRs.
 - Live publication appends a publication summary to `artifacts/report.md` and the matching Flowfox issue journal when applicable.
 - Flowfox target publication blocks private artifacts/memory while agent workspace publication allows private workspace artifacts.

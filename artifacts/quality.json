@@ -19,7 +19,19 @@
       "name": "harness-tests",
       "command": "python3 -m pytest tests",
       "status": "pass",
-      "notes": "36 tests passed for validator, security scanner, and publication executor behavior."
+      "notes": "50 tests passed for validator, security scanner, publication executor behavior, and workflow tracing, including remote mismatch blocking and end-to-end publication with a temporary Git repository, bare remote, and fake gh CLI."
+    },
+    {
+      "name": "workflow-dry-run",
+      "command": "python3 scripts/run_workflow.py publish_pr --dry-run",
+      "status": "pass",
+      "notes": "Workflow runner completed publish_pr dry-run and wrote a run trace under .agent-runs."
+    },
+    {
+      "name": "publish-dry-run",
+      "command": "python3 scripts/publish_pr.py --dry-run",
+      "status": "pass",
+      "notes": "Dry-run completed with execution_status=planned and no mutations."
     },
     {
       "name": "make-check",
@@ -37,6 +49,8 @@
   "commands_attempted": [
     "make validate-artifacts",
     "make security",
+    "python3 scripts/publish_pr.py --dry-run",
+    "python3 scripts/run_workflow.py publish_pr --dry-run",
     "python3 -m pytest tests",
     "make check",
     "git diff HEAD --check"
