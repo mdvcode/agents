@@ -20,23 +20,22 @@ profiles:
       - "Makefile"
     quality_commands:
       required:
-        - "make validate-artifacts"
-        - "python3 -m pytest tests/test_validate_artifacts.py"
         - "make check"
       optional:
+        - "make validate-artifacts"
+        - "python3 -m pytest tests/test_validate_artifacts.py"
         - "python3 -m json.tool artifacts/risk.json >/dev/null"
         - "python3 -m json.tool artifacts/quality.json >/dev/null"
         - "python3 -m json.tool artifacts/verdict.json >/dev/null"
     security_commands:
-      required: []
+      required:
+        - "make security"
       optional:
         - 'grep -R "sk-\|BEGIN PRIVATE KEY\|password\|token" -n . --exclude-dir=.git || true'
     test_strategy:
       primary: "artifact validation"
       focused_tests: []
       repository_checks:
-        - "make validate-artifacts"
-        - "python3 -m pytest tests/test_validate_artifacts.py"
         - "make check"
     frontend_evidence:
       required: false
@@ -97,7 +96,7 @@ profiles:
     quality_commands:
       required:
         - "bun node_modules/typescript/lib/tsc.js --noEmit"
-        - "git diff --check"
+        - "git diff HEAD --check"
       optional:
         - "bun lint"
         - "bun test"
@@ -105,7 +104,7 @@ profiles:
         - "bun node_modules/typescript/lib/tsc.js --noEmit -p apps/studio/tsconfig.json --incremental false"
     security_commands:
       required:
-        - "git diff --check"
+        - "git diff HEAD --check"
       optional:
         - 'grep -R "NEXT_PUBLIC_.*SECRET\|SANITY_AUTH_TOKEN\|DATABASE_URL" -n . --exclude-dir=.git || true'
     test_strategy:
@@ -114,7 +113,7 @@ profiles:
         - "bun test --run <focused-test>"
       repository_checks:
         - "bun node_modules/typescript/lib/tsc.js --noEmit"
-        - "git diff --check"
+        - "git diff HEAD --check"
     frontend_evidence:
       required_for:
         - "ui"

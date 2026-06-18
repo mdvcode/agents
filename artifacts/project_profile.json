@@ -14,8 +14,6 @@
     "scripts/validate_artifacts.py"
   ],
   "quality_commands_selected": [
-    "make validate-artifacts",
-    "python3 -m pytest tests/test_validate_artifacts.py",
     "make check"
   ],
   "security_commands_selected": [],

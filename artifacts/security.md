@@ -7,7 +7,7 @@
 ## PROJECT_PROFILE
 
 - Selected profile: `agent_workspace`
-- Security commands selected: none required by `.agent-project-profiles.yaml`; `make security` was used as the repository placeholder.
+- Security commands selected: `make security` via `scripts/security_scan.py`.
 - Frontend evidence required: false.
 
 ## HIGH
@@ -17,6 +17,7 @@
 ## MEDIUM
 
 - Hardened autonomy rules affect future commit, push, and PR publication gates. `.agent-policy.yaml` still forbids auto-merge, deploy, force-push, production access, and HIGH-risk publication.
+- `scripts/security_scan.py` now checks for obvious private keys, API tokens, credential assignments, private absolute paths, `.env` files, and protected staged files.
 
 ## LOW
 
@@ -36,4 +37,4 @@
 
 ## RECOMMENDED_ACTION
 
-- Keep control-plane files private by default; use the selected project profile before running checks or publishing future work.
+- Keep control-plane files private by default; keep `make security` clean before autonomous publication.

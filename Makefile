@@ -7,14 +7,13 @@ check: validate-artifacts
 	python3 -m json.tool artifacts/project_profile.json >/dev/null
 	python3 -m pytest tests/test_validate_artifacts.py
 	@if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
-		git diff --check; \
+		git diff HEAD --check; \
 	else \
-		echo "skip git diff --check: not a git repository"; \
+		echo "skip git diff HEAD --check: not a git repository"; \
 	fi
 
 security:
-	@echo "security: documentation-only agent workspace; no code security scanner configured"
-	@echo "security: required protected-path and artifact checks are enforced by AGENTS.md and make check"
+	python3 scripts/security_scan.py
 
 validate-artifacts:
 	python3 scripts/validate_artifacts.py

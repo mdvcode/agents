@@ -13,15 +13,14 @@ Read all artifacts, enforce autonomy gates, and write the final machine-readable
 - For Flowfox user-visible issues, verify local screenshot/video/trace evidence exists before declaring the work publication-ready.
 
 ## Decision space
-- `open_pr`
-- `update_pr`
+- `publish_pr`
 - `await_approval`
 - `reject`
 - `no_changes`
 
 ## Rules
 - Follow `.agent-policy.yaml` as the source of truth for risk-class autonomy, project publication rules, protected paths, and human approval gates.
-- If risk is low or medium, no hard blockers remain, and policy allows publication, choose `open_pr` or `update_pr`.
+- If risk is low or medium, no hard blockers remain, and policy allows publication, choose `publish_pr`.
 - If risk is high, choose `await_approval`.
 - Never auto-act on protected paths.
 - Never auto-merge, deploy, force-push, rewrite history, or access production credentials.
@@ -45,14 +44,14 @@ For HIGH risk tasks:
 - choose `await_approval`.
 
 Checks policy:
-- If checks passed, create or update a ready PR.
-- If checks failed or some checks are unavailable, still create or update a draft PR, record failures/warnings, and do not mark the PR ready.
+- If checks passed and required visual evidence is provided, create or update a ready PR.
+- If checks failed, some checks are unavailable, or required visual evidence is unavailable, still create or update a draft PR, record failures/warnings, and do not mark the PR ready.
 - Stop publication only for hard blockers: secret detected, unsafe destructive operation, HIGH-risk trigger, invalid artifacts, or policy violation.
 
 Never auto-merge, deploy, force-push, rewrite history, or access production credentials.
 
 ## Flowfox publication policy
-- Read `.agent-policy.yaml` before deciding `open_pr` or `update_pr`.
+- Read `.agent-policy.yaml` before deciding `publish_pr`.
 - For LOW and MEDIUM risk Flowfox work, commit, push, `open_pr`, and `update_pr` may be allowed when no hard blockers remain and required visual evidence is provided or a warning explains why it is unavailable.
 - For HIGH risk or protected-path work, choose `await_approval`.
 - For Flowfox publication, use only the task-scoped changed-file set and the configured `git config user.name` and `git config user.email`. If identity is missing, choose `await_approval`.
@@ -61,7 +60,7 @@ Never auto-merge, deploy, force-push, rewrite history, or access production cred
 - Never auto-merge or deploy.
 
 ## Project profile gate before publication
-Before choosing `open_pr` or `update_pr`, verify:
+Before choosing `publish_pr`, verify:
 - `artifacts/project_profile.json` exists;
 - selected profile is one of `agent_workspace`, `django`, or `flowfox`;
 - quality checks were selected from `.agent-project-profiles.yaml`;
@@ -73,7 +72,8 @@ If the profile is missing or inconsistent, choose `await_approval` or `reject` a
 ## Required JSON shape
 ```json
 {
-  "action": "open_pr|update_pr|await_approval|reject|no_changes",
+  "decision": "publish_pr|await_approval|reject|no_changes",
+  "execution_status": "planned|running|completed|blocked|failed",
   "task": "",
   "project_profile": "agent_workspace|django|flowfox",
   "risk_class": "low|medium|high",
@@ -83,11 +83,13 @@ If the profile is missing or inconsistent, choose `await_approval` or `reject` a
   "warnings": [],
   "high_risk_triggers": [],
   "protected_paths_touched": [],
-  "commit_created": false,
-  "branch_pushed": false,
-  "pr_created_or_updated": false,
-  "pr_url": "",
-  "pr_state": "ready|draft|not_created",
+  "publication_result": {
+    "commit_created": false,
+    "branch_pushed": false,
+    "pr_created_or_updated": false,
+    "pr_url": "",
+    "pr_state": "ready|draft|not_created"
+  },
   "approval_required_before_publish": false,
   "approval_required_before_merge": true,
   "flowfox_visual_evidence": {

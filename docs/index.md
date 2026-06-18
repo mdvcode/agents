@@ -1,6 +1,6 @@
 # Agent Workspace Index
 
-This repository is the local operating base for agents working on the Django codebase.
+This repository is the local operating base for agents working across supported project profiles.
 
 ## Start Here
 - `docs/onboarding.md`: how a new agent should enter the workspace.
@@ -38,7 +38,7 @@ This repository is the local operating base for agents working on the Django cod
 ## Validation
 - `make check`: validate artifacts and diff hygiene.
 - `make validate-artifacts`: validate required structured artifacts.
-- `make security`: documentation-only security placeholder for this agent workspace.
+- `make security`: lightweight repository-local scan for obvious secrets, private keys, private paths, and protected staged files.
 - `make agent-status`: print git status and current verdict.
 
 ## Runtime Artifacts

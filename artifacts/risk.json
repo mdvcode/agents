@@ -8,6 +8,10 @@
   "changed_areas": [
     ".agent-project-profiles.yaml",
     ".agent-policy.yaml",
+    ".gitignore",
+    "AGENTS.md",
+    "docs/index.md",
+    "docs/projects/flowfox/AGENTS.md",
     ".agents/prompts/risk-classifier.md",
     ".agents/prompts/orchestrator.md",
     ".agents/prompts/implementation-agent.md",
@@ -16,10 +20,12 @@
     "schemas/quality.schema.json",
     "schemas/risk.schema.json",
     "schemas/verdict.schema.json",
+    "scripts/security_scan.py",
     "scripts/validate_artifacts.py",
     "tests/test_validate_artifacts.py",
     "requirements-dev.txt",
     "Makefile",
+    ".idea files removed from git tracking",
     "artifacts/project_profile.json",
     "task artifacts"
   ],

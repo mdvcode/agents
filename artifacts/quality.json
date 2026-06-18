@@ -17,7 +17,7 @@
     },
     {
       "name": "diff_check",
-      "command": "git diff --check",
+      "command": "git diff HEAD --check",
       "status": "pass",
       "notes": "No whitespace errors."
     },
@@ -25,7 +25,7 @@
       "name": "security_placeholder",
       "command": "make security",
       "status": "pass",
-      "notes": "Documentation-only security check passed for the agent_workspace profile."
+      "notes": "Repository-local security scanner found no obvious secrets, private keys, private paths, or protected staged files."
     },
     {
       "name": "make-check",
@@ -37,7 +37,7 @@
   "commands_attempted": [
     "make validate-artifacts",
     "python3 -m pytest tests/test_validate_artifacts.py",
-    "git diff --check",
+    "git diff HEAD --check",
     "make security",
     "make check"
   ],

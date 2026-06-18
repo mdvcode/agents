@@ -1,6 +1,7 @@
 {
   "required": [
-    "action",
+    "decision",
+    "execution_status",
     "task",
     "project_profile",
     "risk_class",
@@ -10,11 +11,7 @@
     "warnings",
     "high_risk_triggers",
     "protected_paths_touched",
-    "commit_created",
-    "branch_pushed",
-    "pr_created_or_updated",
-    "pr_url",
-    "pr_state",
+    "publication_result",
     "flowfox_visual_evidence",
     "approval_required_before_publish",
     "approval_required_before_merge",
@@ -23,13 +20,14 @@
     "lessons_updated"
   ],
   "enums": {
-    "action": ["open_pr", "update_pr", "await_approval", "reject", "no_changes"],
+    "decision": ["publish_pr", "await_approval", "reject", "no_changes"],
+    "execution_status": ["planned", "running", "completed", "blocked", "failed"],
     "project_profile": ["agent_workspace", "django", "flowfox"],
-    "risk_class": ["low", "medium", "high"],
-    "pr_state": ["ready", "draft", "not_created"]
+    "risk_class": ["low", "medium", "high"]
   },
   "types": {
-    "action": "str",
+    "decision": "str",
+    "execution_status": "str",
     "task": "str",
     "project_profile": "str",
     "risk_class": "str",
@@ -39,11 +37,7 @@
     "warnings": "list",
     "high_risk_triggers": "list",
     "protected_paths_touched": "list",
-    "commit_created": "bool",
-    "branch_pushed": "bool",
-    "pr_created_or_updated": "bool",
-    "pr_url": "str",
-    "pr_state": "str",
+    "publication_result": "dict",
     "flowfox_visual_evidence": "dict",
     "approval_required_before_publish": "bool",
     "approval_required_before_merge": "bool",
@@ -52,6 +46,13 @@
     "lessons_updated": "bool"
   },
   "object_required": {
+    "publication_result": [
+      "commit_created",
+      "branch_pushed",
+      "pr_created_or_updated",
+      "pr_url",
+      "pr_state"
+    ],
     "flowfox_visual_evidence": [
       "required",
       "provided",

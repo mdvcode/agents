@@ -1,5 +1,6 @@
 {
-  "action": "open_pr",
+  "decision": "publish_pr",
+  "execution_status": "planned",
   "task": "Harden autonomy and project profile contracts.",
   "project_profile": "agent_workspace",
   "risk_class": "medium",
@@ -9,11 +10,13 @@
   "warnings": [],
   "high_risk_triggers": [],
   "protected_paths_touched": [],
-  "commit_created": false,
-  "branch_pushed": false,
-  "pr_created_or_updated": false,
-  "pr_url": "",
-  "pr_state": "not_created",
+  "publication_result": {
+    "commit_created": false,
+    "branch_pushed": false,
+    "pr_created_or_updated": false,
+    "pr_url": "",
+    "pr_state": "not_created"
+  },
   "approval_required_before_publish": false,
   "approval_required_before_merge": true,
   "flowfox_visual_evidence": {

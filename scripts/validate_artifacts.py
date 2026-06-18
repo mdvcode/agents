@@ -160,6 +160,38 @@ def validate_policy_data(policy: Any, label: str = ".agent-policy.yaml") -> list
         for field in ("auto_merge", "deploy_staging", "deploy_production"):
             if rules.get(field) is not False:
                 errors.append(f"{label}: risk_classes.{risk_class}.{field} must be false")
+    projects = policy.get("projects")
+    if not isinstance(projects, dict):
+        return errors + [f"{label}: missing object 'projects'"]
+    flowfox = projects.get("flowfox")
+    if not isinstance(flowfox, dict):
+        return errors + [f"{label}: projects.flowfox must be an object"]
+    publication = flowfox.get("publication")
+    if not isinstance(publication, dict):
+        errors.append(f"{label}: projects.flowfox.publication must be an object")
+    else:
+        for risk_class in ("low", "medium", "high"):
+            rules = publication.get(risk_class)
+            if not isinstance(rules, dict):
+                errors.append(f"{label}: projects.flowfox.publication.{risk_class} must be an object")
+                continue
+            expected = risk_class in {"low", "medium"}
+            for field in ("commit", "push", "open_pr", "update_pr"):
+                if rules.get(field) is not expected:
+                    errors.append(
+                        f"{label}: projects.flowfox.publication.{risk_class}.{field} must be {expected}"
+                    )
+    protected_paths = flowfox.get("protected_paths")
+    if not isinstance(protected_paths, list) or not protected_paths:
+        errors.append(f"{label}: projects.flowfox.protected_paths must be a non-empty list")
+    else:
+        required_patterns = ("artifacts/**", ".env", ".env.*", "**/migrations/**")
+        for pattern in required_patterns:
+            if pattern not in protected_paths:
+                errors.append(f"{label}: projects.flowfox.protected_paths missing {pattern!r}")
+    evidence = flowfox.get("require_visual_evidence_for")
+    if not isinstance(evidence, list) or not evidence:
+        errors.append(f"{label}: projects.flowfox.require_visual_evidence_for must be a non-empty list")
     return errors
 
 
@@ -221,23 +253,62 @@ def validate_risk_invariants(risk: dict[str, Any], label: str = "risk.json") -> 
 
 def validate_verdict_invariants(verdict: dict[str, Any], label: str = "verdict.json") -> list[str]:
     errors: list[str] = []
-    action = verdict.get("action")
+    decision = verdict.get("decision")
+    execution_status = verdict.get("execution_status")
     risk_class = verdict.get("risk_class")
-    pr_created = verdict.get("pr_created_or_updated")
-    pr_url = verdict.get("pr_url")
-    pr_state = verdict.get("pr_state")
+    publication_result = verdict.get("publication_result")
     checks_passed = verdict.get("checks_passed")
+    approval_before_publish = verdict.get("approval_required_before_publish")
+    visual_evidence = verdict.get("flowfox_visual_evidence")
+    high_risk_triggers = verdict.get("high_risk_triggers")
+    protected_paths_touched = verdict.get("protected_paths_touched")
 
-    if risk_class == "high" and action not in {"await_approval", "reject"}:
+    if not isinstance(publication_result, dict):
+        return [f"{label}: publication_result must be an object"]
+    commit_created = publication_result.get("commit_created")
+    branch_pushed = publication_result.get("branch_pushed")
+    pr_created = publication_result.get("pr_created_or_updated")
+    pr_url = publication_result.get("pr_url")
+    pr_state = publication_result.get("pr_state")
+    evidence_required = isinstance(visual_evidence, dict) and visual_evidence.get("required") is True
+    evidence_provided = isinstance(visual_evidence, dict) and visual_evidence.get("provided") is True
+
+    if branch_pushed is True and commit_created is not True:
+        errors.append(f"{label}: branch_pushed=true requires commit_created=true")
+    if pr_created is True and branch_pushed is not True:
+        errors.append(f"{label}: pr_created_or_updated=true requires branch_pushed=true")
+    if pr_created is True and pr_state == "not_created":
+        errors.append(f"{label}: pr_created_or_updated=true cannot use pr_state=not_created")
+    if risk_class == "high" and decision not in {"await_approval", "reject"}:
         errors.append(f"{label}: high risk must use await_approval or reject")
-    if action in {"open_pr", "update_pr"} and risk_class == "high":
-        errors.append(f"{label}: {action} is not allowed for high risk")
+    if risk_class == "high" and any((commit_created, branch_pushed, pr_created)):
+        errors.append(f"{label}: high risk must not create commits, push branches, or publish PRs")
+    if high_risk_triggers:
+        if decision not in {"await_approval", "reject"}:
+            errors.append(f"{label}: high_risk_triggers require await_approval or reject")
+        if any((commit_created, branch_pushed, pr_created)):
+            errors.append(f"{label}: high_risk_triggers block publication_result actions")
+    if protected_paths_touched:
+        if any((commit_created, branch_pushed, pr_created)):
+            errors.append(f"{label}: protected_paths_touched block publication_result actions")
+    if decision == "publish_pr" and risk_class == "high":
+        errors.append(f"{label}: publish_pr is not allowed for high risk")
+    if decision == "await_approval" and approval_before_publish is not True:
+        errors.append(f"{label}: await_approval requires approval_required_before_publish=true")
+    if decision == "publish_pr" and execution_status == "completed" and pr_created is not True:
+        errors.append(f"{label}: completed publish_pr requires pr_created_or_updated=true")
+    if decision == "publish_pr" and execution_status == "completed" and not pr_url:
+        errors.append(f"{label}: completed publish_pr requires pr_url")
     if pr_created is True and not pr_url:
         errors.append(f"{label}: pr_created_or_updated=true requires pr_url")
     if pr_state == "ready" and checks_passed is not True:
         errors.append(f"{label}: pr_state=ready requires checks_passed=true")
+    if pr_state == "ready" and evidence_required and not evidence_provided:
+        errors.append(f"{label}: pr_state=ready requires required visual evidence")
     if checks_passed is False and pr_created is True and pr_state != "draft":
         errors.append(f"{label}: failed checks with an existing PR require pr_state=draft")
+    if evidence_required and not evidence_provided and pr_created is True and pr_state != "draft":
+        errors.append(f"{label}: missing required visual evidence with an existing PR requires pr_state=draft")
     return errors
 
 
