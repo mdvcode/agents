@@ -2,7 +2,7 @@
 
 ## SUMMARY
 
-- Documentation/profile/process-only change. No application code, secrets, auth, billing, production settings, or infrastructure changed.
+- Documentation/profile/validator process-only change. No application code, secrets, auth, billing, production settings, or infrastructure changed.
 
 ## PROJECT_PROFILE
 
@@ -16,7 +16,7 @@
 
 ## MEDIUM
 
-- Project profile rules affect future command selection and publication gates. `.agent-project-profiles.yaml` separates agent workspace, Django, and Flowfox checks and keeps HIGH-risk/protected publication gates under `.agent-policy.yaml`.
+- Hardened autonomy rules affect future commit, push, and PR publication gates. `.agent-policy.yaml` still forbids auto-merge, deploy, force-push, production access, and HIGH-risk publication.
 
 ## LOW
 

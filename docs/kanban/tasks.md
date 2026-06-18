@@ -19,6 +19,7 @@
 - Flowfox issue 493: Pre-image attribution for Advertorial Content Sections.
 
 ## Done
+- P1.1: Harden autonomy and project profile contracts.
 - P1: Add project profiles for agent_workspace, Django, and Flowfox.
 - P0: Normalize agent autonomy contract, publication policy, and artifact schemas.
 - Git repository exists for agent workspace history.

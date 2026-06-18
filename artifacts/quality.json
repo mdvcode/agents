@@ -1,5 +1,5 @@
 {
-  "task": "Add project profiles for agent workspace, Django, and Flowfox.",
+  "task": "Harden autonomy and project profile contracts.",
   "project_profile": "agent_workspace",
   "overall_status": "pass",
   "checks": [
@@ -8,6 +8,12 @@
       "command": "make validate-artifacts",
       "status": "pass",
       "notes": "Artifact schemas and JSON files validated, including project_profile.json."
+    },
+    {
+      "name": "validator-regression-tests",
+      "command": "python3 -m pytest tests/test_validate_artifacts.py",
+      "status": "pass",
+      "notes": "Validator semantic invariant regression tests passed."
     },
     {
       "name": "diff_check",
@@ -30,6 +36,7 @@
   ],
   "commands_attempted": [
     "make validate-artifacts",
+    "python3 -m pytest tests/test_validate_artifacts.py",
     "git diff --check",
     "make security",
     "make check"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate required agent artifacts with a tiny standard-library checker."""
+"""Validate required agent artifacts and machine-readable policy contracts."""
 
 from __future__ import annotations
 
@@ -7,12 +7,15 @@ import json
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "artifacts"
 SCHEMAS = ROOT / "schemas"
 POLICY = ROOT / ".agent-policy.yaml"
 PROJECT_PROFILES = ROOT / ".agent-project-profiles.yaml"
+DEPRECATED_COMBINED_PUBLICATION_KEY = "commit" + "_push"
 JSON_ARTIFACTS = {
     "risk": (ARTIFACTS / "risk.json", SCHEMAS / "risk.schema.json"),
     "quality": (ARTIFACTS / "quality.json", SCHEMAS / "quality.schema.json"),
@@ -27,6 +30,16 @@ JSON_ARTIFACTS = {
 def load_json(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def load_yaml(path: Path, label: str) -> tuple[Any | None, list[str]]:
+    if not path.exists():
+        return None, [f"{label}: missing"]
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return yaml.safe_load(handle), []
+    except yaml.YAMLError as exc:
+        return None, [f"{label}: invalid YAML: {exc}"]
 
 
 def validate_required(data: dict[str, Any], schema: dict[str, Any], label: str) -> list[str]:
@@ -78,12 +91,14 @@ def validate_object_required(data: dict[str, Any], schema: dict[str, Any], label
     return errors
 
 
-def validate_json_artifact(name: str, artifact_path: Path, schema_path: Path) -> list[str]:
+def load_and_validate_json_artifact(
+    name: str, artifact_path: Path, schema_path: Path
+) -> tuple[dict[str, Any] | None, list[str]]:
     data = load_json(artifact_path)
     if not isinstance(data, dict):
-        return [f"{name}.json: top-level value must be an object"]
+        return None, [f"{name}.json: top-level value must be an object"]
     schema = load_json(schema_path)
-    return validate_required(data, schema, f"{name}.json")
+    return data, validate_required(data, schema, f"{name}.json")
 
 
 def validate_audit_log() -> list[str]:
@@ -107,45 +122,162 @@ def validate_audit_log() -> list[str]:
     return errors
 
 
-def validate_policy_file() -> list[str]:
-    if not POLICY.exists():
-        return [".agent-policy.yaml: missing"]
-    text = POLICY.read_text(encoding="utf-8")
+def contains_key(value: Any, forbidden_key: str) -> bool:
+    if isinstance(value, dict):
+        return forbidden_key in value or any(contains_key(item, forbidden_key) for item in value.values())
+    if isinstance(value, list):
+        return any(contains_key(item, forbidden_key) for item in value)
+    return False
+
+
+def validate_policy_data(policy: Any, label: str = ".agent-policy.yaml") -> list[str]:
     errors: list[str] = []
-    for marker in ("version:", "default:", "risk_classes:", "projects:", "flowfox:"):
-        if marker not in text:
-            errors.append(f".agent-policy.yaml: missing marker {marker!r}")
+    if not isinstance(policy, dict):
+        return [f"{label}: top-level value must be an object"]
+    if contains_key(policy, DEPRECATED_COMBINED_PUBLICATION_KEY):
+        errors.append(f"{label}: deprecated combined publication key is not allowed")
+    if policy.get("version") != 1:
+        errors.append(f"{label}: version must be 1")
+    risk_classes = policy.get("risk_classes")
+    if not isinstance(risk_classes, dict):
+        return errors + [f"{label}: missing object 'risk_classes'"]
+
+    for risk_class in ("low", "medium", "high"):
+        rules = risk_classes.get(risk_class)
+        if not isinstance(rules, dict):
+            errors.append(f"{label}: risk_classes.{risk_class} must be an object")
+            continue
+        expected_publish = risk_class in {"low", "medium"}
+        expected_human = risk_class == "high"
+        for field in ("patch", "commit", "push", "open_pr", "update_pr"):
+            expected = True if field == "patch" else expected_publish
+            if rules.get(field) is not expected:
+                errors.append(f"{label}: risk_classes.{risk_class}.{field} must be {expected}")
+        if rules.get("require_human_approval") is not expected_human:
+            errors.append(
+                f"{label}: risk_classes.{risk_class}.require_human_approval must be {expected_human}"
+            )
+        for field in ("auto_merge", "deploy_staging", "deploy_production"):
+            if rules.get(field) is not False:
+                errors.append(f"{label}: risk_classes.{risk_class}.{field} must be false")
     return errors
 
 
-def validate_project_profiles_file() -> list[str]:
-    if not PROJECT_PROFILES.exists():
-        return ["missing .agent-project-profiles.yaml"]
-    text = PROJECT_PROFILES.read_text(encoding="utf-8")
+def validate_policy_file(path: Path = POLICY) -> list[str]:
+    policy, errors = load_yaml(path, ".agent-policy.yaml")
+    if errors:
+        return errors
+    return validate_policy_data(policy)
+
+
+def validate_project_profiles_data(
+    profiles_doc: Any, label: str = ".agent-project-profiles.yaml"
+) -> list[str]:
     errors: list[str] = []
-    required_markers = [
-        "version:",
-        "profiles:",
-        "agent_workspace:",
-        "django:",
-        "flowfox:",
-        "quality_commands:",
-        "security_commands:",
-        "frontend_evidence:",
-    ]
-    for marker in required_markers:
-        if marker not in text:
-            errors.append(f".agent-project-profiles.yaml missing marker: {marker}")
+    if not isinstance(profiles_doc, dict):
+        return [f"{label}: top-level value must be an object"]
+    if profiles_doc.get("version") != 1:
+        errors.append(f"{label}: version must be 1")
+    profiles = profiles_doc.get("profiles")
+    if not isinstance(profiles, dict):
+        return errors + [f"{label}: missing object 'profiles'"]
+    for profile in ("agent_workspace", "django", "flowfox"):
+        value = profiles.get(profile)
+        if not isinstance(value, dict):
+            errors.append(f"{label}: profiles.{profile} must be an object")
+            continue
+        for field in ("quality_commands", "security_commands", "test_strategy", "frontend_evidence"):
+            if field not in value:
+                errors.append(f"{label}: profiles.{profile} missing {field!r}")
+    return errors
+
+
+def validate_project_profiles_file(path: Path = PROJECT_PROFILES) -> list[str]:
+    profiles_doc, errors = load_yaml(path, ".agent-project-profiles.yaml")
+    if errors:
+        return errors
+    return validate_project_profiles_data(profiles_doc)
+
+
+def validate_risk_invariants(risk: dict[str, Any], label: str = "risk.json") -> list[str]:
+    errors: list[str] = []
+    risk_class = risk.get("risk_class")
+    autonomy = risk.get("autonomy_allowed")
+    if not isinstance(autonomy, dict):
+        return [f"{label}: autonomy_allowed must be an object"]
+    if risk_class in {"low", "medium"}:
+        for field in ("commit", "push", "open_pr", "update_pr"):
+            if autonomy.get(field) is not True:
+                errors.append(f"{label}: {risk_class} risk requires autonomy_allowed.{field}=true")
+    elif risk_class == "high":
+        for field in ("commit", "push", "open_pr", "update_pr"):
+            if autonomy.get(field) is not False:
+                errors.append(f"{label}: high risk requires autonomy_allowed.{field}=false")
+    for field in ("auto_merge", "deploy_staging", "deploy_production"):
+        if autonomy.get(field) is not False:
+            errors.append(f"{label}: autonomy_allowed.{field} must be false")
+    return errors
+
+
+def validate_verdict_invariants(verdict: dict[str, Any], label: str = "verdict.json") -> list[str]:
+    errors: list[str] = []
+    action = verdict.get("action")
+    risk_class = verdict.get("risk_class")
+    pr_created = verdict.get("pr_created_or_updated")
+    pr_url = verdict.get("pr_url")
+    pr_state = verdict.get("pr_state")
+    checks_passed = verdict.get("checks_passed")
+
+    if risk_class == "high" and action not in {"await_approval", "reject"}:
+        errors.append(f"{label}: high risk must use await_approval or reject")
+    if action in {"open_pr", "update_pr"} and risk_class == "high":
+        errors.append(f"{label}: {action} is not allowed for high risk")
+    if pr_created is True and not pr_url:
+        errors.append(f"{label}: pr_created_or_updated=true requires pr_url")
+    if pr_state == "ready" and checks_passed is not True:
+        errors.append(f"{label}: pr_state=ready requires checks_passed=true")
+    if checks_passed is False and pr_created is True and pr_state != "draft":
+        errors.append(f"{label}: failed checks with an existing PR require pr_state=draft")
+    return errors
+
+
+def validate_cross_artifact_invariants(artifacts: dict[str, dict[str, Any]]) -> list[str]:
+    errors: list[str] = []
+    project_profile = artifacts.get("project_profile", {}).get("project_profile")
+    quality_profile = artifacts.get("quality", {}).get("project_profile")
+    verdict_profile = artifacts.get("verdict", {}).get("project_profile")
+    if len({project_profile, quality_profile, verdict_profile}) != 1:
+        errors.append(
+            "project profile mismatch across project_profile.json, quality.json, and verdict.json"
+        )
+    risk_class = artifacts.get("risk", {}).get("risk_class")
+    verdict_risk_class = artifacts.get("verdict", {}).get("risk_class")
+    if risk_class != verdict_risk_class:
+        errors.append("risk_class mismatch between risk.json and verdict.json")
     return errors
 
 
 def main() -> int:
     errors: list[str] = []
+    loaded_artifacts: dict[str, dict[str, Any]] = {}
     for name, (artifact_path, schema_path) in JSON_ARTIFACTS.items():
-        errors.extend(validate_json_artifact(name, artifact_path, schema_path))
+        data, artifact_errors = load_and_validate_json_artifact(name, artifact_path, schema_path)
+        errors.extend(artifact_errors)
+        if data is not None:
+            loaded_artifacts[name] = data
+
     errors.extend(validate_audit_log())
     errors.extend(validate_policy_file())
     errors.extend(validate_project_profiles_file())
+
+    risk = loaded_artifacts.get("risk")
+    verdict = loaded_artifacts.get("verdict")
+    if risk is not None:
+        errors.extend(validate_risk_invariants(risk))
+    if verdict is not None:
+        errors.extend(validate_verdict_invariants(verdict))
+    if {"risk", "quality", "verdict", "project_profile"}.issubset(loaded_artifacts):
+        errors.extend(validate_cross_artifact_invariants(loaded_artifacts))
 
     if errors:
         for error in errors:

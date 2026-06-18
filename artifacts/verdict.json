@@ -1,26 +1,36 @@
 {
-  "action": "patch",
-  "task": "Add project profiles for agent workspace, Django, and Flowfox",
+  "action": "open_pr",
+  "task": "Harden autonomy and project profile contracts.",
   "project_profile": "agent_workspace",
   "risk_class": "medium",
+  "checks_attempted": true,
   "checks_passed": true,
   "blockers": [],
   "warnings": [],
+  "high_risk_triggers": [],
   "protected_paths_touched": [],
+  "commit_created": false,
+  "branch_pushed": false,
+  "pr_created_or_updated": false,
+  "pr_url": "",
+  "pr_state": "not_created",
+  "approval_required_before_publish": false,
+  "approval_required_before_merge": true,
   "flowfox_visual_evidence": {
     "required": false,
     "provided": false,
     "items": []
   },
-  "approval_required_before_publish": false,
   "reasoning_summary": [
-    "Added `.agent-project-profiles.yaml` with agent_workspace, django, and flowfox profiles.",
-    "Recorded the selected agent_workspace profile in `artifacts/project_profile.json`.",
-    "Updated planner, quality, test, security, review, report, and orchestrator prompts to select checks by profile.",
-    "Strengthened quality and project_profile schemas plus artifact validation so profile data is required before publication."
+    "The task is MEDIUM risk.",
+    "Policy permits autonomous commit, push, and PR creation.",
+    "Merge and deploy remain human-controlled."
   ],
   "next_actions": [
-    "Use project profiles before choosing checks or publication gates on future tasks."
+    "Create commit.",
+    "Push task branch.",
+    "Create or update PR.",
+    "Update verdict with the PR URL."
   ],
   "lessons_updated": false
 }

@@ -2,7 +2,7 @@
 
 ## SUMMARY
 
-- Process-only update adding project profiles for the agent workspace, Django, and Flowfox so checks and publication gates are selected by repository/task type.
+- Process-only update hardening autonomy and project profile contracts with stricter publication permissions, verdict state, YAML parsing, and validator regression tests.
 
 ## CORRECTNESS_FINDINGS
 
@@ -16,12 +16,13 @@
 
 - The new policy and rules commit every task-scoped changed/added/deleted public Flowfox file, use configured git identity plus the authenticated GitHub account, keep private control-plane files out of Flowfox commits and PRs, and require public branch/text metadata to omit agent/Codex/AI/automation wording.
 - Project profile guidance preserves the Flowfox publication rules while preventing Django-centric checks from becoming the default for Flowfox tasks.
-- `quality.json` and `project_profile.json` now use structured fields that the validator checks.
+- Risk and verdict contracts now require high-risk triggers, protected actions, separate commit/push/open/update PR permissions, and PR state.
+- Validator tests cover the semantic invariants that guard LOW/MEDIUM vs HIGH publication behavior, PR state, profile consistency, and YAML parsing.
 
 ## PROJECT_PROFILE_FINDINGS
 
 - Selected profile `agent_workspace` is correct for changes under `/Users/user/agents`.
-- Selected quality commands match `.agent-project-profiles.yaml`: `make validate-artifacts` and `make check`.
+- Selected quality commands match `.agent-project-profiles.yaml`: `make validate-artifacts`, validator pytest, and `make check`.
 - No Django/Python or Flowfox/Bun commands are used as the main quality signal for this agent workspace task.
 
 ## POLICY_VIOLATIONS
@@ -38,4 +39,4 @@
 
 ## NOTES
 
-- Publishing remains gated by `.agent-policy.yaml` and now also by the presence and consistency of `artifacts/project_profile.json`.
+- Publishing remains gated by `.agent-policy.yaml`, semantic artifact validation, and consistency between risk, quality, verdict, and project profile artifacts.

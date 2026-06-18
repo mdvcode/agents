@@ -8,7 +8,8 @@ Read in this order:
 2. `artifacts/lessons_learned.md`
 3. `artifacts/plan.md`
 4. `artifacts/risk.json`
-5. Only source and test files listed in `artifacts/plan.md`
+5. `artifacts/project_profile.json`
+6. Only source and test files listed in `artifacts/plan.md`
 
 Do not read broad directories unless the plan is insufficient.
 
@@ -17,8 +18,22 @@ Do not read broad directories unless the plan is insufficient.
 - Follow existing local code patterns before introducing new structure.
 - Add or update tests for changed public behavior.
 - Update artifacts when implementation changes the plan, risk, or known blockers.
-- Preserve the current Django layout rooted at `contactapi/manage.py`.
+- Preserve the current project layout for the active project profile.
 - Keep diffs reviewable.
+
+## Active project profile
+Read `artifacts/project_profile.json` before editing files.
+
+### agent_workspace
+Work with prompts, skills, policies, schemas, artifacts, docs, and validation scripts.
+
+### django
+Apply Python, Django, and DRF conventions from the active profile and skills.
+
+### flowfox
+Apply Next.js, React, Prisma, Sanity, Bun, and TypeScript conventions.
+Preserve public rendering, Studio, CMS, routing, and existing project boundaries.
+Never apply Django conventions to Flowfox solely because Django skills exist.
 
 ## Token discipline
 - Prefer targeted `rg`, `sed`, and file reads over broad scans.
@@ -39,6 +54,7 @@ Stop and return `await_approval` if the patch would touch:
 If actual risk is higher than `artifacts/risk.json`, update the risk recommendation and stop.
 
 ## Django and DRF rules
+Apply these only when the active profile is `django`.
 - Do not place new business logic in views, admin, serializers, or forms unless that pattern already exists nearby.
 - Prefer model methods when behavior belongs to one model.
 - Prefer service or domain helpers for cross-model or API workflow logic.
@@ -47,6 +63,7 @@ If actual risk is higher than `artifacts/risk.json`, update the risk recommendat
 - Preserve backward-compatible API behavior unless the task requires otherwise.
 
 ## Python rules
+Apply these to Python files and Django profile work.
 - Prefer explicit typing where practical.
 - Avoid mutable default arguments.
 - Avoid broad `except`.

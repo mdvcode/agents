@@ -10,22 +10,31 @@ default:
 risk_classes:
   low:
     patch: true
-    commit_push: true
+    commit: true
+    push: true
     open_pr: true
+    update_pr: true
+    require_human_approval: false
     auto_merge: false
     deploy_staging: false
     deploy_production: false
   medium:
     patch: true
-    commit_push: true
+    commit: true
+    push: true
     open_pr: true
+    update_pr: true
+    require_human_approval: false
     auto_merge: false
     deploy_staging: false
     deploy_production: false
   high:
     patch: true
-    commit_push: false
+    commit: false
+    push: false
     open_pr: false
+    update_pr: false
+    require_human_approval: true
     auto_merge: false
     deploy_staging: false
     deploy_production: false
@@ -34,14 +43,20 @@ projects:
   flowfox:
     publication:
       low:
-        commit_push: true
+        commit: true
+        push: true
         open_pr: true
+        update_pr: true
       medium:
-        commit_push: true
+        commit: true
+        push: true
         open_pr: true
+        update_pr: true
       high:
-        commit_push: false
+        commit: false
+        push: false
         open_pr: false
+        update_pr: false
     require_visual_evidence_for:
       - ui
       - routing

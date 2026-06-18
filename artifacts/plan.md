@@ -2,7 +2,7 @@
 
 ## GOAL
 
-- Add project profiles for the agent workspace, Django, and Flowfox so planning, tests, quality checks, security checks, review, report, and publication gates are profile-aware.
+- Harden autonomy and project profile contracts so LOW/MEDIUM work proceeds through commit, push, and PR publication while HIGH work stops for human approval.
 
 ## PROJECT_PROFILE
 
@@ -15,40 +15,39 @@
 
 ## CONTEXT
 
-- Current agent prompts are partly Django-centric and can choose Python/Django checks for Flowfox tasks.
-- Flowfox needs Next.js / React / Prisma / Sanity / Bun / TypeScript checks, not default Django tooling.
-- This agent workspace needs artifact/schema validation, not Django or Flowfox application checks.
-- The selected project profile must be recorded in `artifacts/project_profile.json` and reflected in quality, report, and verdict artifacts.
+- Previous policy used a combined publication permission instead of separate commit, push, open PR, and update PR permissions.
+- Risk and verdict artifacts did not yet enforce high-risk triggers, publication status, PR state, or cross-artifact profile consistency.
+- YAML policy files were only checked by marker strings instead of structural parsing.
+- Implementation/test prompts still had residual global Django assumptions.
 
 ## CONSTRAINTS
 
-- Do not add new agents, model routers, frontend QA agents, eval runners, LangGraph, Hermes, or OpenClaw.
-- Do not run Django/Python checks for the agent workspace task.
-- Do not run Flowfox/Bun checks for the agent workspace task.
-- Keep changes limited to harness policy, prompts, schemas, docs, validation, and artifacts.
+- Do not add frontend QA agents, architecture-consistency agents, semantic-conflict agents, LangGraph, Hermes, OpenClaw, model routers, or broad eval banks.
+- Do not auto-merge, deploy, force-push, rewrite history, or access production credentials.
+- Keep changes limited to harness policy, prompts, schemas, validation, tests, docs, and artifacts.
 
 ## RISK
 
-- MEDIUM: private agent process prompts and schemas change future command selection and publication gates across project types.
+- MEDIUM: private agent harness contracts and validation semantics change future autonomy and publication behavior.
 
 ## PLAN
 
-1. Add `.agent-project-profiles.yaml` with `agent_workspace`, `django`, and `flowfox` profiles.
-2. Add `artifacts/project_profile.json` and `schemas/project_profile.schema.json`.
-3. Update artifact validation and `make check` to validate the project profile artifact.
-4. Update `AGENTS.md` and planner, quality, test, security, review, report, and orchestrator prompts to use profiles.
-5. Update `schemas/quality.schema.json` and `artifacts/quality.json` to include `project_profile` and `commands_attempted`.
-6. Update current risk, report, review, security, verdict, kanban, and audit artifacts.
-7. Run profile-selected checks for `agent_workspace`: `make validate-artifacts`, `make security`, `make check`, and `git diff --check`.
+1. Replace the combined publication permission with separate `commit`, `push`, `open_pr`, and `update_pr` permissions in policy, risk prompt, schema, and artifact.
+2. Update orchestrator actions and verdict schema/artifact to use `open_pr`, `update_pr`, `await_approval`, `reject`, and `no_changes`.
+3. Add semantic validation for risk invariants, verdict invariants, cross-artifact profile/risk consistency, and structurally parsed YAML files.
+4. Make implementation and test prompts fully project-profile aware.
+5. Make `make check` robust outside git and add validator regression tests.
+6. Update current quality, report, review, security, verdict, kanban, and audit artifacts.
+7. Run profile-selected checks for `agent_workspace`: `make validate-artifacts`, validator pytest, `make security`, `make check`, and `git diff --check`.
 
 ## DONE WHEN
 
-- `.agent-project-profiles.yaml` exists and defines `agent_workspace`, `django`, and `flowfox`.
-- `artifacts/project_profile.json` records `agent_workspace` for this task.
-- `schemas/project_profile.schema.json` and `schemas/quality.schema.json` enforce profile-aware artifact fields.
-- Planner, quality runner, test generator, security agent, reviewer, report agent, and orchestrator prompts are profile-aware.
-- Flowfox tasks are guided toward Bun/TypeScript/focused tests and visual evidence rather than Django checks.
-- Agent workspace tasks are guided toward artifact/schema validation.
+- The deprecated combined publication permission is not part of active policy, prompts, schemas, or artifacts.
+- LOW/MEDIUM risk permits commit, push, open PR, and update PR; HIGH risk forbids them.
+- `update_pr` is a distinct orchestrator action.
+- Risk prompt/schema/artifact and orchestrator prompt/verdict schema/artifact use matching contracts.
+- YAML files are parsed and validated structurally.
+- Validator regression tests cover semantic invariants.
 - `make validate-artifacts` and `make check` pass.
 
 ## VERIFY
