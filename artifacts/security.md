@@ -19,6 +19,7 @@
 
 - `scripts/publish_pr.py` can perform commit, push, and PR publication when invoked and when preflight passes. It blocks HIGH risk, protected paths, detected secrets, invalid artifacts, default branches, detached HEAD, merge conflicts, missing git identity, missing remotes, and failed `gh auth`.
 - Target repository publication uses `artifacts/change_set.json` and stages only allowlisted files; it never uses `git add -A`.
+- Publisher preflight runs selected profile quality commands and downgrades publication to draft when those commands fail without hard blockers.
 
 ## LOW
 
@@ -38,4 +39,4 @@
 
 ## RECOMMENDED_ACTION
 
-- Use `python3 scripts/publish_pr.py --dry-run` before first live publication from a target project branch, then run without `--dry-run` only when preflight has no hard blockers.
+- Use `python3 scripts/publish_pr.py --dry-run` before first live publication from a target project branch. Dry-run is read-only for artifacts, audit log, git, push, and PR mutation.

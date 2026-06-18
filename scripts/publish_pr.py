@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import re
+import shlex
 import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -159,7 +161,13 @@ def parse_pr_view(output: str) -> tuple[int, str]:
 
 class Publisher:
     def __init__(self, root: Path = ROOT, runner: CommandRunner | None = None) -> None:
-        self.root = root
+        self.root = root.resolve()
+        self.artifacts = self.root / "artifacts"
+        self.policy_path = self.root / ".agent-policy.yaml"
+        self.project_profiles_path = self.root / ".agent-project-profiles.yaml"
+        self.publication_path = self.artifacts / "publication.json"
+        self.verdict_path = self.artifacts / "verdict.json"
+        self.audit_log_path = self.artifacts / "audit_log.jsonl"
         self.runner = runner or CommandRunner()
 
     def run_command(self, args: Sequence[str], cwd: Path | None = None) -> CommandResult:
@@ -169,6 +177,7 @@ class Publisher:
         self,
         target_repo: Path,
         policy: dict[str, Any],
+        profiles_doc: dict[str, Any],
         risk: dict[str, Any],
         quality: dict[str, Any],
         verdict: dict[str, Any],
@@ -201,6 +210,7 @@ class Publisher:
             )
             if command_failed(security):
                 result.errors.append(f"security scan failed: {command_output(security)}")
+            self.run_profile_quality_checks(target_repo, profiles_doc, profile, result)
 
         branch = self.run_command(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=target_repo)
         if command_failed(branch):
@@ -233,6 +243,30 @@ class Publisher:
 
         result.execution_status = "blocked" if result.errors else "running"
         return result
+
+    def run_profile_quality_checks(
+        self,
+        target_repo: Path,
+        profiles_doc: dict[str, Any],
+        profile: str,
+        publication: PublicationResult,
+    ) -> None:
+        profile_doc = profiles_doc.get("profiles", {}).get(profile, {})
+        quality_commands = profile_doc.get("quality_commands", {})
+        required_commands = quality_commands.get("required", [])
+        if not isinstance(required_commands, list):
+            publication.errors.append(f"profile {profile!r} has invalid required quality commands")
+            return
+        for command in required_commands:
+            if not isinstance(command, str):
+                publication.errors.append(f"profile {profile!r} has non-string quality command")
+                continue
+            result = self.run_command(shlex.split(command), cwd=target_repo)
+            if command_failed(result):
+                publication.warnings.append(
+                    f"profile quality command failed: {command}: {command_output(result)}"
+                )
+                publication.pr_state = "draft"
 
     def stage_change_set(self, target_repo: Path, change_set: dict[str, Any], dry_run: bool) -> list[str]:
         include = [path for path in change_set.get("include", []) if isinstance(path, str)]
@@ -289,8 +323,8 @@ class Publisher:
         return True, number, url, ""
 
     def update_artifacts(self, publication: PublicationResult) -> None:
-        write_json(PUBLICATION, publication.as_json())
-        verdict = read_json(VERDICT)
+        write_json(self.publication_path, publication.as_json())
+        verdict = read_json(self.verdict_path)
         verdict["execution_status"] = publication.execution_status
         verdict["publication_result"] = {
             "commit_created": publication.commit_created,
@@ -302,7 +336,7 @@ class Publisher:
         if publication.errors:
             verdict["blockers"] = publication.errors
         verdict["warnings"] = sorted(set(verdict.get("warnings", []) + publication.warnings))
-        write_json(VERDICT, verdict)
+        write_json(self.verdict_path, verdict)
 
     def append_audit_log(self, publication: PublicationResult) -> None:
         entry = {
@@ -312,24 +346,89 @@ class Publisher:
             "commit_sha": publication.commit_sha,
             "verdict": publication.execution_status,
             "checks_passed": not publication.errors,
-            "project_profile": read_json(ARTIFACTS / "project_profile.json").get("project_profile"),
+            "project_profile": read_json(self.artifacts / "project_profile.json").get("project_profile"),
             "dry_run": publication.dry_run,
         }
-        with AUDIT_LOG.open("a", encoding="utf-8") as handle:
+        with self.audit_log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
+    def update_report(self, publication: PublicationResult) -> None:
+        report_path = self.artifacts / "report.md"
+        if not report_path.exists():
+            return
+        text = report_path.read_text(encoding="utf-8").rstrip()
+        section = [
+            "",
+            "## Publication Result",
+            "",
+            f"- Execution status: `{publication.execution_status}`",
+            f"- Branch: `{publication.branch}`",
+            f"- Commit created: `{publication.commit_created}`",
+            f"- Commit SHA: `{publication.commit_sha}`",
+            f"- Branch pushed: `{publication.branch_pushed}`",
+            f"- PR created or updated: `{publication.pr_created_or_updated}`",
+            f"- PR URL: `{publication.pr_url}`",
+            f"- PR state: `{publication.pr_state}`",
+        ]
+        if publication.warnings:
+            section.append(f"- Warnings: {'; '.join(publication.warnings)}")
+        if publication.errors:
+            section.append(f"- Errors: {'; '.join(publication.errors)}")
+        report_path.write_text(text + "\n" + "\n".join(section) + "\n", encoding="utf-8")
+
+    def update_issue_journal(
+        self,
+        change_set: dict[str, Any],
+        project_profile: str,
+        publication: PublicationResult,
+    ) -> None:
+        if project_profile != "flowfox":
+            return
+        task_id = str(change_set.get("task_id", ""))
+        match = re.search(r"issue-(\d+)", task_id)
+        if match is None:
+            return
+        issue_path = self.root / "docs" / "projects" / "flowfox" / "issues" / f"issue-{match.group(1)}.md"
+        if not issue_path.exists():
+            return
+        text = issue_path.read_text(encoding="utf-8").rstrip()
+        section = [
+            "",
+            "## Publication Result",
+            "",
+            f"- Execution status: `{publication.execution_status}`",
+            f"- Branch: `{publication.branch}`",
+            f"- Commit SHA: `{publication.commit_sha}`",
+            f"- PR URL: `{publication.pr_url}`",
+            f"- PR state: `{publication.pr_state}`",
+        ]
+        issue_path.write_text(text + "\n" + "\n".join(section) + "\n", encoding="utf-8")
+
+    def record_publication(
+        self,
+        publication: PublicationResult,
+        change_set: dict[str, Any],
+        project_profile: str,
+    ) -> None:
+        self.update_artifacts(publication)
+        self.update_report(publication)
+        self.update_issue_journal(change_set, project_profile, publication)
+        self.append_audit_log(publication)
+
     def publish(self, dry_run: bool = False, skip_checks: bool = False) -> PublicationResult:
-        policy = read_yaml(POLICY)
-        risk = read_json(ARTIFACTS / "risk.json")
-        quality = read_json(ARTIFACTS / "quality.json")
-        verdict = read_json(ARTIFACTS / "verdict.json")
-        project_profile = read_json(ARTIFACTS / "project_profile.json")
-        change_set = read_json(ARTIFACTS / "change_set.json")
+        policy = read_yaml(self.policy_path)
+        profiles_doc = read_yaml(self.project_profiles_path)
+        risk = read_json(self.artifacts / "risk.json")
+        quality = read_json(self.artifacts / "quality.json")
+        verdict = read_json(self.artifacts / "verdict.json")
+        project_profile = read_json(self.artifacts / "project_profile.json")
+        change_set = read_json(self.artifacts / "change_set.json")
         target_repo = Path(change_set["target_repository"]).expanduser().resolve()
 
         publication = self.preflight(
             target_repo,
             policy,
+            profiles_doc,
             risk,
             quality,
             verdict,
@@ -347,8 +446,8 @@ class Publisher:
         )
         if publication.errors:
             publication.execution_status = "blocked"
-            self.update_artifacts(publication)
-            self.append_audit_log(publication)
+            if not dry_run:
+                self.record_publication(publication, change_set, str(project_profile.get("project_profile", "")))
             return publication
 
         staged = self.stage_change_set(target_repo, change_set, dry_run)
@@ -367,7 +466,7 @@ class Publisher:
                     publication.errors.append(f"commit failed: {error}")
                     publication.execution_status = "failed"
             else:
-                existing = read_json(PUBLICATION) if PUBLICATION.exists() else {}
+                existing = read_json(self.publication_path) if self.publication_path.exists() else {}
                 publication.commit_created = bool(existing.get("commit_created"))
                 publication.commit_sha = str(existing.get("commit_sha", ""))
                 if not publication.commit_created:
@@ -398,8 +497,8 @@ class Publisher:
                 else:
                     publication.execution_status = "completed"
 
-        self.update_artifacts(publication)
-        self.append_audit_log(publication)
+        if not dry_run:
+            self.record_publication(publication, change_set, str(project_profile.get("project_profile", "")))
         return publication
 
 

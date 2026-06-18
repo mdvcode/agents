@@ -40,12 +40,18 @@
 5. Strengthen artifact validation for nested object types/enums, selected profile commands, publication/change-set artifacts, project workflow config, and policy public-output phrase rules.
 6. Update stale artifacts and issue-journal wording.
 7. Add focused tests for security scanning, validator contracts, and publication executor behavior.
+8. Run required profile quality commands during publisher preflight.
+9. Keep `--dry-run` read-only for publication artifacts, verdict, report, and audit log.
+10. Record live publication results in `artifacts/report.md` and Flowfox issue journals when an issue journal exists.
 
 ## DONE WHEN
 
 - `scripts/publish_pr.py` exists and supports `--dry-run`.
 - Publication stages only paths listed in `artifacts/change_set.json`.
 - `artifacts/publication.json` records branch, commit, push, PR URL/state, warnings, and errors.
+- Publisher preflight runs the required quality commands from the selected project profile.
+- `--dry-run` does not mutate publication artifacts, verdict, report, audit log, git index, commits, pushes, or PRs.
+- Live publication appends a publication summary to `artifacts/report.md` and the matching Flowfox issue journal when applicable.
 - Flowfox target publication blocks private artifacts/memory while agent workspace publication allows private workspace artifacts.
 - Nested verdict child types and `pr_state` enum are validated.
 - `make check` includes security and all tests.

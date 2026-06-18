@@ -19,7 +19,7 @@
       "name": "harness-tests",
       "command": "python3 -m pytest tests",
       "status": "pass",
-      "notes": "33 tests passed for validator, security scanner, and publication executor behavior."
+      "notes": "36 tests passed for validator, security scanner, and publication executor behavior."
     },
     {
       "name": "make-check",

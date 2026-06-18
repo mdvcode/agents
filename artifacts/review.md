@@ -18,6 +18,7 @@
 - Project profile guidance preserves the Flowfox publication rules while preventing Django-centric checks from becoming the default for Flowfox tasks.
 - Risk and verdict contracts now require high-risk triggers, protected actions, separate commit/push/open/update PR permissions, and PR state.
 - Validator tests cover the semantic invariants that guard LOW/MEDIUM vs HIGH publication behavior, PR state, profile consistency, and YAML parsing.
+- Publisher tests cover profile quality command execution, read-only dry-run behavior, report updates, and issue journal updates.
 
 ## PROJECT_PROFILE_FINDINGS
 

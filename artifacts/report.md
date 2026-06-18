@@ -6,6 +6,9 @@
 - Added `artifacts/change_set.json`, `artifacts/publication.json`, their schemas, `.agent-workflows.yaml`, and `.github/workflows/agent-harness-checks.yml`.
 - Made `scripts/security_scan.py` profile-aware: private workspace artifacts are allowed for `agent_workspace`, while target repositories still block private artifacts and project memory.
 - Strengthened validation for nested object types/enums, selected profile commands, policy public-output phrase rules, workflow config, and publication/change-set artifacts.
+- Publisher preflight now runs required quality commands from the selected project profile.
+- `--dry-run` is read-only for publication artifacts, verdict, report, audit log, git index, commits, pushes, and PRs.
+- Live publication now records results in `artifacts/report.md` and matching Flowfox issue journals when applicable.
 - Updated stale security/plan wording and marked the old Flowfox issue 943 approval gate as superseded by `.agent-policy.yaml`.
 
 ## Project profile
@@ -21,7 +24,7 @@
 
 - Passed: `make validate-artifacts`
 - Passed: `make security`
-- Passed: `python3 -m pytest tests` (33 tests)
+- Passed: `python3 -m pytest tests` (36 tests)
 - Passed: `make check`
 - Passed: `git diff HEAD --check`
 
@@ -32,7 +35,7 @@
 ## Publication
 
 - Live commit/push/PR was not executed in this implementation run.
-- Executor state remains `planned`; `scripts/publish_pr.py --dry-run` is available for preflight without mutations.
+- Executor state remains `planned`; `scripts/publish_pr.py --dry-run` is available for read-only preflight without artifact, audit, git, push, or PR mutations.
 
 ## Next Action
 
