@@ -43,7 +43,7 @@
 7. Finalize runtime summary, markdown, tracked publication/verdict/report, and audit log from one final result.
 8. Remove live CLI `--skip-checks`; keep the internal test bypass gated by `AGENT_HARNESS_TEST_MODE=1` and dry-run.
 9. Add regression and end-to-end tests for selected secret scanning, required security blocking, quality draft PR, base branch, resume, idempotency, malformed artifacts/gh JSON, unique run IDs, comment warnings, and unrelated working-tree changes.
-10. Block protected/publication-unsafe branches and allow only `issue/`, `task/`, `agent/`, and `codex/` branch prefixes.
+10. Block protected/publication-unsafe branches and allow only `feat/`, `fix/`, `issue/`, and `tast/` branch prefixes.
 11. Add input fingerprints so completed runs no-op only when selected file content, payload, base branch, policy/profile version, and current HEAD match.
 12. Retry blocked pre-commit runs after conditions are fixed while still requiring current verdict permission for irreversible resume.
 13. Make dry-run create a disposable worktree and execute selected security plus required profile checks before returning.

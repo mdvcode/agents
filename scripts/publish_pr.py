@@ -28,7 +28,7 @@ PUBLICATION_RESULT_START = "<!-- publication-result:start -->"
 PUBLICATION_RESULT_END = "<!-- publication-result:end -->"
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
 DEFAULT_BASE_BRANCH = "main"
-ALLOWED_BRANCH_PREFIXES = ("issue/", "task/", "agent/", "codex/")
+ALLOWED_BRANCH_PREFIXES = ("feat/", "fix/", "issue/", "tast/")
 PROTECTED_BRANCH_NAMES = {"main", "master", "trunk"}
 PROTECTED_BRANCH_PREFIXES = ("release/", "hotfix/", "prod/", "production/")
 FINAL_STATES = {"completed", "blocked", "failed"}
@@ -370,7 +370,7 @@ class Publisher:
         if isinstance(explicit, str) and explicit.strip():
             return sanitize_slug(explicit)
         task_id = sanitize_slug(str(change_set.get("task_id", "task")))
-        return f"issue/{task_id.removeprefix('issue-')}" if task_id.startswith("issue-") else f"task/{task_id}"
+        return f"issue/{task_id.removeprefix('issue-')}" if task_id.startswith("issue-") else f"feat/{task_id}"
 
     def validate_publication_branch(self, branch: str, base_branch: str, publication: PublicationResult) -> None:
         if not branch:

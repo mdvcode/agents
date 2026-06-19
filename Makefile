@@ -1,4 +1,4 @@
-.PHONY: check security validate-artifacts agent-status
+.PHONY: check security validate-artifacts publish-dry-run publish agent-status
 
 check: validate-artifacts security
 	python3 -m json.tool artifacts/risk.json >/dev/null
@@ -20,6 +20,12 @@ security:
 
 validate-artifacts:
 	python3 scripts/validate_artifacts.py
+
+publish-dry-run:
+	python3 scripts/publish_pr.py --dry-run
+
+publish:
+	python3 scripts/publish_pr.py
 
 agent-status:
 	@echo "== git status =="

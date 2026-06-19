@@ -1315,6 +1315,28 @@ def test_protected_main_branch_blocks_before_commit(tmp_path: Path, monkeypatch:
     assert any("protected branch" in error for error in publication.errors)
 
 
+def test_publication_branch_policy_allows_requested_prefixes(tmp_path: Path) -> None:
+    publisher = publish_pr.Publisher()
+    for branch in ("feat/demo", "fix/demo", "issue/943", "tast/demo"):
+        publication = publish_pr.PublicationResult()
+        publisher.validate_publication_branch(branch, "main", publication)
+        assert publication.errors == []
+
+
+def test_publication_branch_policy_rejects_old_prefixes(tmp_path: Path) -> None:
+    publisher = publish_pr.Publisher()
+    for branch in ("task/demo", "agent/demo", "codex/demo"):
+        publication = publish_pr.PublicationResult()
+        publisher.validate_publication_branch(branch, "main", publication)
+        assert any("publication branch must start with one of" in error for error in publication.errors)
+
+
+def test_default_publication_branch_uses_feat_prefix_for_non_issue_task(tmp_path: Path) -> None:
+    publisher = publish_pr.Publisher()
+    branch = publisher.publication_branch(tmp_path, {"task_id": "p2-hardening"}, {})
+    assert branch == "feat/p2-hardening"
+
+
 def test_completed_run_with_new_selected_diff_creates_new_commit_without_second_pr(
     tmp_path: Path, monkeypatch: object
 ) -> None:

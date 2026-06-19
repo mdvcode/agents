@@ -19,7 +19,7 @@
 
 ## Checks
 
-- Passed: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests` (69 tests)
+- Passed: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests` (72 tests)
 - Passed: `make validate-artifacts`
 - Passed: `make security`
 - Passed: `make check`
