@@ -36,6 +36,8 @@ SECRET_PATTERNS = [
     re.compile(r"\bghs_[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\bANTHROPIC_API_KEY\s*=\s*[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"\bOPENAI_API_KEY\s*=\s*[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"(?i)\bDATABASE_URL\s*=\s*['\"]?(?:postgres|mysql|mongodb|redis)://[^'\"\s]+"),
+    re.compile(r"(?i)\bDB_(?:PASSWORD|USER|HOST|NAME)\s*=\s*['\"]?[^'\"\s]{4,}"),
     re.compile(r"(?i)\b(?:password|token|credential|secret)\s*[:=]\s*['\"][^'\"]{8,}['\"]"),
 ]
 PRIVATE_PATH_PATTERN = re.compile(rf"{re.escape(str(Path.home()))}/(?!agents\b)[^\s\"']+")
@@ -85,6 +87,14 @@ def staged_files(repo: Path) -> list[str]:
     if result.returncode != 0:
         return []
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def paths_from_file(paths_file: Path) -> list[str]:
+    return [
+        line.strip()
+        for line in paths_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 def protected_staged_prefixes(profile: str) -> tuple[str, ...]:
@@ -141,6 +151,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo", type=Path, default=ROOT)
     parser.add_argument("--full-repo", action="store_true", help="Scan the full repository instead of staged files.")
     parser.add_argument(
+        "--paths-file",
+        type=Path,
+        default=None,
+        help="Scan newline-separated repository-relative paths instead of staged files.",
+    )
+    parser.add_argument(
         "--profile",
         choices=("agent_workspace", "django", "flowfox"),
         default=None,
@@ -151,7 +167,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    findings = scan(repo=args.repo, profile=args.profile, full_repo=args.full_repo)
+    staged_paths = paths_from_file(args.paths_file) if args.paths_file is not None else None
+    findings = scan(
+        repo=args.repo,
+        profile=args.profile,
+        staged_paths=staged_paths,
+        full_repo=args.full_repo,
+    )
     if findings:
         for finding in findings:
             print(f"security: {finding}")

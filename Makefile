@@ -8,7 +8,7 @@ check: validate-artifacts security
 	python3 -m json.tool artifacts/change_set.json >/dev/null
 	python3 -m json.tool artifacts/publication.json >/dev/null
 	python3 -m json.tool artifacts/publication_payload.json >/dev/null
-	python3 -m pytest tests
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests
 	@if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
 		git diff HEAD --check; \
 	else \

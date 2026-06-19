@@ -5,3 +5,4 @@ __pycache__/
 .env
 .env.*
 .agent-runs/
+.agent-worktrees/

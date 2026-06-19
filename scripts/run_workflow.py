@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import shlex
+import string
 import subprocess
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -33,7 +35,7 @@ class StepResult:
 
     def as_json(self) -> dict[str, Any]:
         return {
-            "time": datetime.now(UTC).isoformat(),
+            "time": datetime.now(timezone.utc).isoformat(),
             "step": self.name,
             "command": self.command,
             "attempt": self.attempt,
@@ -71,7 +73,9 @@ def read_workflows(path: Path | None = None) -> dict[str, Any]:
 
 
 def make_run_dir(workflow_name: str) -> Path:
-    run_id = datetime.now(UTC).strftime(f"%Y%m%dT%H%M%SZ-{workflow_name}")
+    suffix = "".join(random.SystemRandom().choice(string.ascii_lowercase + string.digits) for _ in range(6))
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    run_id = f"{timestamp}-{workflow_name}-{suffix}"
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
@@ -112,7 +116,7 @@ def run_workflow(
     append_trace(
         run_dir,
         {
-            "time": datetime.now(UTC).isoformat(),
+            "time": datetime.now(timezone.utc).isoformat(),
             "event": "workflow_started",
             "workflow": workflow_name,
             "dry_run": dry_run,
@@ -120,7 +124,7 @@ def run_workflow(
         },
     )
     for iteration in range(1, max_iterations + 1):
-        append_trace(run_dir, {"time": datetime.now(UTC).isoformat(), "event": "iteration_started", "iteration": iteration})
+        append_trace(run_dir, {"time": datetime.now(timezone.utc).isoformat(), "event": "iteration_started", "iteration": iteration})
         for step in steps:
             name = str(step.get("name", "step"))
             command = str(step.get("command", ""))
@@ -138,7 +142,7 @@ def run_workflow(
                 append_trace(
                     run_dir,
                     {
-                        "time": datetime.now(UTC).isoformat(),
+                        "time": datetime.now(timezone.utc).isoformat(),
                         "event": "workflow_failed",
                         "step": name,
                         "returncode": returncode,
@@ -146,7 +150,7 @@ def run_workflow(
                 )
                 print(str(run_dir))
                 return returncode
-    append_trace(run_dir, {"time": datetime.now(UTC).isoformat(), "event": "workflow_completed"})
+    append_trace(run_dir, {"time": datetime.now(timezone.utc).isoformat(), "event": "workflow_completed"})
     print(str(run_dir))
     return 0
 

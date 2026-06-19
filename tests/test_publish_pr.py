@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -150,7 +151,7 @@ def test_high_risk_blocks_preflight(tmp_path: Path) -> None:
         skip_checks=True,
     )
     assert result.execution_status == "blocked"
-    assert any("HIGH risk" in error for error in result.errors)
+    assert "Publication is not permitted by the current verdict or policy." in result.errors
 
 
 def test_protected_path_blocks_preflight(tmp_path: Path) -> None:
@@ -217,7 +218,7 @@ def test_verdict_await_approval_blocks_preflight(tmp_path: Path) -> None:
         {"project_profile": "flowfox", "include": ["app/page.tsx"]},
         skip_checks=True,
     )
-    assert "verdict decision must be publish_pr" in result.errors
+    assert "Publication is not permitted by the current verdict or policy." in result.errors
 
 
 def test_expected_remote_mismatch_blocks_preflight(tmp_path: Path) -> None:
@@ -255,26 +256,17 @@ def test_profile_quality_command_failure_drafts_pr(tmp_path: Path) -> None:
     runner.responses[("bun", "test")] = publish_pr.CommandResult(1, "", "tests failed")
     publisher = publish_pr.Publisher(runner=runner)
 
-    result = publisher.preflight(
+    publication = publish_pr.PublicationResult(pr_state="ready")
+    publisher.run_profile_commands(
         tmp_path,
-        base_policy(),
         profiles_payload("bun test"),
-        {
-            "risk_class": "medium",
-            "high_risk_triggers": [],
-            "protected_paths_touched": [],
-            "autonomy_allowed": {"commit": True, "push": True, "open_pr": True, "update_pr": True},
-        },
-        quality_payload("pass"),
-        {"high_risk_triggers": [], "protected_paths_touched": [], **verdict_payload()},
-        {"project_profile": "flowfox"},
-        {"project_profile": "flowfox", "include": ["app/page.tsx"]},
-        skip_checks=False,
+        "flowfox",
+        publication,
+        "quality_commands",
     )
 
-    assert result.execution_status == "running"
-    assert result.pr_state == "draft"
-    assert any("profile quality_commands command failed: bun test" in warning for warning in result.warnings)
+    assert publication.pr_state == "draft"
+    assert any("profile quality_commands command failed: bun test" in warning for warning in publication.warnings)
 
 
 def test_stage_change_set_dry_run_has_no_git_add(tmp_path: Path) -> None:
@@ -339,27 +331,36 @@ def test_git_add_failure_blocks_staging(tmp_path: Path) -> None:
 def test_existing_pr_updates_without_duplicate_create(tmp_path: Path) -> None:
     runner = FakeRunner(
         {
-            ("gh", "pr", "view", "--json", "number,url"): publish_pr.CommandResult(
-                0, json.dumps({"number": 123, "url": "https://github.com/org/repo/pull/123"}), ""
-            ),
-            ("gh", "pr", "view", "--json", "number,url,isDraft"): [
+            ("gh", "pr", "view", "--json", "number,url,isDraft,baseRefName,headRefName"): [
                 publish_pr.CommandResult(
                     0,
                     json.dumps(
-                        {"number": 123, "url": "https://github.com/org/repo/pull/123", "isDraft": True}
+                        {
+                            "number": 123,
+                            "url": "https://github.com/org/repo/pull/123",
+                            "isDraft": True,
+                            "baseRefName": "main",
+                            "headRefName": "issue-943",
+                        }
                     ),
                     "",
                 ),
                 publish_pr.CommandResult(
                     0,
                     json.dumps(
-                        {"number": 123, "url": "https://github.com/org/repo/pull/123", "isDraft": False}
+                        {
+                            "number": 123,
+                            "url": "https://github.com/org/repo/pull/123",
+                            "isDraft": False,
+                            "baseRefName": "main",
+                            "headRefName": "issue-943",
+                        }
                     ),
                     "",
                 ),
             ],
-            ("gh", "pr", "edit", "--title", "Title", "--body", "Body"): publish_pr.CommandResult(0, "", ""),
-            ("gh", "pr", "ready"): publish_pr.CommandResult(0, "", ""),
+            ("gh", "pr", "edit", "123", "--title", "Title", "--body", "Body"): publish_pr.CommandResult(0, "", ""),
+            ("gh", "pr", "ready", "123"): publish_pr.CommandResult(0, "", ""),
         }
     )
     publisher = publish_pr.Publisher(runner=runner)
@@ -369,30 +370,42 @@ def test_existing_pr_updates_without_duplicate_create(tmp_path: Path) -> None:
     assert url.endswith("/123")
     assert state == "ready"
     assert error == ""
-    assert ("gh", "pr", "create", "--title", "Title", "--body", "Body") not in runner.calls
+    assert not any(call[:3] == ("gh", "pr", "create") for call in runner.calls)
 
 
 def test_existing_ready_pr_moves_back_to_draft(tmp_path: Path) -> None:
     runner = FakeRunner(
         {
-            ("gh", "pr", "view", "--json", "number,url,isDraft"): [
+            ("gh", "pr", "view", "--json", "number,url,isDraft,baseRefName,headRefName"): [
                 publish_pr.CommandResult(
                     0,
                     json.dumps(
-                        {"number": 123, "url": "https://github.com/org/repo/pull/123", "isDraft": False}
+                        {
+                            "number": 123,
+                            "url": "https://github.com/org/repo/pull/123",
+                            "isDraft": False,
+                            "baseRefName": "main",
+                            "headRefName": "issue-943",
+                        }
                     ),
                     "",
                 ),
                 publish_pr.CommandResult(
                     0,
                     json.dumps(
-                        {"number": 123, "url": "https://github.com/org/repo/pull/123", "isDraft": True}
+                        {
+                            "number": 123,
+                            "url": "https://github.com/org/repo/pull/123",
+                            "isDraft": True,
+                            "baseRefName": "main",
+                            "headRefName": "issue-943",
+                        }
                     ),
                     "",
                 ),
             ],
-            ("gh", "pr", "edit", "--title", "Title", "--body", "Body"): publish_pr.CommandResult(0, "", ""),
-            ("gh", "pr", "ready", "--undo"): publish_pr.CommandResult(0, "", ""),
+            ("gh", "pr", "edit", "123", "--title", "Title", "--body", "Body"): publish_pr.CommandResult(0, "", ""),
+            ("gh", "pr", "ready", "123", "--undo"): publish_pr.CommandResult(0, "", ""),
         }
     )
     publisher = publish_pr.Publisher(runner=runner)
@@ -419,13 +432,21 @@ def test_push_failure_returns_error(tmp_path: Path) -> None:
 def test_pr_creation_failure_records_error(tmp_path: Path) -> None:
     runner = FakeRunner(
         {
-            ("gh", "pr", "view", "--json", "number,url"): publish_pr.CommandResult(1, "", "not found"),
-            ("gh", "pr", "view", "--json", "number,url,isDraft"): publish_pr.CommandResult(
+            ("gh", "pr", "view", "--json", "number,url,isDraft,baseRefName,headRefName"): publish_pr.CommandResult(
                 1, "", "not found"
             ),
-            ("gh", "pr", "create", "--title", "Title", "--body", "Body", "--draft"): publish_pr.CommandResult(
-                1, "", "api unavailable"
-            ),
+            (
+                "gh",
+                "pr",
+                "create",
+                "--base",
+                "main",
+                "--title",
+                "Title",
+                "--body",
+                "Body",
+                "--draft",
+            ): publish_pr.CommandResult(1, "", "api unavailable"),
         }
     )
     publisher = publish_pr.Publisher(runner=runner)
@@ -611,7 +632,7 @@ def test_missing_target_repository_blocks_without_traceback(tmp_path: Path) -> N
     publisher = publish_pr.Publisher(root=root, runner=base_preflight_runner())
     result = publisher.publish(dry_run=True)
     assert result.execution_status == "blocked"
-    assert "target repository does not exist" in result.errors
+    assert "Target repository does not exist." in result.errors
 
 
 def test_record_publication_updates_report_and_issue_journal(tmp_path: Path) -> None:
@@ -819,6 +840,8 @@ def write_fake_gh(bin_dir: Path, state_file: Path) -> None:
         f"""#!/bin/sh
 set -eu
 STATE="{state_file}"
+LOG="$STATE.log"
+echo "$@" >> "$LOG"
 if [ "$1" = "auth" ]; then
   exit 0
 fi
@@ -830,7 +853,21 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   exit 1
 fi
 if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
-  echo '{{"number":123,"url":"https://github.com/org/repo/pull/123","isDraft":false}}' > "$STATE"
+  DRAFT=false
+  BASE=main
+  for arg in "$@"; do
+    if [ "$arg" = "--draft" ]; then
+      DRAFT=true
+    fi
+  done
+  previous=""
+  for arg in "$@"; do
+    if [ "$previous" = "--base" ]; then
+      BASE="$arg"
+    fi
+    previous="$arg"
+  done
+  echo "{{\\"number\\":123,\\"url\\":\\"https://github.com/org/repo/pull/123\\",\\"isDraft\\":$DRAFT,\\"baseRefName\\":\\"$BASE\\",\\"headRefName\\":\\"issue/943-e2e\\"}}" > "$STATE"
   echo "https://github.com/org/repo/pull/123"
   exit 0
 fi
@@ -838,10 +875,14 @@ if [ "$1" = "pr" ] && [ "$2" = "edit" ]; then
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "ready" ]; then
-  echo '{{"number":123,"url":"https://github.com/org/repo/pull/123","isDraft":false}}' > "$STATE"
+  echo '{{"number":123,"url":"https://github.com/org/repo/pull/123","isDraft":false,"baseRefName":"main","headRefName":"issue/943-e2e"}}' > "$STATE"
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "comment" ]; then
+  if [ -f "$STATE.comment-fail" ]; then
+    echo "comment failed" >&2
+    exit 1
+  fi
   exit 0
 fi
 exit 1
@@ -867,6 +908,7 @@ def test_end_to_end_publication_with_temp_git_repo_and_fake_gh(
     run_git(repo, "commit", "-m", "initial")
     run_git(repo, "checkout", "-b", "issue-943")
     (repo / "allowed.txt").write_text("new\n", encoding="utf-8")
+    (repo / "unrelated.txt").write_text("do not publish\n", encoding="utf-8")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     write_fake_gh(bin_dir, tmp_path / "gh-state.json")
@@ -903,6 +945,338 @@ def test_end_to_end_publication_with_temp_git_repo_and_fake_gh(
             root / "artifacts" / "audit_log.jsonl",
         )
     }
-    assert tracked_before == tracked_after
-    committed_files = run_git(repo, "show", "--name-only", "--format=", "HEAD").stdout.splitlines()
+    assert tracked_before != tracked_after
+    final_publication = json.loads((root / "artifacts" / "publication.json").read_text(encoding="utf-8"))
+    final_verdict = json.loads((root / "artifacts" / "verdict.json").read_text(encoding="utf-8"))
+    runtime_summary = json.loads((Path(publication.run_dir) / "summary.json").read_text(encoding="utf-8"))
+    assert final_publication["execution_status"] == "completed"
+    assert final_publication["commit_sha"] == publication.commit_sha
+    assert final_publication["pr_url"] == publication.pr_url
+    assert final_verdict["execution_status"] == final_publication["execution_status"]
+    assert runtime_summary["execution_status"] == final_publication["execution_status"]
+    assert runtime_summary["warnings"] == final_publication["warnings"]
+    assert runtime_summary["errors"] == final_publication["errors"]
+    committed_files = run_git(repo, "show", "--name-only", "--format=", publication.commit_sha).stdout.splitlines()
     assert committed_files == ["allowed.txt"]
+
+
+def init_publication_repo(tmp_path: Path) -> tuple[Path, Path, Path]:
+    remote = tmp_path / "remote.git"
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True, text=True)
+    repo.mkdir()
+    run_git(repo, "init")
+    run_git(repo, "config", "user.name", "Test User")
+    run_git(repo, "config", "user.email", "test@example.com")
+    run_git(repo, "remote", "add", "origin", str(remote))
+    (repo / "allowed.txt").write_text("old\n", encoding="utf-8")
+    run_git(repo, "add", "allowed.txt")
+    run_git(repo, "commit", "-m", "initial")
+    (repo / "allowed.txt").write_text("new\n", encoding="utf-8")
+    return remote, repo, tmp_path
+
+
+def install_fake_gh(tmp_path: Path, monkeypatch: object) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    state_file = tmp_path / "gh-state.json"
+    write_fake_gh(bin_dir, state_file)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ["PATH"])
+    return state_file
+
+
+def test_selected_unstaged_secret_blocks_before_git_add(tmp_path: Path, monkeypatch: object) -> None:
+    remote, repo, _ = init_publication_repo(tmp_path)
+    (repo / "allowed.txt").write_text("token='ghp_" + ("A" * 24) + "'\n", encoding="utf-8")
+    install_fake_gh(tmp_path, monkeypatch)
+    root = prepare_e2e_root(tmp_path, repo, str(remote))
+    shutil.copy2(Path(__file__).resolve().parents[1] / "scripts" / "security_scan.py", root / "scripts" / "security_scan.py")
+
+    publication = publish_pr.Publisher(root=root).publish(repo_override=repo)
+
+    assert publication.execution_status == "blocked"
+    assert publication.commit_sha == ""
+    assert any("required security scan failed" in error for error in publication.errors)
+
+
+def test_required_security_command_failure_blocks_publication(tmp_path: Path, monkeypatch: object) -> None:
+    remote, repo, _ = init_publication_repo(tmp_path)
+    install_fake_gh(tmp_path, monkeypatch)
+    root = prepare_e2e_root(tmp_path, repo, str(remote))
+    (root / ".agent-project-profiles.yaml").write_text(
+        """
+version: 1
+profiles:
+  agent_workspace:
+    quality_commands:
+      required: []
+    security_commands:
+      required:
+        - "false"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    publication = publish_pr.Publisher(root=root).publish(repo_override=repo)
+
+    assert publication.execution_status == "blocked"
+    assert any("required security command failed: false" in error for error in publication.errors)
+    assert publication.commit_sha == ""
+
+
+def test_quality_command_failure_creates_draft_pr(tmp_path: Path, monkeypatch: object) -> None:
+    remote, repo, _ = init_publication_repo(tmp_path)
+    install_fake_gh(tmp_path, monkeypatch)
+    root = prepare_e2e_root(tmp_path, repo, str(remote))
+    (root / ".agent-project-profiles.yaml").write_text(
+        """
+version: 1
+profiles:
+  agent_workspace:
+    quality_commands:
+      required:
+        - "false"
+    security_commands:
+      required: []
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    publication = publish_pr.Publisher(root=root).publish(repo_override=repo)
+
+    assert publication.execution_status == "completed"
+    assert publication.pr_state == "draft"
+    assert publication.pr_created_or_updated is True
+
+
+def test_base_branch_from_payload_is_passed_to_gh_create(tmp_path: Path) -> None:
+    body_file = tmp_path / "body.md"
+    body_file.write_text("Body", encoding="utf-8")
+    runner = FakeRunner(
+        {
+            ("gh", "pr", "view", "--json", "number,url,isDraft,baseRefName,headRefName"): [
+                publish_pr.CommandResult(1, "", "not found"),
+                publish_pr.CommandResult(
+                    0,
+                    json.dumps(
+                        {
+                            "number": 4,
+                            "url": "https://github.com/org/repo/pull/4",
+                            "isDraft": False,
+                            "baseRefName": "develop",
+                            "headRefName": "issue/4",
+                        }
+                    ),
+                    "",
+                ),
+            ],
+            (
+                "gh",
+                "pr",
+                "create",
+                "--base",
+                "develop",
+                "--title",
+                "Title",
+                "--head",
+                "issue/4",
+                "--body-file",
+                str(body_file),
+            ): publish_pr.CommandResult(0, "https://github.com/org/repo/pull/4\n", ""),
+        }
+    )
+    publisher = publish_pr.Publisher(runner=runner)
+
+    created, _number, _url, state, error = publisher.create_or_update_pr(
+        tmp_path,
+        "Title",
+        "Body",
+        "ready",
+        base_branch="develop",
+        branch="issue/4",
+        body_file=body_file,
+    )
+
+    assert created is True
+    assert state == "ready"
+    assert error == ""
+    assert any(call[:6] == ("gh", "pr", "create", "--base", "develop", "--title") for call in runner.calls)
+
+
+def test_existing_pr_base_branch_is_corrected(tmp_path: Path) -> None:
+    runner = FakeRunner(
+        {
+            ("gh", "pr", "view", "--json", "number,url,isDraft,baseRefName,headRefName"): [
+                publish_pr.CommandResult(
+                    0,
+                    json.dumps(
+                        {
+                            "number": 7,
+                            "url": "https://github.com/org/repo/pull/7",
+                            "isDraft": False,
+                            "baseRefName": "develop",
+                            "headRefName": "issue/7",
+                        }
+                    ),
+                    "",
+                ),
+                publish_pr.CommandResult(
+                    0,
+                    json.dumps(
+                        {
+                            "number": 7,
+                            "url": "https://github.com/org/repo/pull/7",
+                            "isDraft": False,
+                            "baseRefName": "main",
+                            "headRefName": "issue/7",
+                        }
+                    ),
+                    "",
+                ),
+            ],
+            (
+                "gh",
+                "pr",
+                "edit",
+                "7",
+                "--title",
+                "Title",
+                "--body",
+                "Body",
+                "--base",
+                "main",
+            ): publish_pr.CommandResult(0, "", ""),
+        }
+    )
+    publisher = publish_pr.Publisher(runner=runner)
+
+    created, number, url, state, error = publisher.create_or_update_pr(
+        tmp_path,
+        "Title",
+        "Body",
+        "ready",
+        base_branch="main",
+    )
+
+    assert created is True
+    assert number == 7
+    assert url.endswith("/7")
+    assert state == "ready"
+    assert error == ""
+
+
+def test_push_failure_resume_reuses_existing_commit(tmp_path: Path, monkeypatch: object) -> None:
+    remote, repo, _ = init_publication_repo(tmp_path)
+    run_git(repo, "remote", "set-url", "origin", str(tmp_path / "missing.git"))
+    install_fake_gh(tmp_path, monkeypatch)
+    root = prepare_e2e_root(tmp_path, repo, "")
+    publisher = publish_pr.Publisher(root=root)
+
+    first = publisher.publish(repo_override=repo)
+    assert first.execution_status == "failed"
+    assert first.commit_sha
+    assert first.push_completed is False
+
+    run_git(repo, "remote", "set-url", "origin", str(remote))
+    second = publish_pr.Publisher(root=root).publish(repo_override=repo)
+
+    assert second.execution_status == "completed"
+    assert second.commit_sha == first.commit_sha
+    assert second.push_completed is True
+
+
+def test_push_success_pr_failure_resume_creates_pr_without_new_commit(tmp_path: Path, monkeypatch: object) -> None:
+    remote, repo, _ = init_publication_repo(tmp_path)
+    state_file = install_fake_gh(tmp_path, monkeypatch)
+    root = prepare_e2e_root(tmp_path, repo, str(remote))
+    gh_path = tmp_path / "bin" / "gh"
+    gh_path.write_text(
+        gh_path.read_text(encoding="utf-8").replace(
+            'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then',
+            'if [ "$1" = "pr" ] && [ "$2" = "create" ] && [ ! -f "' + str(state_file) + '.allow-create" ]; then\n  echo "api unavailable" >&2\n  exit 1\nfi\nif [ "$1" = "pr" ] && [ "$2" = "create" ]; then',
+        ),
+        encoding="utf-8",
+    )
+    first = publish_pr.Publisher(root=root).publish(repo_override=repo)
+    assert first.execution_status == "failed"
+    assert first.push_completed is True
+    assert first.commit_sha
+
+    Path(str(state_file) + ".allow-create").write_text("1", encoding="utf-8")
+    second = publish_pr.Publisher(root=root).publish(repo_override=repo)
+
+    assert second.execution_status == "completed"
+    assert second.commit_sha == first.commit_sha
+    assert second.pr_created_or_updated is True
+
+
+def test_second_completed_run_is_noop(tmp_path: Path, monkeypatch: object) -> None:
+    remote, repo, _ = init_publication_repo(tmp_path)
+    state_file = install_fake_gh(tmp_path, monkeypatch)
+    root = prepare_e2e_root(tmp_path, repo, str(remote))
+    first = publish_pr.Publisher(root=root).publish(repo_override=repo)
+    assert first.execution_status == "completed"
+    log_before = Path(str(state_file) + ".log").read_text(encoding="utf-8")
+
+    second = publish_pr.Publisher(root=root).publish(repo_override=repo)
+    log_after = Path(str(state_file) + ".log").read_text(encoding="utf-8")
+
+    assert second.execution_status == "completed"
+    assert second.commit_sha == first.commit_sha
+    assert "publication already completed; no-op" in second.warnings
+    assert log_after == log_before
+
+
+def test_invalid_risk_json_returns_structured_blocked_result(tmp_path: Path) -> None:
+    root, repo = prepare_publish_root(tmp_path)
+    (root / "artifacts" / "risk.json").write_text("{invalid", encoding="utf-8")
+
+    publication = publish_pr.Publisher(root=root, runner=base_preflight_runner()).publish(repo_override=repo)
+
+    assert publication.execution_status == "blocked"
+    assert any("Malformed JSON artifact" in error for error in publication.errors)
+
+
+def test_malformed_gh_json_returns_structured_failure(tmp_path: Path) -> None:
+    runner = FakeRunner(
+        {
+            ("gh", "pr", "view", "--json", "number,url,isDraft,baseRefName,headRefName"): publish_pr.CommandResult(
+                0, "{", ""
+            )
+        }
+    )
+    publisher = publish_pr.Publisher(runner=runner)
+
+    created, _number, _url, state, error = publisher.create_or_update_pr(tmp_path, "Title", "Body", "ready")
+
+    assert created is False
+    assert state == "not_created"
+    assert "malformed gh JSON" in error
+
+
+def test_two_run_ids_created_in_one_second_are_unique() -> None:
+    first = publish_pr.make_run_id("issue-943")
+    second = publish_pr.make_run_id("issue-943")
+
+    assert first != second
+    assert "issue-943" in first
+    assert "." in first.split("Z", 1)[0]
+
+
+def test_pr_comment_failure_warning_is_in_all_runtime_artifacts(tmp_path: Path, monkeypatch: object) -> None:
+    remote, repo, _ = init_publication_repo(tmp_path)
+    state_file = install_fake_gh(tmp_path, monkeypatch)
+    Path(str(state_file) + ".comment-fail").write_text("1", encoding="utf-8")
+    root = prepare_e2e_root(tmp_path, repo, str(remote))
+
+    publication = publish_pr.Publisher(root=root).publish(repo_override=repo)
+
+    assert publication.execution_status == "completed"
+    assert publication.pr_comment_posted is False
+    assert any("PR publication comment failed" in warning for warning in publication.warnings)
+    runtime = json.loads((Path(publication.run_dir) / "publication.json").read_text(encoding="utf-8"))
+    summary = json.loads((Path(publication.run_dir) / "summary.json").read_text(encoding="utf-8"))
+    tracked = json.loads((root / "artifacts" / "publication.json").read_text(encoding="utf-8"))
+    assert runtime["warnings"] == publication.warnings
+    assert summary["warnings"] == publication.warnings
+    assert tracked["warnings"] == publication.warnings

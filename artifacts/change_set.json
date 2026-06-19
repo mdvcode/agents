@@ -1,11 +1,10 @@
 {
   "target_repository": ".",
   "project_profile": "agent_workspace",
-  "task_id": "p2-autonomous-publication-executor",
+  "task_id": "p2-2-safe-resumable-idempotent-publication",
   "expected_remote": "git@github.com-mdvcode:mdvcode/agents.git",
   "include": [
     ".gitignore",
-    ".agent-workflows.yaml",
     "Makefile",
     "artifacts/audit_log.jsonl",
     "artifacts/change_set.json",
@@ -17,17 +16,11 @@
     "artifacts/review.md",
     "artifacts/risk.json",
     "artifacts/security.md",
-    "schemas/change_set.schema.json",
     "schemas/publication.schema.json",
-    "schemas/publication_payload.schema.json",
     "scripts/publish_pr.py",
     "scripts/run_workflow.py",
     "scripts/security_scan.py",
-    "scripts/validate_artifacts.py",
-    "tests/test_publish_pr.py",
-    "tests/test_run_workflow.py",
-    "tests/test_security_scan.py",
-    "tests/test_validate_artifacts.py"
+    "tests/test_publish_pr.py"
   ],
   "exclude": [
     ".env",
