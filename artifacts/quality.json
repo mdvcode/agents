@@ -1,5 +1,5 @@
 {
-  "task": "P2.2 safe, resumable, idempotent publication.",
+  "task": "P2.4 trusted registry and P3 executable workflow foundation.",
   "project_profile": "agent_workspace",
   "overall_status": "pass",
   "checks": [
@@ -7,7 +7,7 @@
       "name": "pytest",
       "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests",
       "status": "pass",
-      "notes": "72 tests passed, including publication worktree, selected security scan, branch/base protection, requested branch prefix policy, dry-run scan, fingerprint idempotency, resume gates, malformed artifact/gh JSON, and workflow run ID coverage."
+      "notes": "78 tests passed, including trusted registry validation, changed-file CI security scanning, policy-sourced branch prefixes, publication worktree, change-set completeness, selected security scan, branch/base protection, dry-run scan, fingerprint idempotency, resume gates, malformed artifact/gh JSON, run-scoped workflow artifacts, and workflow run ID coverage."
     },
     {
       "name": "validate-artifacts",
@@ -36,6 +36,8 @@
   ],
   "commands_attempted": [
     "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_security_scan.py tests/test_validate_artifacts.py tests/test_agent_role_runner.py tests/test_run_workflow.py",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_publish_pr.py",
     "make validate-artifacts",
     "make security",
     "make check",

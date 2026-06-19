@@ -97,6 +97,19 @@ def paths_from_file(paths_file: Path) -> list[str]:
     ]
 
 
+def changed_files_between_refs(repo: Path, base_ref: str, head_ref: str) -> list[str]:
+    result = subprocess.run(
+        ["git", "diff", "--name-only", f"{base_ref}...{head_ref}"],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
 def protected_staged_prefixes(profile: str) -> tuple[str, ...]:
     if profile == "agent_workspace":
         return ()
@@ -156,6 +169,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Scan newline-separated repository-relative paths instead of staged files.",
     )
+    parser.add_argument("--base-ref", default="", help="Base git ref for changed-file scanning.")
+    parser.add_argument("--head-ref", default="", help="Head git ref for changed-file scanning.")
     parser.add_argument(
         "--profile",
         choices=("agent_workspace", "django", "flowfox"),
@@ -168,6 +183,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     staged_paths = paths_from_file(args.paths_file) if args.paths_file is not None else None
+    if staged_paths is None and args.base_ref and args.head_ref:
+        staged_paths = changed_files_between_refs(args.repo, args.base_ref, args.head_ref)
     findings = scan(
         repo=args.repo,
         profile=args.profile,

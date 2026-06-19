@@ -8,7 +8,7 @@ Turn a GitHub issue into a traceable local work unit.
 2. Identify the target project. If unknown, ask the user before proceeding.
 3. Read `docs/projects/<project>/privacy.md`.
 4. Fetch or read the GitHub issue.
-5. Create or identify branch `codex/issue-<number>-<short-name>`.
+5. Create or identify branch `issue/<number>-<short-name>`.
 6. Copy `docs/issues/_template.md` to `docs/projects/<project>/issues/issue-<number>.md` if it does not exist.
 7. Fill links, status, risk, goal, scope, and first timeline entry.
 8. Add or update a concise kanban card in `docs/kanban/tasks.md`.

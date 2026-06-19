@@ -113,6 +113,8 @@ def run_workflow(
     max_retries = int(retry.get("max_retries", 0)) if isinstance(retry, dict) else 0
     backoff_seconds = float(retry.get("backoff_seconds", 0)) if isinstance(retry, dict) else 0.0
     steps = workflow_steps(workflow)
+    artifacts_dir = run_dir / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
     append_trace(
         run_dir,
         {
@@ -128,7 +130,12 @@ def run_workflow(
         for step in steps:
             name = str(step.get("name", "step"))
             command = str(step.get("command", ""))
-            if dry_run and command.startswith("python3 scripts/publish_pr.py") and "--dry-run" not in command:
+            command = command.replace("{run_dir}", str(run_dir)).replace("{artifacts_dir}", str(artifacts_dir))
+            if (
+                dry_run
+                and command.startswith(("python3 scripts/publish_pr.py", "python3 scripts/agent_role_runner.py"))
+                and "--dry-run" not in command
+            ):
                 command = command + " --dry-run"
             for attempt in range(1, max_retries + 2):
                 returncode, stdout, stderr = run_command(command, root, timeout_seconds)

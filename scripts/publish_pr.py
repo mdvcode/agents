@@ -14,12 +14,19 @@ import shlex
 import shutil
 import string
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
 import yaml
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from repository_registry import RepositoryRecord, find_by_remote
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,7 +35,6 @@ PUBLICATION_RESULT_START = "<!-- publication-result:start -->"
 PUBLICATION_RESULT_END = "<!-- publication-result:end -->"
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
 DEFAULT_BASE_BRANCH = "main"
-ALLOWED_BRANCH_PREFIXES = ("feat/", "fix/", "issue/", "tast/")
 PROTECTED_BRANCH_NAMES = {"main", "master", "trunk"}
 PROTECTED_BRANCH_PREFIXES = ("release/", "hotfix/", "prod/", "production/")
 FINAL_STATES = {"completed", "blocked", "failed"}
@@ -267,6 +273,14 @@ def forbidden_public_output_blockers(
     return [f"public output contains forbidden phrase: {phrase}" for phrase in phrases if phrase in public_text]
 
 
+def allowed_branch_prefixes(policy: dict[str, Any]) -> list[str]:
+    publication = policy.get("projects", {}).get("flowfox", {}).get("publication", {})
+    prefixes = publication.get("allowed_branch_prefixes") if isinstance(publication, dict) else None
+    if not isinstance(prefixes, list):
+        return []
+    return [prefix for prefix in prefixes if isinstance(prefix, str) and prefix]
+
+
 def parse_pr_view_state(output: str) -> tuple[int, str, str, str, str]:
     data = json.loads(output)
     state = "draft" if data.get("isDraft") is True else "ready"
@@ -291,10 +305,17 @@ def replace_marked_section(text: str, section: str) -> str:
 
 
 class Publisher:
-    def __init__(self, root: Path = ROOT, runner: CommandRunner | None = None) -> None:
+    def __init__(
+        self,
+        root: Path = ROOT,
+        runner: CommandRunner | None = None,
+        artifacts_dir: Path | None = None,
+        run_id: str = "",
+    ) -> None:
         self.root = root.resolve()
-        self.artifacts = self.root / "artifacts"
+        self.artifacts = (artifacts_dir or self.root / "artifacts").resolve()
         self.policy_path = self.root / ".agent-policy.yaml"
+        self.repository_registry_path = self.root / ".agent-repositories.yaml"
         self.project_profiles_path = self.root / ".agent-project-profiles.yaml"
         self.publication_path = self.artifacts / "publication.json"
         self.publication_payload_path = self.artifacts / "publication_payload.json"
@@ -303,9 +324,42 @@ class Publisher:
         self.runs_dir = self.root / ".agent-runs"
         self.worktrees_dir = self.root / ".agent-worktrees"
         self.runner = runner or CommandRunner()
+        self.forced_run_id = run_id
 
     def run_command(self, args: Sequence[str], cwd: Path | None = None) -> CommandResult:
         return self.runner.run(args, cwd or self.root)
+
+    def trusted_repository_record(
+        self,
+        target_repo: Path,
+        publication: PublicationResult,
+    ) -> RepositoryRecord | None:
+        if not self.repository_registry_path.exists():
+            return None
+        remote = self.run_command(["git", "remote", "get-url", "origin"], cwd=target_repo)
+        if command_failed(remote):
+            publication.errors.append(f"cannot read origin remote: {command_output(remote)}")
+            return None
+        try:
+            record = find_by_remote(remote.stdout.strip(), self.repository_registry_path)
+        except ValueError as exc:
+            publication.errors.append(str(exc))
+            return None
+        if record is None:
+            publication.errors.append("target repository remote is not trusted by .agent-repositories.yaml")
+        return record
+
+    def policy_with_registry_record(
+        self,
+        policy: dict[str, Any],
+        record: RepositoryRecord | None,
+    ) -> dict[str, Any]:
+        if record is None:
+            return policy
+        effective = json.loads(json.dumps(policy))
+        publication = effective.setdefault("projects", {}).setdefault("flowfox", {}).setdefault("publication", {})
+        publication["allowed_branch_prefixes"] = list(record.allowed_branch_prefixes)
+        return effective
 
     def structured_blocked(self, message: str, dry_run: bool = False) -> PublicationResult:
         return PublicationResult(execution_status="blocked", dry_run=dry_run, errors=[message])
@@ -372,16 +426,25 @@ class Publisher:
         task_id = sanitize_slug(str(change_set.get("task_id", "task")))
         return f"issue/{task_id.removeprefix('issue-')}" if task_id.startswith("issue-") else f"feat/{task_id}"
 
-    def validate_publication_branch(self, branch: str, base_branch: str, publication: PublicationResult) -> None:
+    def validate_publication_branch(
+        self,
+        branch: str,
+        base_branch: str,
+        publication: PublicationResult,
+        allowed_prefixes: Sequence[str],
+    ) -> None:
         if not branch:
             publication.errors.append("publication branch is missing")
+            return
+        if not allowed_prefixes:
+            publication.errors.append("policy missing publication.allowed_branch_prefixes")
             return
         if branch == base_branch or branch in PROTECTED_BRANCH_NAMES:
             publication.errors.append(f"protected branch {branch!r} blocks publication")
         if branch.startswith(PROTECTED_BRANCH_PREFIXES):
             publication.errors.append(f"protected branch prefix blocks publication: {branch}")
-        if not branch.startswith(ALLOWED_BRANCH_PREFIXES):
-            allowed = ", ".join(ALLOWED_BRANCH_PREFIXES)
+        if not branch.startswith(tuple(allowed_prefixes)):
+            allowed = ", ".join(allowed_prefixes)
             publication.errors.append(f"publication branch must start with one of: {allowed}")
 
     def ensure_base_branch(self, target_repo: Path, base_branch: str, publication: PublicationResult) -> None:
@@ -484,6 +547,36 @@ class Publisher:
         status = self.run_command(["git", "status", "--porcelain", "--", path], cwd=target_repo)
         return bool(status.stdout.strip()) if not command_failed(status) else False
 
+    def changed_paths(self, target_repo: Path) -> set[str]:
+        diff = self.run_command(["git", "diff", "--name-only", "HEAD"], cwd=target_repo)
+        changed = {line.strip() for line in diff.stdout.splitlines() if line.strip()} if not command_failed(diff) else set()
+        untracked = self.run_command(["git", "ls-files", "--others", "--exclude-standard"], cwd=target_repo)
+        if not command_failed(untracked):
+            changed.update(line.strip() for line in untracked.stdout.splitlines() if line.strip())
+        return changed
+
+    def validate_change_set_completeness(
+        self,
+        target_repo: Path,
+        change_set: dict[str, Any],
+        risk: dict[str, Any],
+        publication: PublicationResult,
+    ) -> None:
+        include = {path for path in change_set.get("include", []) if isinstance(path, str)}
+        exclude = [path for path in change_set.get("exclude", []) if isinstance(path, str)]
+        changed = {path for path in self.changed_paths(target_repo) if not matches_any(path, exclude)}
+        missing_from_change_set = sorted(changed - include)
+        if missing_from_change_set:
+            publication.errors.append(
+                "changed files missing from change_set.include: " + ", ".join(missing_from_change_set)
+            )
+        risk_areas = {path for path in risk.get("changed_areas", []) if isinstance(path, str)}
+        missing_from_risk = sorted(include - risk_areas) if risk_areas else []
+        if missing_from_risk:
+            publication.errors.append(
+                "change_set.include files missing from risk.changed_areas: " + ", ".join(missing_from_risk)
+            )
+
     def staged_files(self, target_repo: Path) -> set[str]:
         result = self.run_command(["git", "diff", "--cached", "--name-only"], cwd=target_repo)
         if command_failed(result):
@@ -576,7 +669,7 @@ class Publisher:
         for protected_path in protected_path_blockers(change_set, policy, profile):
             result.errors.append(f"protected path in change set: {protected_path}")
         if branch:
-            self.validate_publication_branch(branch, base_branch, result)
+            self.validate_publication_branch(branch, base_branch, result, allowed_branch_prefixes(policy))
 
         if not skip_checks:
             validation = self.run_command(["python3", "scripts/validate_artifacts.py"], cwd=self.root)
@@ -858,7 +951,7 @@ class Publisher:
         if not publication.task_id:
             publication.task_id = str(change_set.get("task_id", ""))
         if not publication.run_id:
-            publication.run_id = make_run_id(publication.task_id or "task")
+            publication.run_id = self.forced_run_id or make_run_id(publication.task_id or "task")
         run_dir = self.runs_dir / publication.run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         publication.run_dir = str(run_dir.resolve())
@@ -1043,9 +1136,29 @@ class Publisher:
                 self.ensure_runtime_state(publication, change_set, target_repo)
                 self.finalize(target_repo, publication, str(project_profile.get("project_profile", "")), post_comment=False)
                 return publication
+            registry_record = self.trusted_repository_record(target_repo, publication)
+            if publication.errors:
+                publication.execution_status = "blocked"
+                self.ensure_runtime_state(publication, change_set, target_repo)
+                self.finalize(target_repo, publication, str(project_profile.get("project_profile", "")), post_comment=False)
+                return publication
+            if registry_record is not None:
+                registry_profile = registry_record.project_profile
+                artifact_profile = str(project_profile.get("project_profile", ""))
+                if registry_profile != artifact_profile:
+                    publication.errors.append("project profile does not match trusted repository registry")
+                    publication.execution_status = "blocked"
+                    self.ensure_runtime_state(publication, change_set, target_repo)
+                    self.finalize(target_repo, publication, artifact_profile, post_comment=False)
+                    return publication
+                policy = self.policy_with_registry_record(policy, registry_record)
             payload = self.load_publication_payload()
             publication.branch = self.publication_branch(target_repo, change_set, payload)
-            publication.base_branch = str(payload.get("base_branch", publication.base_branch) or DEFAULT_BASE_BRANCH)
+            publication.base_branch = (
+                registry_record.base_branch
+                if registry_record is not None
+                else str(payload.get("base_branch", publication.base_branch) or DEFAULT_BASE_BRANCH)
+            )
             profile_name = str(project_profile.get("project_profile", ""))
             publication.input_fingerprint = self.input_fingerprint(
                 target_repo,
@@ -1121,6 +1234,7 @@ class Publisher:
                 else []
             )
             selected = self.selected_change_set_paths(target_repo, change_set, publication, require_pending_change=not publication.commit_sha)
+            self.validate_change_set_completeness(target_repo, change_set, risk, publication)
             if publication.errors:
                 publication.execution_status = "blocked"
                 self.finalize(target_repo, publication, profile_name, post_comment=False)
@@ -1265,12 +1379,17 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="Validate and plan without mutations.")
     parser.add_argument("--repo", type=Path, default=None, help="Override target repository path.")
+    parser.add_argument("--artifacts-dir", type=Path, default=None, help="Read and write task artifacts from this directory.")
+    parser.add_argument("--run-id", default="", help="Use an existing or caller-provided run id.")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    publication = Publisher().publish(dry_run=args.dry_run, repo_override=args.repo)
+    publication = Publisher(artifacts_dir=args.artifacts_dir, run_id=args.run_id).publish(
+        dry_run=args.dry_run,
+        repo_override=args.repo,
+    )
     print(json.dumps(publication.as_json(), indent=2, ensure_ascii=False))
     if publication.errors:
         return 1

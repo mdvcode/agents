@@ -6,12 +6,12 @@ This top-level directory only stores the shared template and rules. Real issue j
 
 ## Naming
 - Journal file: `docs/projects/<project>/issues/issue-<number>.md`
-- Branch name: `codex/issue-<number>-<short-name>`
+- Branch name: `issue/<number>-<short-name>`
 - Kanban card: one short card in `docs/kanban/tasks.md`
 
 Example:
 - GitHub issue: `#123`
-- Branch: `codex/issue-123-fix-contact-export`
+- Branch: `issue/123-fix-contact-export`
 - Project: `contact-api`
 - Journal: `docs/projects/contact-api/issues/issue-123.md`
 

@@ -4,10 +4,17 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from repository_registry import validate_registry_data
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +23,7 @@ SCHEMAS = ROOT / "schemas"
 POLICY = ROOT / ".agent-policy.yaml"
 PROJECT_PROFILES = ROOT / ".agent-project-profiles.yaml"
 AGENT_WORKFLOWS = ROOT / ".agent-workflows.yaml"
+AGENT_REPOSITORIES = ROOT / ".agent-repositories.yaml"
 DEPRECATED_COMBINED_PUBLICATION_KEY = "commit" + "_push"
 JSON_ARTIFACTS = {
     "risk": (ARTIFACTS / "risk.json", SCHEMAS / "risk.schema.json"),
@@ -230,6 +238,12 @@ def validate_policy_data(policy: Any, label: str = ".agent-policy.yaml") -> list
     if not isinstance(publication, dict):
         errors.append(f"{label}: projects.flowfox.publication must be an object")
     else:
+        allowed_prefixes = publication.get("allowed_branch_prefixes")
+        expected_prefixes = ["feat/", "fix/", "issue/", "tast/"]
+        if allowed_prefixes != expected_prefixes:
+            errors.append(
+                f"{label}: projects.flowfox.publication.allowed_branch_prefixes must be {expected_prefixes!r}"
+            )
         for risk_class in ("low", "medium", "high"):
             rules = publication.get(risk_class)
             if not isinstance(rules, dict):
@@ -510,6 +524,10 @@ def main() -> int:
     errors.extend(workflow_errors)
     if workflows_doc is not None:
         errors.extend(validate_agent_workflows_data(workflows_doc))
+    repositories_doc, repository_errors = load_yaml(AGENT_REPOSITORIES, ".agent-repositories.yaml")
+    errors.extend(repository_errors)
+    if repositories_doc is not None:
+        errors.extend(validate_registry_data(repositories_doc))
 
     risk = loaded_artifacts.get("risk")
     verdict = loaded_artifacts.get("verdict")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
 
 
@@ -62,3 +63,23 @@ def test_env_example_is_allowed(tmp_path: Path) -> None:
     findings = security_scan.scan(repo=tmp_path, profile="agent_workspace", full_repo=True)
 
     assert findings == []
+
+
+def test_changed_files_between_refs_scans_ci_diff(tmp_path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    (tmp_path / "safe.txt").write_text("safe\n", encoding="utf-8")
+    subprocess.run(["git", "add", "safe.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True).stdout.strip()
+    token = "ghp_" + ("A" * 24)
+    (tmp_path / "safe.txt").write_text("token='" + token + "'\n", encoding="utf-8")
+    subprocess.run(["git", "add", "safe.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "secret"], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    changed = security_scan.changed_files_between_refs(tmp_path, base, "HEAD")
+    findings = security_scan.scan(repo=tmp_path, profile="agent_workspace", staged_paths=changed)
+
+    assert changed == ["safe.txt"]
+    assert any("possible secret in safe.txt" in finding for finding in findings)

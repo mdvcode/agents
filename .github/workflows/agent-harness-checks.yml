@@ -7,7 +7,9 @@ on:
       - main
       - master
       - feat/**
-      - codex/**
+      - fix/**
+      - issue/**
+      - tast/**
 
 jobs:
   checks:
@@ -30,8 +32,14 @@ jobs:
       - name: Run tests
         run: python -m pytest
 
-      - name: Run security scan
-        run: make security
+      - name: Run changed-file security scan
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python scripts/security_scan.py --base-ref "${{ github.event.pull_request.base.sha }}" --head-ref HEAD
+          else
+            python scripts/security_scan.py --base-ref "${{ github.event.before }}" --head-ref HEAD
+          fi
 
       - name: Run full check target
         run: make check

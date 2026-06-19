@@ -10,7 +10,7 @@
 - Added onboarding docs so any agent can enter the repo in the same order.
 - Added a docs index and a git/logs/artifacts policy.
 - Added three kanban boards:
-  - task/process execution;
+  - task and process execution;
   - tests and fixes;
   - features.
 - Added a durable per-issue journal convention so every GitHub issue can keep its own timeline while `artifacts/` remains current-task scratch space.

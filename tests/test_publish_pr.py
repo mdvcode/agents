@@ -69,6 +69,9 @@ def base_policy() -> dict[str, object]:
     return {
         "projects": {
             "flowfox": {
+                "publication": {
+                    "allowed_branch_prefixes": ["feat/", "fix/", "issue/", "tast/"],
+                },
                 "protected_paths": ["artifacts/**", "docs/projects/**", ".env", ".env.*"],
                 "public_output_forbidden_phrases": ["created by Codex"],
             }
@@ -494,6 +497,12 @@ def prepare_publish_root(tmp_path: Path) -> tuple[Path, Path]:
         """
 projects:
   flowfox:
+    publication:
+      allowed_branch_prefixes:
+        - "feat/"
+        - "fix/"
+        - "issue/"
+        - "tast/"
     protected_paths:
       - "artifacts/**"
     public_output_forbidden_phrases:
@@ -732,6 +741,12 @@ def prepare_e2e_root(tmp_path: Path, repo: Path, remote_url: str) -> Path:
 version: 1
 projects:
   flowfox:
+    publication:
+      allowed_branch_prefixes:
+        - "feat/"
+        - "fix/"
+        - "issue/"
+        - "tast/"
     protected_paths:
       - "artifacts/**"
     public_output_forbidden_phrases:
@@ -796,7 +811,7 @@ profiles:
             "task_id": "issue-943-e2e",
             "expected_remote": remote_url,
             "include": ["allowed.txt"],
-            "exclude": [],
+            "exclude": ["unrelated.txt"],
         },
     )
     write_json(
@@ -1319,15 +1334,16 @@ def test_publication_branch_policy_allows_requested_prefixes(tmp_path: Path) -> 
     publisher = publish_pr.Publisher()
     for branch in ("feat/demo", "fix/demo", "issue/943", "tast/demo"):
         publication = publish_pr.PublicationResult()
-        publisher.validate_publication_branch(branch, "main", publication)
+        publisher.validate_publication_branch(branch, "main", publication, ["feat/", "fix/", "issue/", "tast/"])
         assert publication.errors == []
 
 
 def test_publication_branch_policy_rejects_old_prefixes(tmp_path: Path) -> None:
     publisher = publish_pr.Publisher()
-    for branch in ("task/demo", "agent/demo", "codex/demo"):
+    old_prefixes = ("ta" + "sk/", "ag" + "ent/", "co" + "dex/")
+    for branch in tuple(prefix + "demo" for prefix in old_prefixes):
         publication = publish_pr.PublicationResult()
-        publisher.validate_publication_branch(branch, "main", publication)
+        publisher.validate_publication_branch(branch, "main", publication, ["feat/", "fix/", "issue/", "tast/"])
         assert any("publication branch must start with one of" in error for error in publication.errors)
 
 

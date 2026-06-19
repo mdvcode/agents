@@ -42,6 +42,11 @@ risk_classes:
 projects:
   flowfox:
     publication:
+      allowed_branch_prefixes:
+        - "feat/"
+        - "fix/"
+        - "issue/"
+        - "tast/"
       low:
         commit: true
         push: true

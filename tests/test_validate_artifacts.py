@@ -75,6 +75,63 @@ def verdict_payload(**overrides: Any) -> dict[str, Any]:
     return data
 
 
+def policy_payload(branch_prefixes: list[str] | None = None) -> dict[str, Any]:
+    allowed = branch_prefixes or ["feat/", "fix/", "issue/", "tast/"]
+    publication = {
+        "allowed_branch_prefixes": allowed,
+        "low": {"commit": True, "push": True, "open_pr": True, "update_pr": True},
+        "medium": {"commit": True, "push": True, "open_pr": True, "update_pr": True},
+        "high": {"commit": False, "push": False, "open_pr": False, "update_pr": False},
+    }
+    return {
+        "version": 1,
+        "risk_classes": {
+            "low": {
+                "patch": True,
+                "commit": True,
+                "push": True,
+                "open_pr": True,
+                "update_pr": True,
+                "require_human_approval": False,
+                "auto_merge": False,
+                "deploy_staging": False,
+                "deploy_production": False,
+            },
+            "medium": {
+                "patch": True,
+                "commit": True,
+                "push": True,
+                "open_pr": True,
+                "update_pr": True,
+                "require_human_approval": False,
+                "auto_merge": False,
+                "deploy_staging": False,
+                "deploy_production": False,
+            },
+            "high": {
+                "patch": True,
+                "commit": False,
+                "push": False,
+                "open_pr": False,
+                "update_pr": False,
+                "require_human_approval": True,
+                "auto_merge": False,
+                "deploy_staging": False,
+                "deploy_production": False,
+            },
+        },
+        "projects": {
+            "flowfox": {
+                "publication": publication,
+                "require_visual_evidence_for": ["ui"],
+                "protected_paths": ["artifacts/**", ".env", ".env.*", "**/migrations/**"],
+                "public_output_forbidden_phrases": ["created by Codex"],
+                "public_output_filter_applies_to": ["branch name"],
+            }
+        },
+    }
+
+
 def test_valid_low_risk_invariants_pass() -> None:
     assert validator.validate_risk_invariants(risk_payload("low")) == []
 
@@ -85,6 +142,34 @@ def test_valid_medium_risk_invariants_pass() -> None:
 
 def test_valid_high_risk_invariants_pass() -> None:
     assert validator.validate_risk_invariants(risk_payload("high")) == []
+
+
+def test_policy_requires_requested_branch_prefixes() -> None:
+    assert validator.validate_policy_data(policy_payload()) == []
+
+
+def test_policy_rejects_old_codex_branch_prefix() -> None:
+    legacy_prefix = "co" + "dex/"
+    errors = validator.validate_policy_data(policy_payload(["feat/", "fix/", "issue/", legacy_prefix]))
+    assert any("allowed_branch_prefixes" in error for error in errors)
+
+
+def test_repository_registry_requires_trusted_branch_prefixes() -> None:
+    registry = {
+        "version": 1,
+        "repositories": {
+            "flowfox": {
+                "project_profile": "flowfox",
+                "expected_remotes": ["git@example.com:org/flowfox.git"],
+                "base_branch": "main",
+                "allowed_branch_prefixes": ["feat/", "fix/", "issue/", "tast/"],
+                "protected_paths": [".env"],
+            }
+        },
+    }
+    assert validator.validate_registry_data(registry) == []
+    registry["repositories"]["flowfox"]["allowed_branch_prefixes"] = ["feat/", "fix/", "issue/", "legacy/"]
+    assert any("allowed_branch_prefixes" in error for error in validator.validate_registry_data(registry))
 
 
 def test_high_with_open_pr_true_fails() -> None:

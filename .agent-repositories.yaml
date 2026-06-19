@@ -1,0 +1,43 @@
+version: 1
+repositories:
+  agent_workspace:
+    project_profile: agent_workspace
+    expected_remotes:
+      - "git@github.com-mdvcode:mdvcode/agents.git"
+    base_branch: main
+    allowed_branch_prefixes:
+      - "feat/"
+      - "fix/"
+      - "issue/"
+      - "tast/"
+    protected_paths:
+      - ".env"
+      - ".env.*"
+      - "**/*.pem"
+      - "**/*.key"
+      - "**/*secret*"
+      - "**/*token*"
+  flowfox:
+    project_profile: flowfox
+    expected_remotes:
+      - "git@github.com:ORG/flowfox.git"
+    base_branch: main
+    allowed_branch_prefixes:
+      - "feat/"
+      - "fix/"
+      - "issue/"
+      - "tast/"
+    protected_paths:
+      - ".agents/**"
+      - "artifacts/**"
+      - "docs/projects/*/issues/**"
+      - "docs/projects/*/memory/**"
+      - "docs/projects/*/wiki/**"
+      - "docs/projects/*/graph/**"
+      - "external/agents/**"
+      - ".env"
+      - ".env.*"
+      - "**/*.pem"
+      - "**/*.key"
+      - "**/*secret*"
+      - "**/*token*"

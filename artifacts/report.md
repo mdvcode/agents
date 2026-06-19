@@ -2,24 +2,24 @@
 
 ## Summary
 
-- Added `--paths-file` to `scripts/security_scan.py` so selected change-set files are scanned before staging.
-- Reworked `scripts/publish_pr.py` around isolated task worktrees under `.agent-worktrees/` and runtime state under `.agent-runs/<run-id>/publication.json`.
-- Added resume behavior for commit-created/push-failed and push-created/PR-failed runs; completed runs return no-op instead of creating duplicate commits or PRs.
-- Used `base_branch` from `artifacts/publication_payload.json` for PR create/update.
-- Separated required security failures from quality failures: required security blocks publication, while quality failures keep publication as draft.
-- Removed live CLI `--skip-checks`; the internal bypass remains limited to dry-run unit tests with `AGENT_HARNESS_TEST_MODE=1`.
-- Added regression coverage for selected unstaged secrets, required security failures, quality draft PRs, base branch handling, resume/idempotency, malformed artifacts, malformed `gh` JSON, unique run IDs, PR comment warnings, and unrelated main working-tree changes.
-- Closed review blockers: direct `main` publication is blocked, completed no-op now depends on an input fingerprint, pre-commit blocked runs can retry after fixes, irreversible resume respects the current verdict, dry-run executes selected scan/checks, base branch must exist at `origin/<base_branch>`, and optional profile commands are not auto-run.
+- Added `.agent-repositories.yaml` and registry validation so trusted remotes, repository profile, base branch, protected paths, and allowed publication prefixes have a durable source of truth.
+- Made `scripts/publish_pr.py` consult the trusted registry, accept run-scoped `--artifacts-dir` and `--run-id`, and enforce change-set completeness against actual changed files and `risk.changed_areas`.
+- Added `scripts/security_scan.py --base-ref --head-ref` and updated GitHub Actions so CI scans changed files instead of an empty staged set.
+- Added `scripts/worktree_manager.py` for task-start worktree bootstrap and persisted worktree runtime state.
+- Added `scripts/agent_role_runner.py` as an executable deterministic P3 role chain with run-scoped artifacts, checkpoints, optional external adapter command, and specialist roles.
+- Added prompts for context compiling, Frontend QA, architecture consistency, semantic conflict checks, CI repair, and evals.
+- Extended `scripts/run_workflow.py` to create `.agent-runs/<run-id>/artifacts/` and pass `{artifacts_dir}` into workflow steps.
+- Kept branch policy consistent: allowed prefixes come from policy/registry as `feat/`, `fix/`, `issue/`, and literal `tast/`; stale `task/`, `agent/`, and `codex/` publication patterns are rejected.
 
 ## Project Profile
 
 - Selected profile: `agent_workspace`
-- Reason: task changes private harness scripts, schemas, tests, and artifacts.
+- Reason: task changes private harness scripts, workflow definitions, prompts, docs, tests, and artifacts.
 - Frontend evidence required: false.
 
 ## Checks
 
-- Passed: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests` (72 tests)
+- Passed: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests` (78 tests)
 - Passed: `make validate-artifacts`
 - Passed: `make security`
 - Passed: `make check`
@@ -27,8 +27,8 @@
 
 ## Risk
 
-- MEDIUM: publication automation semantics changed, but auto-merge/deploy remain disabled and no protected production/auth/billing/secret paths were touched.
+- MEDIUM: harness orchestration and publication guardrails changed, but auto-merge/deploy remain disabled and no protected production/auth/billing/secret paths were touched.
 
 ## Next Action
 
-- Review the diff and publish only if the policy/verdict gates remain satisfied.
+- Review the diff and run a dry workflow or dry publication before any live publish action.
