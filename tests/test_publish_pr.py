@@ -906,6 +906,8 @@ def test_end_to_end_publication_with_temp_git_repo_and_fake_gh(
     (repo / "allowed.txt").write_text("old\n", encoding="utf-8")
     run_git(repo, "add", "allowed.txt")
     run_git(repo, "commit", "-m", "initial")
+    run_git(repo, "branch", "-M", "main")
+    run_git(repo, "push", "-u", "origin", "main")
     run_git(repo, "checkout", "-b", "issue-943")
     (repo / "allowed.txt").write_text("new\n", encoding="utf-8")
     (repo / "unrelated.txt").write_text("do not publish\n", encoding="utf-8")
@@ -972,6 +974,8 @@ def init_publication_repo(tmp_path: Path) -> tuple[Path, Path, Path]:
     (repo / "allowed.txt").write_text("old\n", encoding="utf-8")
     run_git(repo, "add", "allowed.txt")
     run_git(repo, "commit", "-m", "initial")
+    run_git(repo, "branch", "-M", "main")
+    run_git(repo, "push", "-u", "origin", "main")
     (repo / "allowed.txt").write_text("new\n", encoding="utf-8")
     return remote, repo, tmp_path
 
@@ -1167,17 +1171,25 @@ def test_existing_pr_base_branch_is_corrected(tmp_path: Path) -> None:
 
 def test_push_failure_resume_reuses_existing_commit(tmp_path: Path, monkeypatch: object) -> None:
     remote, repo, _ = init_publication_repo(tmp_path)
-    run_git(repo, "remote", "set-url", "origin", str(tmp_path / "missing.git"))
     install_fake_gh(tmp_path, monkeypatch)
     root = prepare_e2e_root(tmp_path, repo, "")
-    publisher = publish_pr.Publisher(root=root)
+
+    class PushFailPublisher(publish_pr.Publisher):
+        def push(self, target_repo: Path, branch: str) -> str:
+            return "network down"
+
+    publisher = PushFailPublisher(root=root)
 
     first = publisher.publish(repo_override=repo)
     assert first.execution_status == "failed"
     assert first.commit_sha
     assert first.push_completed is False
 
-    run_git(repo, "remote", "set-url", "origin", str(remote))
+    verdict_path = root / "artifacts" / "verdict.json"
+    verdict = json.loads(verdict_path.read_text(encoding="utf-8"))
+    verdict["execution_status"] = "planned"
+    verdict["blockers"] = []
+    verdict_path.write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
     second = publish_pr.Publisher(root=root).publish(repo_override=repo)
 
     assert second.execution_status == "completed"
@@ -1203,6 +1215,11 @@ def test_push_success_pr_failure_resume_creates_pr_without_new_commit(tmp_path: 
     assert first.commit_sha
 
     Path(str(state_file) + ".allow-create").write_text("1", encoding="utf-8")
+    verdict_path = root / "artifacts" / "verdict.json"
+    verdict = json.loads(verdict_path.read_text(encoding="utf-8"))
+    verdict["execution_status"] = "planned"
+    verdict["blockers"] = []
+    verdict_path.write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
     second = publish_pr.Publisher(root=root).publish(repo_override=repo)
 
     assert second.execution_status == "completed"
@@ -1280,3 +1297,142 @@ def test_pr_comment_failure_warning_is_in_all_runtime_artifacts(tmp_path: Path, 
     assert runtime["warnings"] == publication.warnings
     assert summary["warnings"] == publication.warnings
     assert tracked["warnings"] == publication.warnings
+
+
+def test_protected_main_branch_blocks_before_commit(tmp_path: Path, monkeypatch: object) -> None:
+    remote, repo, _ = init_publication_repo(tmp_path)
+    install_fake_gh(tmp_path, monkeypatch)
+    root = prepare_e2e_root(tmp_path, repo, str(remote))
+    payload_path = root / "artifacts" / "publication_payload.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    payload["branch"] = "main"
+    payload_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    publication = publish_pr.Publisher(root=root).publish(repo_override=repo)
+
+    assert publication.execution_status == "blocked"
+    assert publication.commit_sha == ""
+    assert any("protected branch" in error for error in publication.errors)
+
+
+def test_completed_run_with_new_selected_diff_creates_new_commit_without_second_pr(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    remote, repo, _ = init_publication_repo(tmp_path)
+    state_file = install_fake_gh(tmp_path, monkeypatch)
+    root = prepare_e2e_root(tmp_path, repo, str(remote))
+    first = publish_pr.Publisher(root=root).publish(repo_override=repo)
+    assert first.execution_status == "completed"
+
+    (repo / "allowed.txt").write_text("newer\n", encoding="utf-8")
+    second = publish_pr.Publisher(root=root).publish(repo_override=repo)
+
+    assert second.execution_status == "completed"
+    assert second.commit_sha != first.commit_sha
+    gh_log = Path(str(state_file) + ".log").read_text(encoding="utf-8")
+    assert gh_log.count("pr create") == 1
+    assert "pr edit 123" in gh_log
+
+
+def test_blocked_before_commit_can_retry_after_condition_is_fixed(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    remote, repo, _ = init_publication_repo(tmp_path)
+    install_fake_gh(tmp_path, monkeypatch)
+    root = prepare_e2e_root(tmp_path, repo, "git@example.com:wrong/repo.git")
+    first = publish_pr.Publisher(root=root).publish(repo_override=repo)
+    assert first.execution_status == "blocked"
+    assert first.commit_sha == ""
+
+    change_set_path = root / "artifacts" / "change_set.json"
+    change_set = json.loads(change_set_path.read_text(encoding="utf-8"))
+    change_set["expected_remote"] = str(remote)
+    change_set_path.write_text(json.dumps(change_set, indent=2) + "\n", encoding="utf-8")
+    second = publish_pr.Publisher(root=root).publish(repo_override=repo)
+
+    assert second.execution_status == "completed"
+    assert not any("target repository remote does not match" in error for error in second.errors)
+
+
+def test_resume_after_push_respects_current_await_approval_verdict(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    remote, repo, _ = init_publication_repo(tmp_path)
+    state_file = install_fake_gh(tmp_path, monkeypatch)
+    root = prepare_e2e_root(tmp_path, repo, str(remote))
+    gh_path = tmp_path / "bin" / "gh"
+    gh_path.write_text(
+        gh_path.read_text(encoding="utf-8").replace(
+            'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then',
+            'if [ "$1" = "pr" ] && [ "$2" = "create" ] && [ ! -f "' + str(state_file) + '.allow-create" ]; then\n  echo "api unavailable" >&2\n  exit 1\nfi\nif [ "$1" = "pr" ] && [ "$2" = "create" ]; then',
+        ),
+        encoding="utf-8",
+    )
+    first = publish_pr.Publisher(root=root).publish(repo_override=repo)
+    assert first.push_completed is True
+    assert first.pr_created_or_updated is False
+
+    Path(str(state_file) + ".allow-create").write_text("1", encoding="utf-8")
+    verdict_path = root / "artifacts" / "verdict.json"
+    verdict = json.loads(verdict_path.read_text(encoding="utf-8"))
+    verdict["decision"] = "await_approval"
+    verdict["approval_required_before_publish"] = True
+    verdict["blockers"] = []
+    verdict_path.write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
+    second = publish_pr.Publisher(root=root).publish(repo_override=repo)
+
+    assert second.execution_status == "blocked"
+    assert second.pr_created_or_updated is False
+    assert "Publication is not permitted by the current verdict or policy." in second.errors
+
+
+def test_dry_run_scans_selected_secret_and_blocks(tmp_path: Path, monkeypatch: object) -> None:
+    remote, repo, _ = init_publication_repo(tmp_path)
+    (repo / "allowed.txt").write_text("token='ghp_" + ("A" * 24) + "'\n", encoding="utf-8")
+    install_fake_gh(tmp_path, monkeypatch)
+    root = prepare_e2e_root(tmp_path, repo, str(remote))
+    shutil.copy2(Path(__file__).resolve().parents[1] / "scripts" / "security_scan.py", root / "scripts" / "security_scan.py")
+
+    publication = publish_pr.Publisher(root=root).publish(dry_run=True, repo_override=repo)
+
+    assert publication.execution_status == "blocked"
+    assert publication.commit_sha == ""
+    assert any("required security scan failed" in error for error in publication.errors)
+
+
+def test_missing_origin_base_branch_blocks_publication(tmp_path: Path, monkeypatch: object) -> None:
+    remote, repo, _ = init_publication_repo(tmp_path)
+    install_fake_gh(tmp_path, monkeypatch)
+    root = prepare_e2e_root(tmp_path, repo, str(remote))
+    payload_path = root / "artifacts" / "publication_payload.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    payload["base_branch"] = "missing-base"
+    payload_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    publication = publish_pr.Publisher(root=root).publish(repo_override=repo)
+
+    assert publication.execution_status == "blocked"
+    assert publication.commit_sha == ""
+    assert "base branch origin/missing-base does not exist" in publication.errors
+
+
+def test_optional_profile_commands_are_not_run(tmp_path: Path) -> None:
+    runner = FakeRunner({("true",): publish_pr.CommandResult(0, "", "")})
+    publisher = publish_pr.Publisher(runner=runner)
+    publication = publish_pr.PublicationResult(pr_state="ready")
+    profiles = {
+        "profiles": {
+            "agent_workspace": {
+                "quality_commands": {
+                    "required": ["true"],
+                    "optional": ["false"],
+                }
+            }
+        }
+    }
+
+    publisher.run_profile_commands(tmp_path, profiles, "agent_workspace", publication, "quality_commands")
+
+    assert ("true",) in runner.calls
+    assert ("false",) not in runner.calls
+    assert publication.pr_state == "ready"

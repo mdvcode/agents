@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import hashlib
 import json
 import os
 import random
@@ -27,6 +28,9 @@ PUBLICATION_RESULT_START = "<!-- publication-result:start -->"
 PUBLICATION_RESULT_END = "<!-- publication-result:end -->"
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
 DEFAULT_BASE_BRANCH = "main"
+ALLOWED_BRANCH_PREFIXES = ("issue/", "task/", "agent/", "codex/")
+PROTECTED_BRANCH_NAMES = {"main", "master", "trunk"}
+PROTECTED_BRANCH_PREFIXES = ("release/", "hotfix/", "prod/", "production/")
 FINAL_STATES = {"completed", "blocked", "failed"}
 PUBLICATION_STATES = {
     "planned",
@@ -93,6 +97,7 @@ class PublicationResult:
     run_id: str = ""
     run_dir: str = ""
     task_id: str = ""
+    input_fingerprint: str = ""
     pr_comment_posted: bool = False
     command_results: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -118,6 +123,7 @@ class PublicationResult:
             "dry_run": self.dry_run,
             "run_dir": self.run_dir,
             "pr_comment_posted": self.pr_comment_posted,
+            "input_fingerprint": self.input_fingerprint,
             "command_results": self.command_results,
             "warnings": self.warnings,
             "errors": self.errors,
@@ -366,6 +372,79 @@ class Publisher:
         task_id = sanitize_slug(str(change_set.get("task_id", "task")))
         return f"issue/{task_id.removeprefix('issue-')}" if task_id.startswith("issue-") else f"task/{task_id}"
 
+    def validate_publication_branch(self, branch: str, base_branch: str, publication: PublicationResult) -> None:
+        if not branch:
+            publication.errors.append("publication branch is missing")
+            return
+        if branch == base_branch or branch in PROTECTED_BRANCH_NAMES:
+            publication.errors.append(f"protected branch {branch!r} blocks publication")
+        if branch.startswith(PROTECTED_BRANCH_PREFIXES):
+            publication.errors.append(f"protected branch prefix blocks publication: {branch}")
+        if not branch.startswith(ALLOWED_BRANCH_PREFIXES):
+            allowed = ", ".join(ALLOWED_BRANCH_PREFIXES)
+            publication.errors.append(f"publication branch must start with one of: {allowed}")
+
+    def ensure_base_branch(self, target_repo: Path, base_branch: str, publication: PublicationResult) -> None:
+        if not base_branch or not safe_relative_path(base_branch):
+            publication.errors.append(f"invalid base branch: {base_branch!r}")
+            return
+        fetch = self.run_command(["git", "fetch", "--prune", "origin"], cwd=target_repo)
+        append_command_result(publication, "git fetch --prune origin", fetch, "required")
+        if command_failed(fetch):
+            publication.errors.append(f"cannot fetch origin before publication: {command_output(fetch)}")
+            return
+        verify = self.run_command(["git", "rev-parse", "--verify", f"origin/{base_branch}"], cwd=target_repo)
+        append_command_result(publication, f"git rev-parse --verify origin/{base_branch}", verify, "required")
+        if command_failed(verify):
+            publication.errors.append(f"base branch origin/{base_branch} does not exist")
+
+    def current_head(self, target_repo: Path) -> str:
+        result = self.run_command(["git", "rev-parse", "HEAD"], cwd=target_repo)
+        return result.stdout.strip() if not command_failed(result) else ""
+
+    def input_fingerprint(
+        self,
+        target_repo: Path,
+        change_set: dict[str, Any],
+        payload: dict[str, Any],
+        policy: dict[str, Any],
+        profiles_doc: dict[str, Any],
+        project_profile: str,
+        branch: str,
+        base_branch: str,
+    ) -> str:
+        include = change_set.get("include", [])
+        exclude = [path for path in change_set.get("exclude", []) if isinstance(path, str)]
+        selected = [
+            path
+            for path in include
+            if isinstance(path, str) and safe_relative_path(path) and not matches_any(path, exclude)
+        ]
+        file_hashes: dict[str, str] = {}
+        for relative in sorted(selected):
+            path = target_repo / relative
+            if path.exists() and path.is_file():
+                file_hashes[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+            elif path.exists() and path.is_dir():
+                file_hashes[relative] = "directory"
+            else:
+                file_hashes[relative] = "missing"
+        profile_doc = profiles_doc.get("profiles", {}).get(project_profile, {})
+        data = {
+            "selected_paths": sorted(selected),
+            "file_hashes": file_hashes,
+            "base_branch": base_branch,
+            "branch": branch,
+            "publication_payload": payload,
+            "policy_version": policy.get("version"),
+            "profile_version": profiles_doc.get("version"),
+            "profile": project_profile,
+            "profile_doc": profile_doc,
+            "head": self.current_head(target_repo),
+        }
+        encoded = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
     def selected_change_set_paths(
         self,
         target_repo: Path,
@@ -484,6 +563,8 @@ class Publisher:
         change_set: dict[str, Any],
         skip_checks: bool,
         expected_remote: str = "",
+        branch: str = "",
+        base_branch: str = DEFAULT_BASE_BRANCH,
     ) -> PublicationResult:
         result = PublicationResult(target_repository=str(target_repo))
         profile = str(project_profile.get("project_profile", ""))
@@ -494,6 +575,8 @@ class Publisher:
             result.errors.append("change_set project_profile does not match project_profile artifact")
         for protected_path in protected_path_blockers(change_set, policy, profile):
             result.errors.append(f"protected path in change set: {protected_path}")
+        if branch:
+            self.validate_publication_branch(branch, base_branch, result)
 
         if not skip_checks:
             validation = self.run_command(["python3", "scripts/validate_artifacts.py"], cwd=self.root)
@@ -521,6 +604,8 @@ class Publisher:
                 result.errors.append(f"cannot read origin remote: {command_output(actual_remote)}")
             elif actual_remote.stdout.strip() != expected_remote:
                 result.errors.append("target repository remote does not match expected_remote")
+        if branch:
+            self.ensure_base_branch(target_repo, base_branch, result)
 
         gh_auth = self.run_command(["gh", "auth", "status"], cwd=target_repo)
         if command_failed(gh_auth):
@@ -542,7 +627,7 @@ class Publisher:
         if not isinstance(commands_doc, dict):
             publication.errors.append(f"profile {profile!r} has invalid {command_group}")
             return
-        for status in ("required", "optional"):
+        for status in ("required",):
             commands = commands_doc.get(status, [])
             if not isinstance(commands, list):
                 publication.errors.append(f"profile {profile!r} has invalid {status} {command_group}")
@@ -593,11 +678,7 @@ class Publisher:
             publication.errors.append(f"required security scan failed: {command_output(result)}")
 
     def source_ref(self, target_repo: Path, base_branch: str) -> str:
-        for ref in (f"origin/{base_branch}", base_branch):
-            check = self.run_command(["git", "rev-parse", "--verify", ref], cwd=target_repo)
-            if not command_failed(check):
-                return ref
-        return "HEAD"
+        return f"origin/{base_branch}"
 
     def create_worktree(
         self,
@@ -616,15 +697,18 @@ class Publisher:
         if worktree.exists():
             return worktree.resolve()
         self.worktrees_dir.mkdir(parents=True, exist_ok=True)
-        base_ref = self.source_ref(target_repo, publication.base_branch)
-        result = self.run_command(
-            ["git", "worktree", "add", "-b", publication.branch, str(worktree), base_ref],
+        branch_check = self.run_command(
+            ["git", "show-ref", "--verify", f"refs/heads/{publication.branch}"],
             cwd=target_repo,
         )
+        if command_failed(branch_check):
+            base_ref = self.source_ref(target_repo, publication.base_branch)
+            args = ["git", "worktree", "add", "-b", publication.branch, str(worktree), base_ref]
+        else:
+            args = ["git", "worktree", "add", str(worktree), publication.branch]
+        result = self.run_command(args, cwd=target_repo)
         if command_failed(result):
-            fallback = self.run_command(["git", "worktree", "add", str(worktree), publication.branch], cwd=target_repo)
-            if command_failed(fallback):
-                publication.errors.append(f"git worktree add failed: {command_output(result) or command_output(fallback)}")
+            publication.errors.append(f"git worktree add failed: {command_output(result)}")
         return worktree.resolve()
 
     def copy_selected_changes(
@@ -904,6 +988,16 @@ class Publisher:
         self.update_report(publication)
         self.append_audit_log(publication, project_profile)
 
+    def cleanup_worktree(self, target_repo: Path, publication: PublicationResult) -> None:
+        if not publication.worktree:
+            return
+        worktree = Path(publication.worktree)
+        if not worktree.exists():
+            return
+        remove = self.run_command(["git", "worktree", "remove", "--force", publication.worktree], cwd=target_repo)
+        if command_failed(remove):
+            publication.warnings.append(f"worktree cleanup failed: {command_output(remove)}")
+
     def find_resume_state(
         self,
         task_id: str,
@@ -952,23 +1046,46 @@ class Publisher:
             payload = self.load_publication_payload()
             publication.branch = self.publication_branch(target_repo, change_set, payload)
             publication.base_branch = str(payload.get("base_branch", publication.base_branch) or DEFAULT_BASE_BRANCH)
+            profile_name = str(project_profile.get("project_profile", ""))
+            publication.input_fingerprint = self.input_fingerprint(
+                target_repo,
+                change_set,
+                payload,
+                policy,
+                profiles_doc,
+                profile_name,
+                publication.branch,
+                publication.base_branch,
+            )
             resume = self.find_resume_state(publication.task_id, target_repo, publication.branch)
             resume_after_irreversible_action = False
+            previous_precommit_blocked = False
+            previous_precommit_errors: list[str] = []
             if resume is not None:
-                publication = resume
-                publication.dry_run = dry_run
-                if publication.execution_status == "completed":
+                same_fingerprint = resume.input_fingerprint == publication.input_fingerprint
+                if resume.execution_status == "completed" and same_fingerprint:
+                    publication = resume
+                    publication.dry_run = dry_run
                     publication.warnings.append("publication already completed; no-op")
                     self.finalize(target_repo, publication, str(project_profile.get("project_profile", "")), post_comment=False)
                     return publication
-                resume_after_irreversible_action = bool(publication.commit_sha or publication.push_completed)
-                if resume_after_irreversible_action:
+                if resume.execution_status != "completed" and (resume.commit_sha or resume.push_completed):
+                    resume_after_irreversible_action = True
+                    fingerprint = publication.input_fingerprint
+                    publication = resume
+                    publication.dry_run = dry_run
+                    publication.input_fingerprint = fingerprint
                     publication.errors = []
+                elif resume.execution_status in {"blocked", "failed"}:
+                    previous_precommit_blocked = True
+                    previous_precommit_errors = list(resume.errors)
             self.ensure_runtime_state(publication, change_set, target_repo)
             preflight_verdict = dict(verdict)
-            if resume_after_irreversible_action:
-                preflight_verdict["decision"] = "publish_pr"
-                preflight_verdict["approval_required_before_publish"] = False
+            if (
+                previous_precommit_blocked
+                and previous_precommit_errors
+                and preflight_verdict.get("blockers") == previous_precommit_errors
+            ):
                 preflight_verdict["blockers"] = []
 
             preflight = self.preflight(
@@ -982,6 +1099,8 @@ class Publisher:
                 change_set,
                 skip_checks,
                 str(change_set.get("expected_remote", "")),
+                publication.branch,
+                publication.base_branch,
             )
             for field_name in ("command_results", "warnings", "errors"):
                 getattr(publication, field_name).extend(getattr(preflight, field_name))
@@ -996,7 +1115,6 @@ class Publisher:
             title = str(payload.get("title", change_set.get("task_id", "Task changes")))
             body = str(payload.get("body", ""))
             commit_message = str(payload.get("commit_message", title))
-            profile_name = str(project_profile.get("project_profile", ""))
             publication.errors.extend(
                 forbidden_public_output_blockers(policy, publication.branch, title, body + "\n" + commit_message)
                 if profile_name == "flowfox"
@@ -1007,20 +1125,20 @@ class Publisher:
                 publication.execution_status = "blocked"
                 self.finalize(target_repo, publication, profile_name, post_comment=False)
                 return publication
-            if dry_run:
-                publication.execution_status = "planned"
-                publication.warnings.append("dry-run: no files staged, committed, pushed, or published")
-                return publication
 
             worktree = self.create_worktree(target_repo, change_set, publication)
             if publication.errors:
                 publication.execution_status = "failed"
-                self.finalize(target_repo, publication, profile_name, post_comment=False)
+                if not dry_run:
+                    self.finalize(target_repo, publication, profile_name, post_comment=False)
                 return publication
             self.copy_selected_changes(target_repo, worktree, selected, publication)
             if publication.errors:
                 publication.execution_status = "failed"
-                self.finalize(worktree, publication, profile_name, post_comment=False)
+                if not dry_run:
+                    self.finalize(worktree, publication, profile_name, post_comment=False)
+                else:
+                    self.cleanup_worktree(target_repo, publication)
                 return publication
 
             if not publication.commit_sha:
@@ -1029,7 +1147,15 @@ class Publisher:
                 self.run_profile_commands(worktree, profiles_doc, profile_name, publication, "security_commands")
                 if publication.errors:
                     publication.execution_status = "blocked"
-                    self.finalize(worktree, publication, profile_name, post_comment=False)
+                    if not dry_run:
+                        self.finalize(worktree, publication, profile_name, post_comment=False)
+                    else:
+                        self.cleanup_worktree(target_repo, publication)
+                    return publication
+                if dry_run:
+                    publication.execution_status = "planned"
+                    publication.warnings.append("dry-run: selected files scanned and checks completed; no files staged, committed, pushed, or published")
+                    self.cleanup_worktree(target_repo, publication)
                     return publication
                 self.stage_change_set(worktree, {"include": sorted(selected), "exclude": []}, False, publication)
                 if publication.errors:
@@ -1052,6 +1178,12 @@ class Publisher:
                     publication.execution_status = "blocked"
                     self.finalize(worktree, publication, profile_name, post_comment=False)
                     return publication
+
+            if dry_run:
+                publication.execution_status = "planned"
+                publication.warnings.append("dry-run: resume state inspected; no push or PR action was performed")
+                self.cleanup_worktree(target_repo, publication)
+                return publication
 
             if publication.commit_sha and not publication.push_completed:
                 push_error = self.push(worktree, publication.branch)
@@ -1095,9 +1227,8 @@ class Publisher:
             self.finalize(worktree, publication, profile_name, post_comment=True)
             try:
                 if publication.execution_status == "completed" and publication.worktree:
-                    remove = self.run_command(["git", "worktree", "remove", "--force", publication.worktree], cwd=target_repo)
-                    if command_failed(remove):
-                        publication.warnings.append(f"worktree cleanup failed: {command_output(remove)}")
+                    self.cleanup_worktree(target_repo, publication)
+                    if publication.warnings and publication.warnings[-1].startswith("worktree cleanup failed"):
                         self.finalize(worktree, publication, profile_name, post_comment=False)
             except OSError:
                 pass

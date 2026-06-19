@@ -18,8 +18,6 @@
     "artifacts/security.md",
     "schemas/publication.schema.json",
     "scripts/publish_pr.py",
-    "scripts/run_workflow.py",
-    "scripts/security_scan.py",
     "tests/test_publish_pr.py"
   ],
   "exclude": [

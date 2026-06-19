@@ -18,6 +18,7 @@
 - The prior executor had allowlisted staging and PR creation, but it operated directly in the target working tree and did not have a full runtime state machine.
 - Security scanning depended on staged files unless full-repo mode was used.
 - Partial failures after commit or push could not reliably resume without creating new publication state.
+- Review of the P2.2 implementation found remaining blockers: protected branch publication, over-broad completed no-op behavior, sticky pre-commit blockers, verdict override during resume, incomplete dry-run checks, base-branch fallback to HEAD, and automatic optional command execution.
 
 ## CONSTRAINTS
 
@@ -42,6 +43,12 @@
 7. Finalize runtime summary, markdown, tracked publication/verdict/report, and audit log from one final result.
 8. Remove live CLI `--skip-checks`; keep the internal test bypass gated by `AGENT_HARNESS_TEST_MODE=1` and dry-run.
 9. Add regression and end-to-end tests for selected secret scanning, required security blocking, quality draft PR, base branch, resume, idempotency, malformed artifacts/gh JSON, unique run IDs, comment warnings, and unrelated working-tree changes.
+10. Block protected/publication-unsafe branches and allow only `issue/`, `task/`, `agent/`, and `codex/` branch prefixes.
+11. Add input fingerprints so completed runs no-op only when selected file content, payload, base branch, policy/profile version, and current HEAD match.
+12. Retry blocked pre-commit runs after conditions are fixed while still requiring current verdict permission for irreversible resume.
+13. Make dry-run create a disposable worktree and execute selected security plus required profile checks before returning.
+14. Require `origin/<base_branch>` after `git fetch --prune origin`; never fall back to `HEAD`.
+15. Run only required profile commands automatically; keep optional commands as a catalog.
 
 ## DONE WHEN
 
@@ -54,6 +61,13 @@
 - Resume does not create a new commit or second PR.
 - Missing/malformed artifacts return structured results without tracebacks.
 - Runtime artifacts and tracked summary fields agree after finalization.
+- Protected branches cannot be published directly.
+- Completed runs with a new selected diff create a new commit and update the existing PR.
+- Blocked pre-commit runs can retry after the blocking condition is fixed.
+- Resume after irreversible actions still respects the current verdict.
+- Dry-run catches selected-file secrets.
+- Missing `origin/<base_branch>` blocks publication.
+- Optional profile commands are not auto-run.
 - `make check` and the full pytest suite pass.
 
 ## VERIFY

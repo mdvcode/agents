@@ -16,6 +16,7 @@
   "pr_state": "not_created",
   "dry_run": false,
   "run_dir": "",
+  "input_fingerprint": "",
   "pr_comment_posted": false,
   "command_results": [],
   "warnings": [],

@@ -9,12 +9,15 @@
 - No open correctness findings after focused and full pytest runs.
 - Resume coverage now verifies commit-created/push-failed and push-created/PR-failed paths.
 - End-to-end coverage uses a temporary source repository, bare remote, task worktree, and fake `gh` executable.
+- Added review-regression coverage for protected branch blocking, fingerprint-based completed no-op, retry after pre-commit blocker fixes, verdict-respecting resume, dry-run secret detection, missing origin base branch, and optional command suppression.
 
 ## Security Findings
 
 - Required security failures block publication before staging.
 - Quality failures create draft PRs without bypassing required security gates.
 - Auto-merge and deployment are still not implemented or invoked.
+- Direct publication to protected branches is blocked before commit/push.
+- Base branch creation no longer falls back to `HEAD`.
 
 ## Policy Findings
 

@@ -29,6 +29,7 @@
   "reasoning_summary": [
     "The task is MEDIUM risk in the private agent workspace.",
     "Publication now scans selected files before staging, runs from isolated worktrees, persists runtime state, and resumes partial failures.",
+    "Review blockers around protected branches, completed-run fingerprints, sticky pre-commit blockers, verdict-respecting resume, dry-run checks, base branch validation, and optional commands were addressed.",
     "Required security failures block publication; quality failures produce draft PRs.",
     "Auto-merge and deploy remain disabled."
   ],

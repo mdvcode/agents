@@ -1,8 +1,8 @@
 {
   "risk_class": "medium",
   "reasons": [
-    "Hardens the executable Git/GitHub publication path with worktree isolation and resumable runtime state.",
-    "Changes commit, push, PR, runtime artifact, and security-scan behavior in the private agent harness.",
+    "Closes remaining P2.2 publication safety blockers found during review.",
+    "Changes branch protection, base branch validation, dry-run, fingerprint idempotency, resume, and profile command behavior in the private agent harness.",
     "No production credentials, deployment, billing, auth, migrations, or destructive data operations are involved."
   ],
   "changed_areas": [
@@ -20,10 +20,7 @@
     "artifacts/security.md",
     "schemas/publication.schema.json",
     "scripts/publish_pr.py",
-    "scripts/run_workflow.py",
-    "scripts/security_scan.py",
-    "tests/test_publish_pr.py",
-    "tests/test_security_scan.py"
+    "tests/test_publish_pr.py"
   ],
   "high_risk_triggers": [],
   "protected_paths_touched": [],

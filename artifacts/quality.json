@@ -7,7 +7,7 @@
       "name": "pytest",
       "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests",
       "status": "pass",
-      "notes": "62 tests passed, including publication worktree, selected security scan, base branch correction, resume/idempotency, malformed artifact/gh JSON, and workflow run ID coverage."
+      "notes": "69 tests passed, including publication worktree, selected security scan, branch/base protection, dry-run scan, fingerprint idempotency, resume gates, malformed artifact/gh JSON, and workflow run ID coverage."
     },
     {
       "name": "validate-artifacts",
