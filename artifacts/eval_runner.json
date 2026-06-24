@@ -1,0 +1,24 @@
+{
+  "evals_run": [
+    {
+      "name": "Policy sequence",
+      "status": "pass",
+      "notes": "Read required control-plane and Flowfox project rules before implementation."
+    },
+    {
+      "name": "Profile selection",
+      "status": "pass",
+      "notes": "Selected Flowfox profile and used Flowfox checks only."
+    },
+    {
+      "name": "Publication gate",
+      "status": "pending",
+      "notes": "publish_pr.py dry-run must run before commit/push/PR."
+    }
+  ],
+  "regressions": [],
+  "coverage_gaps": [
+    "Authenticated visual verification of the affected dashboard route could not be completed locally."
+  ],
+  "next_action": "Run publish_pr.py dry-run and publish draft PR if allowed."
+}

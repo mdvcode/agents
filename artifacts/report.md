@@ -1,34 +1,34 @@
-# Report
+# Project Profile
 
-## Summary
+Selected profile: `agent_workspace`
 
-- Added `.agent-repositories.yaml` and registry validation so trusted remotes, repository profile, base branch, protected paths, and allowed publication prefixes have a durable source of truth.
-- Made `scripts/publish_pr.py` consult the trusted registry, accept run-scoped `--artifacts-dir` and `--run-id`, and enforce change-set completeness against actual changed files and `risk.changed_areas`.
-- Added `scripts/security_scan.py --base-ref --head-ref` and updated GitHub Actions so CI scans changed files instead of an empty staged set.
-- Added `scripts/worktree_manager.py` for task-start worktree bootstrap and persisted worktree runtime state.
-- Added `scripts/agent_role_runner.py` as an executable deterministic P3 role chain with run-scoped artifacts, checkpoints, optional external adapter command, and specialist roles.
-- Added prompts for context compiling, Frontend QA, architecture consistency, semantic conflict checks, CI repair, and evals.
-- Extended `scripts/run_workflow.py` to create `.agent-runs/<run-id>/artifacts/` and pass `{artifacts_dir}` into workflow steps.
-- Kept branch policy consistent: allowed prefixes come from policy/registry as `feat/`, `fix/`, `issue/`, and literal `tast/`; stale `task/`, `agent/`, and `codex/` publication patterns are rejected.
+Reason: This task changes the local agent workflow harness, schemas, tests, and root task artifacts.
 
-## Project Profile
+# Changes
 
-- Selected profile: `agent_workspace`
-- Reason: task changes private harness scripts, workflow definitions, prompts, docs, tests, and artifacts.
-- Frontend evidence required: false.
+- Added `scripts/adapters/codex_adapter.py` for strict external role execution via `AGENT_CODEX_COMMAND` / `AGENT_LLM_COMMAND`.
+- Added `scripts/context_compiler.py` and context manifest/request/result schemas.
+- Reworked `scripts/agent_role_runner.py` to use one run id, run-scoped artifacts, per-role context manifests, strict role result validation, task worktree setup, high-risk approval stop, and `publish_pr.py` for publication.
+- Updated `scripts/run_workflow.py`, `scripts/validate_artifacts.py`, `scripts/worktree_manager.py`, `scripts/publish_pr.py`, and `.agent-workflows.yaml` for unified run context and run-scoped validation.
+- Added focused and integration tests for adapter behavior, blocked missing-adapter behavior, custom artifacts dir validation, and worktree isolation.
+- Added runtime artifact enforcement for Planner `plan.md`, Risk `risk.json`, and Implementation source-repository isolation.
+- Added HIGH-risk approval gate regression coverage, real `publish_pr.py` invocation coverage, optional real Codex smoke coverage, CI diff fail-closed behavior, and role-scoped skill references.
+- Added YAML frontmatter to local `.agents/skills/*/SKILL.md` files.
 
-## Checks
+# Checks
 
-- Passed: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests` (78 tests)
-- Passed: `make validate-artifacts`
-- Passed: `make security`
-- Passed: `make check`
-- Passed: `git diff HEAD --check`
+- Pass: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_codex_adapter.py tests/test_agent_role_runner.py tests/test_run_workflow.py tests/test_validate_artifacts.py tests/test_full_agent_workflow.py` (30 passed)
+- Pass: `make check` (artifact validation passed; security scan passed; 91 pytest tests passed; 1 optional real Codex smoke test skipped; diff whitespace check passed)
+- Pass: `make security` (no obvious secrets, private keys, private paths, or protected staged files found)
 
-## Risk
+# Risk
 
-- MEDIUM: harness orchestration and publication guardrails changed, but auto-merge/deploy remain disabled and no protected production/auth/billing/secret paths were touched.
+Medium. The change modifies orchestration and publication routing behavior but does not touch protected production/auth/billing/secret paths.
 
-## Next Action
+# Blockers
 
-- Review the diff and run a dry workflow or dry publication before any live publish action.
+None currently known.
+
+# Next Action
+
+Review the P3.1 patch. Publication should use `publish_pr.py` only after excluding unrelated dirty Flowfox artifacts and journals from the staged set.

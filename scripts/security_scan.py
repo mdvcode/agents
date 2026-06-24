@@ -106,7 +106,8 @@ def changed_files_between_refs(repo: Path, base_ref: str, head_ref: str) -> list
         check=False,
     )
     if result.returncode != 0:
-        return []
+        message = (result.stderr or result.stdout).strip() or f"git diff failed for {base_ref}...{head_ref}"
+        raise RuntimeError(message)
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
@@ -184,7 +185,11 @@ def main() -> int:
     args = parse_args()
     staged_paths = paths_from_file(args.paths_file) if args.paths_file is not None else None
     if staged_paths is None and args.base_ref and args.head_ref:
-        staged_paths = changed_files_between_refs(args.repo, args.base_ref, args.head_ref)
+        try:
+            staged_paths = changed_files_between_refs(args.repo, args.base_ref, args.head_ref)
+        except RuntimeError as exc:
+            print(f"security: cannot compute changed files: {exc}")
+            return 1
     findings = scan(
         repo=args.repo,
         profile=args.profile,

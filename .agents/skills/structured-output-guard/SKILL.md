@@ -1,3 +1,7 @@
+---
+name: structured-output-guard
+description: "Keep machine-readable artifacts valid and trustworthy."
+---
 # Structured Output Guard Skill
 
 ## Purpose

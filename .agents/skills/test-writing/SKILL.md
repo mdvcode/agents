@@ -1,3 +1,7 @@
+---
+name: test-writing
+description: "Write focused regression tests that match repository conventions."
+---
 # Test Writing Skill
 
 ## Rules

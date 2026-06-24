@@ -72,10 +72,14 @@ def read_workflows(path: Path | None = None) -> dict[str, Any]:
     return data
 
 
-def make_run_dir(workflow_name: str) -> Path:
+def make_run_id(workflow_name: str) -> str:
     suffix = "".join(random.SystemRandom().choice(string.ascii_lowercase + string.digits) for _ in range(6))
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-    run_id = f"{timestamp}-{workflow_name}-{suffix}"
+    return f"{timestamp}-{workflow_name}-{suffix}"
+
+
+def make_run_dir(workflow_name: str, run_id: str = "") -> Path:
+    run_id = run_id or make_run_id(workflow_name)
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
@@ -96,18 +100,32 @@ def workflow_steps(workflow: dict[str, Any]) -> list[dict[str, str]]:
     return []
 
 
+def quote_placeholder(value: str | Path) -> str:
+    return shlex.quote(str(value))
+
+
 def run_workflow(
     workflow_name: str,
     dry_run: bool = False,
     root: Path = ROOT,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    run_id: str = "",
+    task_id: str = "task",
+    project: str = "",
+    repository: Path | None = None,
+    branch: str = "",
+    base_branch: str = "main",
 ) -> int:
     workflows = read_workflows()
     workflow = workflows.get("workflows", {}).get(workflow_name)
     if not isinstance(workflow, dict):
         print(f"unknown workflow: {workflow_name}")
         return 2
-    run_dir = make_run_dir(workflow_name)
+    run_id = run_id or make_run_id(workflow_name)
+    run_dir = make_run_dir(workflow_name, run_id)
+    project_value = project or "agent_workspace"
+    branch_value = branch or f"issue/{task_id}"
+    repository_value = (repository or root).resolve()
     max_iterations = int(workflow.get("max_iterations", 1))
     retry = workflow.get("retry", {})
     max_retries = int(retry.get("max_retries", 0)) if isinstance(retry, dict) else 0
@@ -130,7 +148,16 @@ def run_workflow(
         for step in steps:
             name = str(step.get("name", "step"))
             command = str(step.get("command", ""))
-            command = command.replace("{run_dir}", str(run_dir)).replace("{artifacts_dir}", str(artifacts_dir))
+            command = (
+                command.replace("{run_id}", quote_placeholder(run_id))
+                .replace("{run_dir}", quote_placeholder(run_dir))
+                .replace("{artifacts_dir}", quote_placeholder(artifacts_dir))
+                .replace("{task_id}", quote_placeholder(task_id))
+                .replace("{project}", quote_placeholder(project_value))
+                .replace("{repository}", quote_placeholder(repository_value))
+                .replace("{branch}", quote_placeholder(branch_value))
+                .replace("{base_branch}", quote_placeholder(base_branch))
+            )
             if (
                 dry_run
                 and command.startswith(("python3 scripts/publish_pr.py", "python3 scripts/agent_role_runner.py"))
@@ -167,12 +194,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("workflow", nargs="?", default="publish_pr")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument("--run-id", default="")
+    parser.add_argument("--task-id", default="task")
+    parser.add_argument("--project", default="agent_workspace")
+    parser.add_argument("--repo", type=Path, default=None)
+    parser.add_argument("--branch", default="")
+    parser.add_argument("--base-branch", default="main")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    return run_workflow(args.workflow, dry_run=args.dry_run, timeout_seconds=args.timeout_seconds)
+    return run_workflow(
+        args.workflow,
+        dry_run=args.dry_run,
+        timeout_seconds=args.timeout_seconds,
+        run_id=args.run_id,
+        task_id=args.task_id,
+        project=args.project,
+        repository=args.repo,
+        branch=args.branch,
+        base_branch=args.base_branch,
+    )
 
 
 if __name__ == "__main__":

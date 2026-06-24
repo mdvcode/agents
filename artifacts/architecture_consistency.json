@@ -1,0 +1,11 @@
+{
+  "consistency_status": "pass",
+  "findings": [],
+  "protected_boundaries": [
+    "No shared PageGrid behavior changed.",
+    "No Customer Portal deal modal preview changed.",
+    "No API, Sanity, Prisma, auth, permission, or migration files changed."
+  ],
+  "recommended_repairs": [],
+  "next_action": "Continue to semantic conflict review and publication gate."
+}

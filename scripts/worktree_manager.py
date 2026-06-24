@@ -23,12 +23,20 @@ def run_git(repo: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["git", *args], cwd=repo, text=True, capture_output=True, check=False)
 
 
-def create_worktree(repo: Path, task_id: str, branch: str, base_branch: str, run_id: str = "") -> dict[str, object]:
+def create_worktree(
+    repo: Path,
+    task_id: str,
+    branch: str,
+    base_branch: str,
+    run_id: str = "",
+    runs_dir: Path = RUNS,
+    worktrees_dir: Path = WORKTREES,
+) -> dict[str, object]:
     repo = repo.resolve()
     run_id = run_id or datetime.now(timezone.utc).strftime(f"%Y%m%dT%H%M%S.%fZ-{slug(task_id)}")
-    run_dir = RUNS / run_id
+    run_dir = runs_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    worktree = WORKTREES / f"{slug(task_id)}-{run_id.rsplit('-', 1)[-1]}"
+    worktree = worktrees_dir / f"{slug(task_id)}-{run_id.rsplit('-', 1)[-1]}"
     result = {
         "run_id": run_id,
         "task_id": task_id,

@@ -1,8 +1,8 @@
 version: 1
 workflows:
   full_agent_workflow:
-    description: "Run the deterministic full agent-role chain with run-scoped artifacts and checkpoints."
-    executor: "python3 scripts/agent_role_runner.py --workflow full_agent_workflow --artifacts-dir {artifacts_dir}"
+    description: "Run the full agent-role chain with one run id, task worktree, scoped context manifests, strict role results, and safe publication routing."
+    executor: "python3 scripts/agent_role_runner.py --workflow full_agent_workflow --run-id {run_id} --task-id {task_id} --project {project} --repo {repository} --branch {branch} --base-branch {base_branch} --artifacts-dir {artifacts_dir} --create-worktree"
     max_iterations: 1
     retry:
       max_retries: 0
@@ -10,7 +10,7 @@ workflows:
     trace_store: ".agent-runs/<run-id>/workflow_trace.jsonl"
     steps:
       - name: "agent_role_chain"
-        command: "python3 scripts/agent_role_runner.py --workflow full_agent_workflow --artifacts-dir {artifacts_dir}"
+        command: "python3 scripts/agent_role_runner.py --workflow full_agent_workflow --run-id {run_id} --task-id {task_id} --project {project} --repo {repository} --branch {branch} --base-branch {base_branch} --artifacts-dir {artifacts_dir} --create-worktree"
   publish_pr:
     description: "Validate, stage an allowlisted change set, commit, push, and create or update a PR when policy gates allow it."
     executor: "python3 scripts/publish_pr.py"

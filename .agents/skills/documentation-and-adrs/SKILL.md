@@ -1,3 +1,7 @@
+---
+name: documentation-and-adrs
+description: "Turn durable decisions into sanitized repository documentation and ADR-style memory."
+---
 # Documentation And ADRs Skill
 
 ## Purpose

@@ -1,36 +1,38 @@
-# Security
+# SUMMARY
 
-## Summary
+`make security` passed. Focused review found no new secret literals, production credentials, auth, billing, payment, migration, or deployment changes in the P3.1 patch.
 
-- Selected change-set paths are scanned before `git add` through `scripts/security_scan.py --paths-file`.
-- CI can now scan changed files directly through `scripts/security_scan.py --base-ref --head-ref`, avoiding empty staged-file scans in GitHub Actions checkouts.
-- Trusted repository metadata now lives in `.agent-repositories.yaml` and is validated by artifact checks.
-- `publish_pr.py` verifies the target remote/profile/base branch against the trusted registry when present.
-- Change-set completeness is checked before publication so real changed files are not silently omitted from the selected set.
-- Required security scan or required profile security command failure blocks publication.
-- Optional security command failures remain warnings according to project policy.
-- Publication runs from an isolated worktree, and `scripts/worktree_manager.py` can bootstrap a task worktree at workflow start.
-- Dry-run now also creates a disposable worktree and runs selected-file security plus required profile checks, so selected secrets are caught before live publication.
-- Publication branches are restricted to task-style prefixes and protected branches such as `main`, `master`, `trunk`, and release-style prefixes are blocked.
-- Allowed branch prefixes are read from policy/registry and validated as `feat/`, `fix/`, `issue/`, and literal `tast/`.
+# PROJECT_PROFILE
 
-## Project Profile
+`agent_workspace`
 
-- Selected profile: `agent_workspace`
-- Security command selected: `make security`
-- Frontend evidence required: false.
+# HIGH
 
-## Findings
+None identified.
 
-- HIGH: none.
-- MEDIUM: `scripts/publish_pr.py` can commit, push, and create/update PRs when policy gates pass. It now also requires trusted registry alignment when configured and blocks incomplete selected change sets.
-- LOW: `scripts/run_workflow.py` and `scripts/agent_role_runner.py` write run-scoped traces/artifacts under `.agent-runs/`.
+# MEDIUM
 
-## Secret Handling
+- Workflow orchestration now shells out to a configured adapter command. The implementation uses `shlex.split`, captures output, applies timeouts, and treats missing/nonzero/malformed adapter output as blocked instead of successful.
+- Publication is routed through `scripts/publish_pr.py` with run-scoped artifacts and the shared run id. HIGH risk is stopped before publication.
+- CI changed-file security scanning now fails closed when the requested base/head diff cannot be computed.
 
-- No secrets were intentionally added.
-- Required security failures are hard blockers and are not converted into draft PRs.
+# LOW
 
-## Recommended Action
+- Raw adapter stdout/stderr is stored under `.agent-runs/<run-id>/raw/` and is excluded from context manifests.
+- Skill references in context manifests point to local skill files with YAML frontmatter; skill bodies are not globally copied into every role context.
 
-- `make security` passed in the final verification loop.
+# DJANGO_SECURITY_NOTES
+
+Not applicable.
+
+# SECRETS
+
+No hardcoded secret or token was added intentionally.
+
+# DEPENDENCY_RISKS
+
+No new third-party dependency was added.
+
+# RECOMMENDED_ACTION
+
+No security follow-up required for the current patch.

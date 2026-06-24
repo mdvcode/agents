@@ -1,3 +1,7 @@
+---
+name: context-engineering
+description: "Gather scoped repository context without wasting token budget."
+---
 # Context Engineering Skill
 
 ## Purpose

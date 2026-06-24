@@ -1,47 +1,34 @@
 {
-  "task": "P2.4 trusted registry and P3 executable workflow foundation.",
+  "task": "P3.1 real Codex adapter and unified run context",
   "project_profile": "agent_workspace",
   "overall_status": "pass",
   "checks": [
     {
-      "name": "pytest",
-      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests",
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_codex_adapter.py tests/test_agent_role_runner.py tests/test_run_workflow.py tests/test_validate_artifacts.py tests/test_full_agent_workflow.py",
       "status": "pass",
-      "notes": "78 tests passed, including trusted registry validation, changed-file CI security scanning, policy-sourced branch prefixes, publication worktree, change-set completeness, selected security scan, branch/base protection, dry-run scan, fingerprint idempotency, resume gates, malformed artifact/gh JSON, run-scoped workflow artifacts, and workflow run ID coverage."
+      "notes": "30 passed"
     },
     {
-      "name": "validate-artifacts",
-      "command": "make validate-artifacts",
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_context_compiler.py tests/test_full_agent_workflow.py tests/test_security_scan.py tests/test_real_codex_smoke.py tests/test_agent_role_runner.py",
       "status": "pass",
-      "notes": "Required artifacts and schemas validate."
+      "notes": "17 passed; 1 optional real Codex smoke test skipped"
     },
     {
-      "name": "security",
-      "command": "make security",
-      "status": "pass",
-      "notes": "No obvious secrets, private keys, private paths, environment files, or protected staged files found."
-    },
-    {
-      "name": "make-check",
       "command": "make check",
       "status": "pass",
-      "notes": "Full agent workspace check passed, including artifact validation, security scan, JSON parsing, pytest suite, and whitespace check."
+      "notes": "artifact validation passed; security scan passed; 91 pytest tests passed; 1 optional real Codex smoke test skipped; diff whitespace check passed"
     },
     {
-      "name": "diff-check",
-      "command": "git diff HEAD --check",
+      "command": "make security",
       "status": "pass",
-      "notes": "No whitespace errors."
+      "notes": "no obvious secrets, private keys, private paths, or protected staged files found"
     }
   ],
   "commands_attempted": [
-    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests",
-    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_security_scan.py tests/test_validate_artifacts.py tests/test_agent_role_runner.py tests/test_run_workflow.py",
-    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_publish_pr.py",
-    "make validate-artifacts",
-    "make security",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_codex_adapter.py tests/test_agent_role_runner.py tests/test_run_workflow.py tests/test_validate_artifacts.py tests/test_full_agent_workflow.py",
     "make check",
-    "git diff HEAD --check"
+    "make security",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_context_compiler.py tests/test_full_agent_workflow.py tests/test_security_scan.py tests/test_real_codex_smoke.py tests/test_agent_role_runner.py"
   ],
   "focused_tests_passed": true,
   "repository_checks_passed": true,

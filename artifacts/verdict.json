@@ -1,15 +1,13 @@
 {
   "decision": "publish_pr",
   "execution_status": "planned",
-  "task": "P2.4 trusted registry and P3 executable workflow foundation.",
+  "task": "P3.1 real Codex adapter and unified run context",
   "project_profile": "agent_workspace",
   "risk_class": "medium",
   "checks_attempted": true,
   "checks_passed": true,
   "blockers": [],
-  "warnings": [
-    "Live commit, push, and PR creation were not executed during this implementation run; executor remains planned until invoked."
-  ],
+  "warnings": [],
   "high_risk_triggers": [],
   "protected_paths_touched": [],
   "publication_result": {
@@ -19,27 +17,21 @@
     "pr_url": "",
     "pr_state": "not_created"
   },
-  "approval_required_before_publish": false,
-  "approval_required_before_merge": true,
   "flowfox_visual_evidence": {
     "required": false,
     "provided": false,
     "items": []
   },
+  "approval_required_before_publish": false,
+  "approval_required_before_merge": true,
   "reasoning_summary": [
-    "The task is MEDIUM risk in the private agent workspace.",
-    "Trusted repository metadata now defines expected remotes, project profile, base branch, allowed prefixes, and protected paths.",
-    "Publication now checks trusted registry alignment and change-set completeness before staging.",
-    "CI security scanning can inspect changed files with base/head refs instead of relying on staged files.",
-    "Workflow runs now get run-scoped artifacts and a deterministic executable role chain with specialist checkpoints.",
-    "Task worktree bootstrap exists for starting work outside the main working tree.",
-    "Allowed publication branch prefixes come from policy/registry and docs/CI branch guidance is aligned.",
-    "Auto-merge and deploy remain disabled."
+    "The task changes the local agent control-plane harness and remains within agent_workspace profile.",
+    "Risk is medium because orchestration and publication routing behavior changed.",
+    "No high-risk protected areas are touched."
   ],
   "next_actions": [
-    "Review the P2.4/P3 foundation diff.",
-    "Run python3 scripts/run_workflow.py full_agent_workflow --dry-run to exercise the deterministic role chain.",
-    "Run python3 scripts/publish_pr.py --dry-run before any live publication."
+    "Review the P3.1 patch.",
+    "Use publish_pr.py only after unrelated dirty Flowfox artifacts and journals are excluded from the staged set."
   ],
   "lessons_updated": false
 }

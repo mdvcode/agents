@@ -83,3 +83,14 @@ def test_changed_files_between_refs_scans_ci_diff(tmp_path: Path) -> None:
 
     assert changed == ["safe.txt"]
     assert any("possible secret in safe.txt" in finding for finding in findings)
+
+
+def test_changed_files_between_refs_raises_when_base_ref_missing(tmp_path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    try:
+        security_scan.changed_files_between_refs(tmp_path, "missing-base", "HEAD")
+    except RuntimeError as exc:
+        assert "missing-base" in str(exc) or "unknown revision" in str(exc)
+    else:
+        raise AssertionError("missing base ref must not return an empty changed-file list")

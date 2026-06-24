@@ -1,3 +1,7 @@
+---
+name: repo-policy
+description: "Apply repository policy, artifact, risk, and autonomy rules before approving changes."
+---
 # Repo Policy Skill
 
 ## Purpose

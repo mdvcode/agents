@@ -1,3 +1,7 @@
+---
+name: python-standards
+description: "Apply Python implementation standards for typing, cohesion, side effects, and style."
+---
 # Python Standards Skill
 
 ## Rules

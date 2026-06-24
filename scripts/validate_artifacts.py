@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import argparse
 import sys
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,13 @@ JSON_ARTIFACTS = {
         SCHEMAS / "publication_payload.schema.json",
     ),
 }
+
+
+def json_artifacts(artifacts_dir: Path = ARTIFACTS) -> dict[str, tuple[Path, Path]]:
+    return {
+        name: (artifacts_dir / artifact_path.name, schema_path)
+        for name, (artifact_path, schema_path) in JSON_ARTIFACTS.items()
+    }
 
 
 def load_json(path: Path) -> Any:
@@ -169,9 +177,9 @@ def load_and_validate_json_artifact(
     return data, validate_required(data, schema, f"{name}.json")
 
 
-def validate_audit_log() -> list[str]:
+def validate_audit_log(artifacts_dir: Path = ARTIFACTS) -> list[str]:
     errors: list[str] = []
-    path = ARTIFACTS / "audit_log.jsonl"
+    path = artifacts_dir / "audit_log.jsonl"
     if not path.exists():
         return ["audit_log.jsonl: missing"]
     with path.open("r", encoding="utf-8") as handle:
@@ -329,6 +337,17 @@ def validate_agent_workflows_data(
         return errors + [f"{label}: workflows.publish_pr must be an object"]
     if publish_pr.get("executor") != "python3 scripts/publish_pr.py":
         errors.append(f"{label}: workflows.publish_pr.executor must be 'python3 scripts/publish_pr.py'")
+    full = workflows.get("full_agent_workflow")
+    if not isinstance(full, dict):
+        errors.append(f"{label}: workflows.full_agent_workflow must be an object")
+    else:
+        executor = full.get("executor")
+        if not isinstance(executor, str) or "--run-id {run_id}" not in executor:
+            errors.append(f"{label}: workflows.full_agent_workflow.executor must pass the shared run id")
+        if not isinstance(executor, str) or "--artifacts-dir {artifacts_dir}" not in executor:
+            errors.append(f"{label}: workflows.full_agent_workflow.executor must pass the run-scoped artifacts dir")
+        if not isinstance(executor, str) or "--create-worktree" not in executor:
+            errors.append(f"{label}: workflows.full_agent_workflow.executor must create a task worktree")
     mutation_rules = publish_pr.get("mutation_rules")
     if not isinstance(mutation_rules, list) or not any("git add -A" in rule for rule in mutation_rules):
         errors.append(f"{label}: workflows.publish_pr.mutation_rules must forbid git add -A")
@@ -502,16 +521,28 @@ def validate_profile_command_selection(
     return errors
 
 
-def main() -> int:
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--artifacts-dir",
+        type=Path,
+        default=ARTIFACTS,
+        help="Validate task artifacts from this directory instead of root artifacts/.",
+    )
+    return parser.parse_args()
+
+
+def main(artifacts_dir: Path | None = None) -> int:
+    artifacts_root = (artifacts_dir or parse_args().artifacts_dir).resolve()
     errors: list[str] = []
     loaded_artifacts: dict[str, dict[str, Any]] = {}
-    for name, (artifact_path, schema_path) in JSON_ARTIFACTS.items():
+    for name, (artifact_path, schema_path) in json_artifacts(artifacts_root).items():
         data, artifact_errors = load_and_validate_json_artifact(name, artifact_path, schema_path)
         errors.extend(artifact_errors)
         if data is not None:
             loaded_artifacts[name] = data
 
-    errors.extend(validate_audit_log())
+    errors.extend(validate_audit_log(artifacts_root))
     policy_doc, policy_errors = load_yaml(POLICY, ".agent-policy.yaml")
     errors.extend(policy_errors)
     if policy_doc is not None:

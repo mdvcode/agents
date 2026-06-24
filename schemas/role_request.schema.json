@@ -1,0 +1,24 @@
+{
+  "required": [
+    "run_id",
+    "role",
+    "goal",
+    "repository",
+    "artifacts_dir",
+    "context_manifest",
+    "allowed_tools",
+    "token_budget",
+    "timeout_seconds"
+  ],
+  "types": {
+    "run_id": "str",
+    "role": "str",
+    "goal": "str",
+    "repository": "str",
+    "artifacts_dir": "str",
+    "context_manifest": "str",
+    "allowed_tools": "list",
+    "token_budget": "int",
+    "timeout_seconds": "int"
+  }
+}

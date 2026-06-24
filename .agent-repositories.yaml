@@ -20,7 +20,7 @@ repositories:
   flowfox:
     project_profile: flowfox
     expected_remotes:
-      - "git@github.com:ORG/flowfox.git"
+      - "https://github.com/primest-spec/flowfox.git"
     base_branch: main
     allowed_branch_prefixes:
       - "feat/"

@@ -1,0 +1,25 @@
+{
+  "evidence_required": true,
+  "evidence_collected": false,
+  "screenshots": [
+    {
+      "path": "/Users/user/agents/artifacts/flowfox-issue-1138-auth-turbopack-blocker.png",
+      "description": "Blocked local browser state showing redirect to /authentication/sign-in and Next.js Turbopack runtime error overlay."
+    }
+  ],
+  "console_errors": [
+    "Error: An unexpected Turbopack error occurred. Please see the output of `next dev` for more details."
+  ],
+  "network_errors": [],
+  "blockers": [
+    "Unauthenticated access to /campaigns/test-campaign/landing-pages/test-doc redirects to /authentication/sign-in.",
+    "Local sign-in page compilation under next dev --turbopack produced a Turbopack panic and 500."
+  ],
+  "local_url": "http://localhost:3000/campaigns/test-campaign/landing-pages/test-doc",
+  "dev_server": {
+    "command": "/Users/user/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node node_modules/next/dist/bin/next dev --turbopack",
+    "status": "started",
+    "notes": "bun run dev:web failed through system node v8.9.4; modern bundled Node started Next successfully before the auth/sign-in blocker."
+  },
+  "next_action": "Publish as draft with warning if policy dry-run allows publication."
+}

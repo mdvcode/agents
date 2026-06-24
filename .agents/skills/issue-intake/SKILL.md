@@ -1,3 +1,7 @@
+---
+name: issue-intake
+description: "Turn an issue or task into a traceable local work unit."
+---
 # Issue Intake Skill
 
 ## Purpose

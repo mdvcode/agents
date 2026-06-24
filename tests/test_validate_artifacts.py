@@ -353,3 +353,10 @@ def test_invalid_yaml_fails(tmp_path: Path) -> None:
     _, errors = validator.load_yaml(path, "bad.yaml")
     assert errors
     assert "invalid YAML" in errors[0]
+
+
+def test_json_artifacts_uses_custom_artifacts_dir(tmp_path: Path) -> None:
+    mapping = validator.json_artifacts(tmp_path)
+
+    assert mapping["risk"][0] == tmp_path / "risk.json"
+    assert mapping["risk"][1].name == "risk.schema.json"

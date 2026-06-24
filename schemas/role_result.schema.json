@@ -1,0 +1,46 @@
+{
+  "required": [
+    "status",
+    "next_action",
+    "summary",
+    "artifacts_created",
+    "blockers",
+    "warnings",
+    "tokens_used"
+  ],
+  "enums": {
+    "status": ["completed", "blocked", "failed", "awaiting_approval"],
+    "next_action": [
+      "continue",
+      "blocked",
+      "awaiting_approval",
+      "issue-intake",
+      "context-compiler",
+      "planner",
+      "risk-classifier",
+      "implementation-agent",
+      "test-generator",
+      "quality-runner",
+      "security-agent",
+      "frontend-qa-agent",
+      "architecture-consistency-agent",
+      "semantic-conflict-agent",
+      "reviewer",
+      "ci-repair-agent",
+      "orchestrator",
+      "eval-runner",
+      "report-agent",
+      "publication",
+      "completed"
+    ]
+  },
+  "types": {
+    "status": "str",
+    "next_action": "str",
+    "summary": "str",
+    "artifacts_created": "list",
+    "blockers": "list",
+    "warnings": "list",
+    "tokens_used": "int"
+  }
+}

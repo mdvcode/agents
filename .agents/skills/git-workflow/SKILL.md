@@ -1,3 +1,7 @@
+---
+name: git-workflow
+description: "Keep git branch, staging, commit, push, and PR publication safe and reviewable."
+---
 # Git Workflow Skill
 
 ## Purpose

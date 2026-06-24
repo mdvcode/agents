@@ -1,0 +1,38 @@
+{
+  "required": [
+    "run_id",
+    "role",
+    "goal",
+    "repository",
+    "artifacts_dir",
+    "project",
+    "project_profile",
+    "token_budget",
+    "allowed_tools",
+    "created_at",
+    "context_files",
+    "artifact_references",
+    "skill_references",
+    "previous_roles",
+    "retrieval_rules",
+    "raw_outputs_dir"
+  ],
+  "types": {
+    "run_id": "str",
+    "role": "str",
+    "goal": "str",
+    "repository": "str",
+    "artifacts_dir": "str",
+    "project": "str",
+    "project_profile": "str",
+    "token_budget": "int",
+    "allowed_tools": "list",
+    "created_at": "str",
+    "context_files": "list",
+    "artifact_references": "list",
+    "skill_references": "list",
+    "previous_roles": "list",
+    "retrieval_rules": "list",
+    "raw_outputs_dir": "str"
+  }
+}

@@ -245,13 +245,17 @@ def protected_path_blockers(
     change_set: dict[str, Any],
     policy: dict[str, Any],
     project_profile: str,
+    protected_patterns: Sequence[str] = (),
 ) -> list[str]:
-    if project_profile == "agent_workspace":
-        return []
-    flowfox = policy.get("projects", {}).get("flowfox", {})
-    protected = flowfox.get("protected_paths", [])
-    if not isinstance(protected, list):
-        return ["policy missing Flowfox protected_paths"]
+    if protected_patterns:
+        protected = list(protected_patterns)
+    else:
+        if project_profile == "agent_workspace":
+            return []
+        flowfox = policy.get("projects", {}).get("flowfox", {})
+        protected = flowfox.get("protected_paths", [])
+        if not isinstance(protected, list):
+            return ["policy missing Flowfox protected_paths"]
     return [
         path
         for path in change_set.get("include", [])
@@ -658,6 +662,7 @@ class Publisher:
         expected_remote: str = "",
         branch: str = "",
         base_branch: str = DEFAULT_BASE_BRANCH,
+        protected_patterns: Sequence[str] = (),
     ) -> PublicationResult:
         result = PublicationResult(target_repository=str(target_repo))
         profile = str(project_profile.get("project_profile", ""))
@@ -666,7 +671,7 @@ class Publisher:
         self.validate_orchestrator_decision(risk, verdict, result)
         if change_set.get("project_profile") != profile:
             result.errors.append("change_set project_profile does not match project_profile artifact")
-        for protected_path in protected_path_blockers(change_set, policy, profile):
+        for protected_path in protected_path_blockers(change_set, policy, profile, protected_patterns):
             result.errors.append(f"protected path in change set: {protected_path}")
         if branch:
             self.validate_publication_branch(branch, base_branch, result, allowed_branch_prefixes(policy))
@@ -1214,6 +1219,7 @@ class Publisher:
                 str(change_set.get("expected_remote", "")),
                 publication.branch,
                 publication.base_branch,
+                registry_record.protected_paths if registry_record is not None else (),
             )
             for field_name in ("command_results", "warnings", "errors"):
                 getattr(publication, field_name).extend(getattr(preflight, field_name))
