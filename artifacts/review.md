@@ -1,33 +1,19 @@
 # SUMMARY
 
-P3.1 adds a strict adapter/request/result path and run-scoped workflow context for the agent control-plane harness.
+P3.1b adds explicit role capability and output-contract metadata for the agent workflow, plus a production Codex CLI executor wrapper.
 
 # CORRECTNESS_FINDINGS
 
 - No blocking correctness finding in the focused review.
-- Missing adapter configuration now produces a blocked role result instead of a fake completed checkpoint.
-- `run_workflow.py` passes one `run_id` into `agent_role_runner.py`; role requests, manifests, artifacts, worktree metadata, and publication use that same id.
-- Planner, Risk, and Implementation now have runtime effect validation: non-empty run-scoped `plan.md`, schema-valid run-scoped `risk.json`, and no source-repository mutation when a task worktree is active.
-- HIGH risk creates an `awaiting_approval` runtime state before publication.
-
-# DJANGO_DRF_FINDINGS
-
-Not applicable for `agent_workspace`.
-
-# ARCHITECTURE_FINDINGS
-
-- The adapter is isolated under `scripts/adapters/codex_adapter.py`.
-- Context manifest generation is isolated in `scripts/context_compiler.py`.
-- Publication continues to use the existing safe `scripts/publish_pr.py` executor rather than duplicating git/PR logic.
-- Skills now have YAML frontmatter and are referenced progressively by role manifests instead of being loaded globally.
-
-# PROJECT_PROFILE_FINDINGS
-
-Selected profile `agent_workspace` is correct. The changed files are scripts, schemas, workflow config, tests, and task artifacts in `/Users/user/agents`.
+- `RoleRequest` now includes `prompt_path`, `output_contract`, `project_profile`, `expected_artifacts`, `allowed_tools`, and `filesystem_access`.
+- Context manifests now carry the same role-specific prompt, contract, expected artifact, tool, filesystem, and non-empty project profile metadata.
+- Critical role completion now depends on declared expected artifacts rather than planner/risk-only hard-coded checks.
+- JSON role artifacts are validated through declared artifact schemas where available.
+- The executor wrapper returns structured blocked results instead of tracebacks for bad input, missing command, command failure, timeout, or malformed role output.
 
 # POLICY_VIOLATIONS
 
-None identified in the P3.1 scope.
+None identified.
 
 # KNOWN_LESSON_CONFLICTS
 
@@ -35,8 +21,8 @@ No known lesson conflict identified. Flowfox-specific lessons are not applicable
 
 # SUGGESTED_PATCH
 
-No additional patch suggested before final checks.
+No additional patch suggested before handoff.
 
 # NOTES
 
-Full `make check` passed with 91 tests and 1 optional real Codex smoke test skipped.
+`make check` passed with 93 tests and 1 optional real Codex smoke test skipped.

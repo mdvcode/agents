@@ -92,6 +92,89 @@ if role == "risk-classifier":
     }), encoding="utf-8")
 elif role == "planner":
     (artifacts / "plan.md").write_text("# Plan\\n", encoding="utf-8")
+elif role == "quality-runner":
+    (artifacts / "quality.json").write_text(json.dumps({
+        "task": "test",
+        "project_profile": request["project_profile"],
+        "overall_status": "pass",
+        "checks": [],
+        "commands_attempted": [],
+        "focused_tests_passed": True,
+        "repository_checks_passed": True,
+        "coverage": "not measured",
+        "warnings": []
+    }), encoding="utf-8")
+elif role == "security-agent":
+    (artifacts / "security.md").write_text("# Security\\nNo issues.\\n", encoding="utf-8")
+elif role == "frontend-qa-agent":
+    (artifacts / "frontend_qa.json").write_text(json.dumps({
+        "evidence_required": False,
+        "evidence_collected": False,
+        "screenshots": [],
+        "console_errors": [],
+        "network_errors": [],
+        "blockers": [],
+        "local_url": "",
+        "dev_server": {},
+        "next_action": "continue"
+    }), encoding="utf-8")
+elif role == "architecture-consistency-agent":
+    (artifacts / "architecture_consistency.json").write_text(json.dumps({
+        "consistency_status": "pass",
+        "findings": [],
+        "protected_boundaries": [],
+        "recommended_repairs": [],
+        "next_action": "continue"
+    }), encoding="utf-8")
+elif role == "semantic-conflict-agent":
+    (artifacts / "semantic_conflict.json").write_text(json.dumps({
+        "conflicts": [],
+        "risk_level": "low",
+        "required_resolution": [],
+        "next_action": "continue"
+    }), encoding="utf-8")
+elif role == "reviewer":
+    (artifacts / "review.md").write_text("# Review\\nNo findings.\\n", encoding="utf-8")
+elif role == "orchestrator":
+    (artifacts / "verdict.json").write_text(json.dumps({
+        "decision": "publish_pr",
+        "execution_status": "completed",
+        "task": "test",
+        "project_profile": request["project_profile"],
+        "risk_class": "medium",
+        "checks_attempted": True,
+        "checks_passed": True,
+        "blockers": [],
+        "warnings": [],
+        "high_risk_triggers": [],
+        "protected_paths_touched": [],
+        "publication_result": {
+            "commit_created": False,
+            "branch_pushed": False,
+            "pr_created_or_updated": False,
+            "pr_url": "",
+            "pr_state": "not_created"
+        },
+        "flowfox_visual_evidence": {
+            "required": False,
+            "provided": False,
+            "items": []
+        },
+        "approval_required_before_publish": False,
+        "approval_required_before_merge": True,
+        "reasoning_summary": [],
+        "next_actions": [],
+        "lessons_updated": False
+    }), encoding="utf-8")
+elif role == "eval-runner":
+    (artifacts / "eval_runner.json").write_text(json.dumps({
+        "evals_run": [],
+        "regressions": [],
+        "coverage_gaps": [],
+        "next_action": "continue"
+    }), encoding="utf-8")
+elif role == "report-agent":
+    (artifacts / "report.md").write_text("# Report\\nDone.\\n", encoding="utf-8")
 print(json.dumps({
     "status": "completed",
     "next_action": "continue",

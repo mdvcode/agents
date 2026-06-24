@@ -1,30 +1,24 @@
 {
   "risk_class": "medium",
   "reasons": [
-    "Changes workflow execution, adapter behavior, run-scoped artifacts, validation routing, and publication orchestration.",
+    "Changes workflow execution contracts, adapter request shape, role capability routing, and completion gates.",
     "No production infrastructure, auth, billing, payment, migration, credential, or secret-management files are in scope."
   ],
   "changed_areas": [
     "scripts/adapters/codex_adapter.py",
+    "scripts/adapters/codex_cli_executor.py",
     "scripts/context_compiler.py",
     "scripts/agent_role_runner.py",
-    "scripts/run_workflow.py",
-    "scripts/validate_artifacts.py",
-    "scripts/worktree_manager.py",
-    "scripts/security_scan.py",
-    ".agent-workflows.yaml",
-    ".agent-repositories.yaml",
-    ".agents/skills/*/SKILL.md",
+    ".agent-role-capabilities.yaml",
+    ".agent-role-contracts.yaml",
     "schemas/context_manifest.schema.json",
     "schemas/role_request.schema.json",
-    "schemas/role_result.schema.json",
+    "schemas/roles/*.schema.json",
     "tests/test_codex_adapter.py",
     "tests/test_agent_role_runner.py",
     "tests/test_context_compiler.py",
     "tests/test_full_agent_workflow.py",
-    "tests/test_real_codex_smoke.py",
-    "tests/test_security_scan.py",
-    "tests/test_validate_artifacts.py"
+    "artifacts/*"
   ],
   "high_risk_triggers": [],
   "protected_paths_touched": [],

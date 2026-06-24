@@ -6,24 +6,23 @@ Reason: This task changes the local agent workflow harness, schemas, tests, and 
 
 # Changes
 
-- Added `scripts/adapters/codex_adapter.py` for strict external role execution via `AGENT_CODEX_COMMAND` / `AGENT_LLM_COMMAND`.
-- Added `scripts/context_compiler.py` and context manifest/request/result schemas.
-- Reworked `scripts/agent_role_runner.py` to use one run id, run-scoped artifacts, per-role context manifests, strict role result validation, task worktree setup, high-risk approval stop, and `publish_pr.py` for publication.
-- Updated `scripts/run_workflow.py`, `scripts/validate_artifacts.py`, `scripts/worktree_manager.py`, `scripts/publish_pr.py`, and `.agent-workflows.yaml` for unified run context and run-scoped validation.
-- Added focused and integration tests for adapter behavior, blocked missing-adapter behavior, custom artifacts dir validation, and worktree isolation.
-- Added runtime artifact enforcement for Planner `plan.md`, Risk `risk.json`, and Implementation source-repository isolation.
-- Added HIGH-risk approval gate regression coverage, real `publish_pr.py` invocation coverage, optional real Codex smoke coverage, CI diff fail-closed behavior, and role-scoped skill references.
-- Added YAML frontmatter to local `.agents/skills/*/SKILL.md` files.
+- Added `.agent-role-capabilities.yaml` for per-role tools and filesystem access metadata.
+- Added `.agent-role-contracts.yaml` for prompt paths, role output contract paths, expected artifacts, and artifact schemas.
+- Added `scripts/adapters/codex_cli_executor.py` as a production stdin/stdout executor wrapper for a configured Codex CLI command.
+- Extended `RoleRequest` and context manifests with prompt, contract, project profile, expected artifact, tool, and filesystem metadata.
+- Added role-specific schemas under `schemas/roles/`.
+- Reworked role artifact validation to enforce declared completion gates across critical roles.
+- Updated adapter/runner/context compiler tests for the richer contracts and executor behavior.
 
 # Checks
 
-- Pass: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_codex_adapter.py tests/test_agent_role_runner.py tests/test_run_workflow.py tests/test_validate_artifacts.py tests/test_full_agent_workflow.py` (30 passed)
-- Pass: `make check` (artifact validation passed; security scan passed; 91 pytest tests passed; 1 optional real Codex smoke test skipped; diff whitespace check passed)
+- Pass: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_codex_adapter.py tests/test_agent_role_runner.py tests/test_context_compiler.py tests/test_full_agent_workflow.py` (14 passed)
+- Pass: `make check` (artifact validation passed; security scan passed; JSON artifacts valid; 93 pytest tests passed; 1 optional real Codex smoke test skipped)
 - Pass: `make security` (no obvious secrets, private keys, private paths, or protected staged files found)
 
 # Risk
 
-Medium. The change modifies orchestration and publication routing behavior but does not touch protected production/auth/billing/secret paths.
+Medium. The change modifies orchestration and execution contracts but does not touch protected production/auth/billing/secret paths.
 
 # Blockers
 
@@ -31,4 +30,4 @@ None currently known.
 
 # Next Action
 
-Review the P3.1 patch. Publication should use `publish_pr.py` only after excluding unrelated dirty Flowfox artifacts and journals from the staged set.
+Review the P3.1b patch. The next implementation slice after this is P3.2 dynamic routing and bounded repair loops.

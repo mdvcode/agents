@@ -1,6 +1,6 @@
 # SUMMARY
 
-`make security` passed. Focused review found no new secret literals, production credentials, auth, billing, payment, migration, or deployment changes in the P3.1 patch.
+`make security` passed for the P3.1b role executor contract patch.
 
 # PROJECT_PROFILE
 
@@ -12,22 +12,17 @@ None identified.
 
 # MEDIUM
 
-- Workflow orchestration now shells out to a configured adapter command. The implementation uses `shlex.split`, captures output, applies timeouts, and treats missing/nonzero/malformed adapter output as blocked instead of successful.
-- Publication is routed through `scripts/publish_pr.py` with run-scoped artifacts and the shared run id. HIGH risk is stopped before publication.
-- CI changed-file security scanning now fails closed when the requested base/head diff cannot be computed.
+- The new `scripts/adapters/codex_cli_executor.py` shells out to a configured Codex CLI command. It uses `shlex.split`, never `shell=True`, applies a timeout, captures output, and converts missing, non-executable, nonzero, timed-out, and malformed responses into structured blocked role results.
+- Role-specific filesystem/tool permissions are now declared and propagated in role requests and context manifests. Runtime sandbox enforcement remains the responsibility of the configured executor/CLI environment.
 
 # LOW
 
-- Raw adapter stdout/stderr is stored under `.agent-runs/<run-id>/raw/` and is excluded from context manifests.
-- Skill references in context manifests point to local skill files with YAML frontmatter; skill bodies are not globally copied into every role context.
-
-# DJANGO_SECURITY_NOTES
-
-Not applicable.
+- Role output contracts are loaded from repository-local schema paths.
+- Raw role command output remains under run-scoped `.agent-runs/<run-id>/raw/` through the adapter.
 
 # SECRETS
 
-No hardcoded secret or token was added intentionally.
+No hardcoded secrets, private keys, credentials, tokens, auth, billing, payment, migration, or production infrastructure changes were introduced.
 
 # DEPENDENCY_RISKS
 

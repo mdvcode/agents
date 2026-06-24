@@ -1,13 +1,15 @@
 {
   "decision": "publish_pr",
   "execution_status": "planned",
-  "task": "P3.1 real Codex adapter and unified run context",
+  "task": "P3.1b production Codex role executor contracts",
   "project_profile": "agent_workspace",
   "risk_class": "medium",
   "checks_attempted": true,
   "checks_passed": true,
   "blockers": [],
-  "warnings": [],
+  "warnings": [
+    "Optional real Codex smoke test skipped unless explicitly enabled with AGENT_REAL_CODEX_SMOKE=1 and AGENT_CODEX_COMMAND."
+  ],
   "high_risk_triggers": [],
   "protected_paths_touched": [],
   "publication_result": {
@@ -25,13 +27,13 @@
   "approval_required_before_publish": false,
   "approval_required_before_merge": true,
   "reasoning_summary": [
-    "The task changes the local agent control-plane harness and remains within agent_workspace profile.",
-    "Risk is medium because orchestration and publication routing behavior changed.",
-    "No high-risk protected areas are touched."
+    "The task stays within the agent_workspace profile.",
+    "Risk is medium because role execution contracts and workflow gates changed.",
+    "Required local verification passed; publication has not been run in this turn."
   ],
   "next_actions": [
-    "Review the P3.1 patch.",
-    "Use publish_pr.py only after unrelated dirty Flowfox artifacts and journals are excluded from the staged set."
+    "Review the P3.1b patch.",
+    "Implement P3.2 dynamic routing and bounded repair loops as the next slice."
   ],
   "lessons_updated": false
 }

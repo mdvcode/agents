@@ -7,6 +7,7 @@ import json
 import os
 import shlex
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,6 +59,20 @@ def validate_contract(data: dict[str, Any], schema: dict[str, Any], label: str) 
     return errors
 
 
+def contract_section(schema: dict[str, Any], section: str) -> dict[str, Any]:
+    selected = schema.get(section)
+    if isinstance(selected, dict):
+        return selected
+    return schema
+
+
+def resolve_contract_path(path_value: str) -> Path:
+    path = Path(path_value)
+    if path.is_absolute():
+        return path
+    return ROOT / path
+
+
 def configured_command(command: str = "") -> str:
     return command or os.environ.get("AGENT_CODEX_COMMAND", "") or os.environ.get("AGENT_LLM_COMMAND", "")
 
@@ -98,6 +113,7 @@ class CodexAdapter:
 
         payload = json.dumps(request, ensure_ascii=False)
         started = datetime.now(timezone.utc).isoformat()
+        started_monotonic = time.monotonic()
         try:
             completed = subprocess.run(
                 shlex.split(command),
@@ -119,6 +135,7 @@ class CodexAdapter:
             return blocked_result("Codex adapter command is not executable.", [str(exc)])
 
         self._write_raw(request, started, completed.returncode, completed.stdout, completed.stderr)
+        duration_ms = int((time.monotonic() - started_monotonic) * 1000)
         if completed.returncode != 0:
             output = (completed.stderr or completed.stdout).strip()
             return blocked_result("Codex adapter command failed.", [output or f"exit {completed.returncode}"])
@@ -128,6 +145,13 @@ class CodexAdapter:
             return blocked_result("Codex adapter returned malformed JSON.", [f"{exc.msg} at line {exc.lineno}"])
         if not isinstance(result, dict):
             return blocked_result("Codex adapter returned a non-object JSON value.", ["role result must be an object"])
+        result.setdefault("duration_ms", duration_ms)
+        output_contract = request.get("output_contract")
+        if isinstance(output_contract, str) and output_contract:
+            try:
+                result_schema = contract_section(load_json(resolve_contract_path(output_contract)), "role_result")
+            except (OSError, json.JSONDecodeError, ContractError) as exc:
+                return blocked_result("Role output contract could not be loaded.", [str(exc)])
         result_errors = validate_contract(result, result_schema, "role_result")
         if result_errors:
             return blocked_result("Codex adapter result failed schema validation.", result_errors)

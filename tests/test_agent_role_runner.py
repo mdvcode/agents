@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import stat
 import subprocess
@@ -113,6 +114,13 @@ def test_agent_role_runner_invokes_adapter_for_core_roles(tmp_path: Path, monkey
     assert (tmp_path / "impl.txt").read_text(encoding="utf-8") == "implemented\n"
     assert (tmp_path / ".agent-runs" / "run-2" / "requests" / "planner.json").exists()
     assert (tmp_path / ".agent-runs" / "run-2" / "context" / "planner.json").exists()
+    request = json.loads((tmp_path / ".agent-runs" / "run-2" / "requests" / "planner.json").read_text(encoding="utf-8"))
+    assert request["prompt_path"] == ".agents/prompts/planner.md"
+    assert request["output_contract"] == "schemas/roles/planner.schema.json"
+    assert request["project_profile"] == "agent_workspace"
+    assert request["expected_artifacts"] == ["plan.md"]
+    assert request["filesystem_access"] == "read_only"
+    assert request["allowed_tools"] == ["filesystem_read", "repository_search"]
 
 
 def test_implementation_artifact_validation_detects_source_repo_mutation(tmp_path: Path) -> None:

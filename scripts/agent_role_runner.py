@@ -17,8 +17,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from adapters.codex_adapter import CodexAdapter, load_json, validate_contract
-from context_compiler import create_context_manifest
+from adapters.codex_adapter import CodexAdapter, contract_section, load_json, validate_contract
+from context_compiler import create_context_manifest, role_capability, role_contract
 from repository_registry import RepositoryRecord, find_by_remote
 from validate_artifacts import validate_required as validate_artifact_required
 from worktree_manager import create_worktree, slug
@@ -67,6 +67,7 @@ PROMPT_FILES = {
     "report-agent": "report-agent.md",
 }
 DEFAULT_ALLOWED_TOOLS = ["filesystem_read", "repository_search"]
+KNOWN_PROJECT_PROFILES = {"agent_workspace", "django", "flowfox"}
 
 
 def make_run_id(workflow: str) -> str:
@@ -136,6 +137,19 @@ def validate_manifest(path: Path, role: str) -> list[str]:
     return validate_contract(data, load_json(SCHEMAS / "context_manifest.schema.json"), f"{role} context_manifest")
 
 
+def project_profile_for(project: str) -> str:
+    return project if project in KNOWN_PROJECT_PROFILES else "agent_workspace"
+
+
+def role_tools(role: str) -> list[str]:
+    tools = role_capability(role).get("tools", DEFAULT_ALLOWED_TOOLS)
+    return list(tools) if isinstance(tools, list) else list(DEFAULT_ALLOWED_TOOLS)
+
+
+def role_filesystem_access(role: str) -> str:
+    return str(role_capability(role).get("filesystem", "read_only"))
+
+
 def safe_artifact_name(value: Any) -> bool:
     if not isinstance(value, str) or not value:
         return False
@@ -190,25 +204,40 @@ def validate_role_artifacts(
     create_task_worktree: bool,
 ) -> list[str]:
     errors: list[str] = []
+    contract = role_contract(role)
     for artifact in result.get("artifacts_created", []):
         if not safe_artifact_name(artifact):
             errors.append(f"{role}: artifacts_created contains unsafe path {artifact!r}")
-    if role == "planner":
-        plan = artifacts_dir / "plan.md"
-        if not plan.exists() or not plan.read_text(encoding="utf-8").strip():
-            errors.append("planner must create non-empty run-scoped plan.md")
-    if role == "risk-classifier":
-        risk_path = artifacts_dir / "risk.json"
-        if not risk_path.exists():
-            errors.append("risk-classifier must create run-scoped risk.json")
-        else:
+    for expected in contract.get("expected_artifacts", []):
+        if not safe_artifact_name(expected):
+            errors.append(f"{role}: expected artifact uses unsafe path {expected!r}")
+            continue
+        expected_path = artifacts_dir / expected
+        if not expected_path.exists():
+            errors.append(f"{role} must create run-scoped {expected}")
+            continue
+        if expected_path.is_file() and not expected_path.read_text(encoding="utf-8").strip():
+            errors.append(f"{role} must create non-empty run-scoped {expected}")
+
+    artifact_schemas = contract.get("artifact_schemas", {})
+    if isinstance(artifact_schemas, dict):
+        for artifact, schema_path in artifact_schemas.items():
+            if not isinstance(artifact, str) or not isinstance(schema_path, str):
+                errors.append(f"{role}: artifact_schemas entries must be string paths")
+                continue
+            if not safe_artifact_name(artifact):
+                errors.append(f"{role}: artifact schema uses unsafe artifact path {artifact!r}")
+                continue
+            artifact_path = artifacts_dir / artifact
+            if not artifact_path.exists():
+                continue
             try:
-                risk = load_json(risk_path)
-                errors.extend(
-                    validate_artifact_required(risk, load_json(SCHEMAS / "risk.schema.json"), "risk.json")
-                )
+                data = load_json(artifact_path)
+                schema_file = Path(schema_path)
+                schema = load_json(schema_file if schema_file.is_absolute() else ROOT / schema_file)
+                errors.extend(validate_artifact_required(data, contract_section(schema, "artifact"), artifact))
             except (OSError, json.JSONDecodeError, ValueError) as exc:
-                errors.append(f"risk.json is invalid: {exc}")
+                errors.append(f"{artifact} is invalid: {exc}")
     if role == "implementation-agent" and create_task_worktree and worktree.resolve() != source_repository.resolve():
         source_snapshot_after = git_snapshot(source_repository)
         if source_snapshot_after != source_snapshot_before:
@@ -289,7 +318,9 @@ def build_role_request(
     context_manifest: Path,
     token_budget: int,
     timeout_seconds: int,
+    project_profile: str,
 ) -> dict[str, Any]:
+    contract = role_contract(role)
     return {
         "run_id": run_id,
         "role": role,
@@ -297,7 +328,12 @@ def build_role_request(
         "repository": str(repository.resolve()),
         "artifacts_dir": str(artifacts_dir.resolve()),
         "context_manifest": str(context_manifest.resolve()),
-        "allowed_tools": list(DEFAULT_ALLOWED_TOOLS),
+        "prompt_path": str(contract.get("prompt_path", "")),
+        "output_contract": str(contract.get("output_contract", "schemas/role_result.schema.json")),
+        "project_profile": project_profile,
+        "expected_artifacts": list(contract.get("expected_artifacts", [])),
+        "allowed_tools": role_tools(role),
+        "filesystem_access": role_filesystem_access(role),
         "token_budget": token_budget,
         "timeout_seconds": timeout_seconds,
     }
@@ -400,8 +436,10 @@ def run_context_compiler(
     worktree: Path,
     artifacts_dir: Path,
     context_dir: Path,
+    project_profile: str,
     token_budget: int,
 ) -> dict[str, Any]:
+    contract = role_contract("planner")
     manifest_path = create_context_manifest(
         run_id=run_id,
         role="planner",
@@ -410,10 +448,14 @@ def run_context_compiler(
         artifacts_dir=artifacts_dir,
         context_dir=context_dir,
         project=project,
-        project_profile="",
+        project_profile=project_profile,
         token_budget=token_budget,
-        allowed_tools=DEFAULT_ALLOWED_TOOLS,
+        allowed_tools=role_tools("planner"),
         previous_roles=["issue-intake", "context-compiler"],
+        filesystem_access=role_filesystem_access("planner"),
+        prompt_path=str(contract.get("prompt_path", "")),
+        output_contract=str(contract.get("output_contract", "")),
+        expected_artifacts=list(contract.get("expected_artifacts", [])),
     )
     manifest_errors = validate_manifest(manifest_path, "planner")
     if manifest_errors:
@@ -448,6 +490,7 @@ def run_roles(
     run_id = run_id or make_run_id(workflow)
     run_dir = RUNS / run_id
     run_artifacts = (artifacts_dir or run_dir / "artifacts").resolve()
+    project_profile = project_profile_for(project)
     context_dir = run_dir / "context"
     requests_dir = run_dir / "requests"
     raw_dir = run_dir / "raw"
@@ -470,6 +513,7 @@ def run_roles(
         "task_id": task_id,
         "goal": goal,
         "project": project,
+        "project_profile": project_profile,
         "repository": str(repository),
         "worktree": str(worktree.resolve()),
         "branch": effective_branch,
@@ -519,6 +563,7 @@ def run_roles(
                 worktree=worktree,
                 artifacts_dir=run_artifacts,
                 context_dir=context_dir,
+                project_profile=project_profile,
                 token_budget=token_budget,
             )
         elif role == "publication":
@@ -530,6 +575,7 @@ def run_roles(
                 timeout_seconds=timeout_seconds,
             )
         else:
+            contract = role_contract(role)
             manifest_path = create_context_manifest(
                 run_id=run_id,
                 role=role,
@@ -538,10 +584,14 @@ def run_roles(
                 artifacts_dir=run_artifacts,
                 context_dir=context_dir,
                 project=project,
-                project_profile="",
+                project_profile=project_profile,
                 token_budget=token_budget,
-                allowed_tools=DEFAULT_ALLOWED_TOOLS,
+                allowed_tools=role_tools(role),
                 previous_roles=completed_roles,
+                filesystem_access=role_filesystem_access(role),
+                prompt_path=str(contract.get("prompt_path", "")),
+                output_contract=str(contract.get("output_contract", "")),
+                expected_artifacts=list(contract.get("expected_artifacts", [])),
             )
             manifest_errors = validate_manifest(manifest_path, role)
             if manifest_errors:
@@ -556,6 +606,7 @@ def run_roles(
                     context_manifest=manifest_path,
                     token_budget=token_budget,
                     timeout_seconds=timeout_seconds,
+                    project_profile=project_profile,
                 )
                 write_json(requests_dir / f"{role}.json", request)
                 result = adapter.invoke(request)
@@ -569,8 +620,8 @@ def run_roles(
                 result=result,
                 artifacts_dir=run_artifacts,
                 worktree=worktree,
-            source_repository=repository,
-            source_snapshot_before=source_snapshot_before,
+                source_repository=repository,
+                source_snapshot_before=source_snapshot_before,
                 create_task_worktree=create_task_worktree,
             )
             if artifact_errors:

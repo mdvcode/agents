@@ -1,0 +1,92 @@
+version: 1
+default:
+  prompt_path: ""
+  output_contract: schemas/role_result.schema.json
+  expected_artifacts: []
+  artifact_schemas: {}
+roles:
+  context-compiler:
+    prompt_path: .agents/prompts/context-compiler.md
+    output_contract: schemas/role_result.schema.json
+    expected_artifacts: []
+  planner:
+    prompt_path: .agents/prompts/planner.md
+    output_contract: schemas/roles/planner.schema.json
+    expected_artifacts:
+      - plan.md
+  risk-classifier:
+    prompt_path: .agents/prompts/risk-classifier.md
+    output_contract: schemas/roles/risk-classifier.schema.json
+    expected_artifacts:
+      - risk.json
+    artifact_schemas:
+      risk.json: schemas/risk.schema.json
+  implementation-agent:
+    prompt_path: .agents/prompts/implementation-agent.md
+    output_contract: schemas/role_result.schema.json
+    expected_artifacts: []
+  test-generator:
+    prompt_path: .agents/prompts/test-generator.md
+    output_contract: schemas/role_result.schema.json
+    expected_artifacts: []
+  quality-runner:
+    prompt_path: .agents/prompts/quality-runner.md
+    output_contract: schemas/roles/quality-runner.schema.json
+    expected_artifacts:
+      - quality.json
+    artifact_schemas:
+      quality.json: schemas/roles/quality-runner.schema.json
+  security-agent:
+    prompt_path: .agents/prompts/security-agent.md
+    output_contract: schemas/roles/security-agent.schema.json
+    expected_artifacts:
+      - security.md
+  frontend-qa-agent:
+    prompt_path: .agents/prompts/frontend-qa-agent.md
+    output_contract: schemas/roles/frontend-qa-agent.schema.json
+    expected_artifacts:
+      - frontend_qa.json
+    artifact_schemas:
+      frontend_qa.json: schemas/roles/frontend-qa-agent.schema.json
+  architecture-consistency-agent:
+    prompt_path: .agents/prompts/architecture-consistency-agent.md
+    output_contract: schemas/roles/architecture-consistency.schema.json
+    expected_artifacts:
+      - architecture_consistency.json
+    artifact_schemas:
+      architecture_consistency.json: schemas/roles/architecture-consistency.schema.json
+  semantic-conflict-agent:
+    prompt_path: .agents/prompts/semantic-conflict-agent.md
+    output_contract: schemas/roles/semantic-conflict.schema.json
+    expected_artifacts:
+      - semantic_conflict.json
+    artifact_schemas:
+      semantic_conflict.json: schemas/roles/semantic-conflict.schema.json
+  reviewer:
+    prompt_path: .agents/prompts/reviewer.md
+    output_contract: schemas/roles/reviewer.schema.json
+    expected_artifacts:
+      - review.md
+  ci-repair-agent:
+    prompt_path: .agents/prompts/ci-repair-agent.md
+    output_contract: schemas/role_result.schema.json
+    expected_artifacts: []
+  orchestrator:
+    prompt_path: .agents/prompts/orchestrator.md
+    output_contract: schemas/roles/orchestrator.schema.json
+    expected_artifacts:
+      - verdict.json
+    artifact_schemas:
+      verdict.json: schemas/verdict.schema.json
+  eval-runner:
+    prompt_path: .agents/prompts/eval-runner.md
+    output_contract: schemas/roles/eval-runner.schema.json
+    expected_artifacts:
+      - eval_runner.json
+    artifact_schemas:
+      eval_runner.json: schemas/roles/eval-runner.schema.json
+  report-agent:
+    prompt_path: .agents/prompts/report-agent.md
+    output_contract: schemas/roles/report-agent.schema.json
+    expected_artifacts:
+      - report.md

@@ -8,9 +8,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS = ROOT / ".agents" / "skills"
+ROLE_CAPABILITIES = ROOT / ".agent-role-capabilities.yaml"
+ROLE_CONTRACTS = ROOT / ".agent-role-contracts.yaml"
 ROLE_SKILLS = {
     "issue-intake": ["issue-intake", "repo-policy", "context-engineering"],
     "context-compiler": ["context-engineering", "repo-policy"],
@@ -30,6 +34,36 @@ ROLE_SKILLS = {
     "report-agent": ["structured-output-guard"],
     "publication": ["git-workflow", "release-safety", "repo-policy"],
 }
+
+
+def load_yaml_mapping(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle)
+    return data if isinstance(data, dict) else {}
+
+
+def role_capability(role: str) -> dict[str, Any]:
+    data = load_yaml_mapping(ROLE_CAPABILITIES)
+    default = data.get("default", {})
+    roles = data.get("roles", {})
+    capability = dict(default if isinstance(default, dict) else {})
+    if isinstance(roles, dict) and isinstance(roles.get(role), dict):
+        capability.update(roles[role])
+    return capability
+
+
+def role_contract(role: str) -> dict[str, Any]:
+    data = load_yaml_mapping(ROLE_CONTRACTS)
+    default = data.get("default", {})
+    roles = data.get("roles", {})
+    contract = dict(default if isinstance(default, dict) else {})
+    if isinstance(roles, dict) and isinstance(roles.get(role), dict):
+        contract.update(roles[role])
+    contract.setdefault("expected_artifacts", [])
+    contract.setdefault("artifact_schemas", {})
+    return contract
 
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
@@ -78,7 +112,18 @@ def create_context_manifest(
     token_budget: int,
     allowed_tools: Sequence[str],
     previous_roles: Sequence[str],
+    filesystem_access: str = "",
+    prompt_path: str = "",
+    output_contract: str = "",
+    expected_artifacts: Sequence[str] = (),
 ) -> Path:
+    capability = role_capability(role)
+    contract = role_contract(role)
+    tools = list(allowed_tools) or list(capability.get("tools", []))
+    filesystem = filesystem_access or str(capability.get("filesystem", "read_only"))
+    prompt = prompt_path or str(contract.get("prompt_path", ""))
+    contract_path = output_contract or str(contract.get("output_contract", ""))
+    artifacts = list(expected_artifacts) or list(contract.get("expected_artifacts", []))
     manifest = {
         "run_id": run_id,
         "role": role,
@@ -88,7 +133,11 @@ def create_context_manifest(
         "project": project,
         "project_profile": project_profile,
         "token_budget": token_budget,
-        "allowed_tools": list(allowed_tools),
+        "allowed_tools": tools,
+        "filesystem_access": filesystem,
+        "prompt_path": prompt,
+        "output_contract": contract_path,
+        "expected_artifacts": artifacts,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "context_files": [
             {"path": str((ROOT / "AGENTS.md").resolve()), "kind": "policy"},

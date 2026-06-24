@@ -41,6 +41,7 @@
     "artifacts_created": "list",
     "blockers": "list",
     "warnings": "list",
-    "tokens_used": "int"
+    "tokens_used": "int",
+    "duration_ms": "int"
   }
 }

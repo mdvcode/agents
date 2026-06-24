@@ -36,6 +36,35 @@ def test_context_manifest_references_role_scoped_skills(tmp_path: Path) -> None:
     assert {"context-engineering", "repo-policy", "structured-output-guard"}.issubset(skill_names)
 
 
+def test_context_manifest_records_role_capabilities_and_contract(tmp_path: Path) -> None:
+    contract = context_compiler.role_contract("implementation-agent")
+    path = context_compiler.create_context_manifest(
+        run_id="run-2",
+        role="implementation-agent",
+        goal="Patch a task",
+        repository=tmp_path,
+        artifacts_dir=tmp_path / "artifacts",
+        context_dir=tmp_path / "context",
+        project="agent_workspace",
+        project_profile="agent_workspace",
+        token_budget=12000,
+        allowed_tools=[],
+        previous_roles=["planner"],
+        filesystem_access=context_compiler.role_capability("implementation-agent")["filesystem"],
+        prompt_path=contract["prompt_path"],
+        output_contract=contract["output_contract"],
+        expected_artifacts=contract["expected_artifacts"],
+    )
+
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+
+    assert manifest["project_profile"] == "agent_workspace"
+    assert manifest["prompt_path"] == ".agents/prompts/implementation-agent.md"
+    assert manifest["output_contract"] == "schemas/role_result.schema.json"
+    assert manifest["filesystem_access"] == "task_worktree_write"
+    assert "apply_patch" in manifest["allowed_tools"]
+
+
 def test_local_skills_have_yaml_frontmatter() -> None:
     skill_paths = sorted((Path(__file__).resolve().parents[1] / ".agents" / "skills").glob("*/SKILL.md"))
 
