@@ -127,6 +127,7 @@ def run_workflow(
     branch_value = branch or f"issue/{task_id}"
     repository_value = (repository or root).resolve()
     max_iterations = int(workflow.get("max_iterations", 1))
+    workflow_timeout_seconds = int(workflow.get("timeout_seconds", timeout_seconds))
     retry = workflow.get("retry", {})
     max_retries = int(retry.get("max_retries", 0)) if isinstance(retry, dict) else 0
     backoff_seconds = float(retry.get("backoff_seconds", 0)) if isinstance(retry, dict) else 0.0
@@ -165,7 +166,7 @@ def run_workflow(
             ):
                 command = command + " --dry-run"
             for attempt in range(1, max_retries + 2):
-                returncode, stdout, stderr = run_command(command, root, timeout_seconds)
+                returncode, stdout, stderr = run_command(command, root, workflow_timeout_seconds)
                 result = StepResult(name, command, attempt, returncode, stdout, stderr)
                 append_trace(run_dir, result.as_json())
                 if returncode == 0:

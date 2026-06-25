@@ -90,9 +90,16 @@ def artifact_references(artifacts_dir: Path) -> list[dict[str, str]]:
     return refs
 
 
-def skill_references(role: str) -> list[dict[str, str]]:
+def role_skill_names(role: str, project_profile: str) -> list[str]:
+    names = list(ROLE_SKILLS.get(role, []))
+    if project_profile == "flowfox" and role in {"implementation-agent", "ci-repair-agent"}:
+        names = [name for name in names if name != "python-standards"]
+    return names
+
+
+def skill_references(role: str, project_profile: str) -> list[dict[str, str]]:
     refs: list[dict[str, str]] = []
-    for skill_name in ROLE_SKILLS.get(role, []):
+    for skill_name in role_skill_names(role, project_profile):
         path = SKILLS / skill_name / "SKILL.md"
         if path.exists():
             refs.append({"name": skill_name, "path": str(path.resolve())})
@@ -146,7 +153,7 @@ def create_context_manifest(
             {"path": str((ROOT / ".agent-repositories.yaml").resolve()), "kind": "registry"},
         ],
         "artifact_references": artifact_references(artifacts_dir),
-        "skill_references": skill_references(role),
+        "skill_references": skill_references(role, project_profile),
         "previous_roles": list(previous_roles),
         "retrieval_rules": [
             "Read only the listed context files and artifacts needed for this role.",

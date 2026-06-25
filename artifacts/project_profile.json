@@ -2,14 +2,15 @@
   "project_profile": "agent_workspace",
   "confidence": "high",
   "reasons": [
-    "The active repository is the agent control-plane workspace.",
-    "Changed files are scripts, role contracts, tests, and artifacts under /Users/user/agents."
+    "The active repository is /Users/user/agents.",
+    "Changed files are agent workspace contracts, scripts, schemas, tests, and artifacts."
   ],
   "matched_markers": [
     "AGENTS.md",
     ".agent-policy.yaml",
     ".agent-project-profiles.yaml",
-    ".agents/**",
+    ".agent-role-capabilities.yaml",
+    ".agent-role-contracts.yaml",
     "scripts/**",
     "schemas/**",
     "tests/**"

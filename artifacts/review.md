@@ -2,8 +2,11 @@
 
 Findings: none after focused self-review.
 
-Notes:
-- Missing mandatory artifacts now produce a structured blocked role result from `codex_cli_executor.py`.
-- `agent_role_runner.py` preserves adapter-provided durations and fills `duration_ms` for internal roles/publication.
-- Publication now has a role contract requiring `publication.json` and validating it with `schemas/publication.schema.json`.
-- Tests cover the executor happy path, missing artifact failure, high-risk gate, low/medium publication routing, task-worktree mutation isolation, and a planner-to-reviewer production executor smoke path.
+Checked:
+- `codex_cli_executor.py` uses `codex exec` flags for JSONL, sandbox, approval policy, output schema, and last-message file.
+- Harness-owned artifact writing avoids requiring read-only roles to write control-plane files.
+- Read-only snapshot guard runs before harness artifact writes.
+- `publication-prepare` deterministically owns `change_set.json` and `publication_payload.json`.
+- Role contracts now assign ownership for implementation/test/CI artifacts.
+- Flowfox implementation context no longer receives Python-specific implementation standards.
+- Full workflow timeout can be set per workflow and is raised for `full_agent_workflow`.

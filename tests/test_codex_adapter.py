@@ -95,23 +95,33 @@ import sys
 from pathlib import Path
 
 prompt = sys.stdin.read()
+assert sys.argv[1] == "exec"
+assert "--json" in sys.argv
+assert "--sandbox" in sys.argv
+assert sys.argv[sys.argv.index("--sandbox") + 1] == "read-only"
+schema_path = Path(sys.argv[sys.argv.index("--output-schema") + 1])
+assert schema_path.exists()
+result_path = Path(sys.argv[sys.argv.index("--output-last-message") + 1])
 assert "Role execution request:" in prompt
 assert os.environ["AGENT_ROLE"] == "planner"
 assert os.environ["AGENT_ROLE_FILESYSTEM_ACCESS"] == "read_only"
-request_text = prompt.split("Role execution request:", 1)[1].split("Context manifest:", 1)[0]
-request = json.loads(request_text)
-artifacts = Path(request["artifacts_dir"])
-artifacts.mkdir(parents=True, exist_ok=True)
-(artifacts / "plan.md").write_text("# Plan\\n", encoding="utf-8")
-print(json.dumps({
+result_path.write_text(json.dumps({
     "status": "completed",
     "next_action": "continue",
     "summary": "planner done",
-    "artifacts_created": ["plan.md"],
+    "artifacts_created": [],
+    "artifacts": [{"path": "plan.md", "content": "# Plan\\n"}],
     "blockers": [],
     "warnings": [],
     "tokens_used": 5
-}))
+}), encoding="utf-8")
+print(json.dumps({"type": "thread.started", "thread_id": "thread-test"}))
+print(json.dumps({"type": "turn.completed", "usage": {
+    "input_tokens": 10,
+    "cached_input_tokens": 2,
+    "output_tokens": 4,
+    "reasoning_output_tokens": 1
+}}))
 """.lstrip(),
         encoding="utf-8",
     )
@@ -160,6 +170,9 @@ print(json.dumps({
     result = json.loads(completed.stdout)
     assert result["status"] == "completed", result
     assert result["summary"] == "planner done"
+    assert result["thread_id"] == "thread-test"
+    assert result["tokens_used"] == 14
+    assert (tmp_path / "artifacts" / "plan.md").read_text(encoding="utf-8") == "# Plan\n"
 
 
 def test_codex_cli_executor_blocks_when_required_artifact_missing(tmp_path: Path, monkeypatch: object) -> None:
@@ -168,15 +181,20 @@ def test_codex_cli_executor_blocks_when_required_artifact_missing(tmp_path: Path
     cli.write_text(
         """
 import json
-print(json.dumps({
+import sys
+from pathlib import Path
+
+result_path = Path(sys.argv[sys.argv.index("--output-last-message") + 1])
+result_path.write_text(json.dumps({
     "status": "completed",
     "next_action": "continue",
     "summary": "planner done",
     "artifacts_created": ["plan.md"],
+    "artifacts": [],
     "blockers": [],
     "warnings": [],
     "tokens_used": 5
-}))
+}), encoding="utf-8")
 """.lstrip(),
         encoding="utf-8",
     )
@@ -225,3 +243,81 @@ print(json.dumps({
     result = json.loads(completed.stdout)
     assert result["status"] == "blocked"
     assert result["summary"] == "Codex CLI completed without required artifacts."
+
+
+def test_codex_cli_executor_blocks_read_only_repository_mutation(tmp_path: Path, monkeypatch: object) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    (tmp_path / "tracked.txt").write_text("before\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    executor = Path(__file__).resolve().parents[1] / "scripts" / "adapters" / "codex_cli_executor.py"
+    cli = tmp_path / "fake_codex_cli.py"
+    cli.write_text(
+        """
+import json
+import sys
+from pathlib import Path
+
+Path("tracked.txt").write_text("after\\n", encoding="utf-8")
+result_path = Path(sys.argv[sys.argv.index("--output-last-message") + 1])
+result_path.write_text(json.dumps({
+    "status": "completed",
+    "next_action": "continue",
+    "summary": "planner done",
+    "artifacts_created": [],
+    "artifacts": [{"path": "plan.md", "content": "# Plan\\n"}],
+    "blockers": [],
+    "warnings": [],
+    "tokens_used": 5
+}), encoding="utf-8")
+""".lstrip(),
+        encoding="utf-8",
+    )
+    cli.chmod(cli.stat().st_mode | stat.S_IXUSR)
+    manifest = tmp_path / "context.json"
+    request = role_request(tmp_path)
+    manifest.write_text(
+        json.dumps(
+            {
+                "run_id": "run-1",
+                "role": "planner",
+                "goal": "Test",
+                "repository": str(tmp_path),
+                "artifacts_dir": str(tmp_path / "artifacts"),
+                "project": "agent_workspace",
+                "project_profile": "agent_workspace",
+                "token_budget": 12000,
+                "allowed_tools": ["filesystem_read"],
+                "filesystem_access": "read_only",
+                "prompt_path": ".agents/prompts/planner.md",
+                "output_contract": "schemas/roles/planner.schema.json",
+                "expected_artifacts": ["plan.md"],
+                "created_at": "2026-06-24T00:00:00+00:00",
+                "context_files": [],
+                "artifact_references": [],
+                "skill_references": [],
+                "previous_roles": [],
+                "retrieval_rules": [],
+                "raw_outputs_dir": str(tmp_path / "raw"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    request["context_manifest"] = str(manifest)
+    monkeypatch.setenv("AGENT_CODEX_CLI_COMMAND", f"{sys.executable} {cli}")
+
+    completed = subprocess.run(
+        [sys.executable, str(executor)],
+        input=json.dumps(request),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(completed.stdout)
+    assert result["status"] == "blocked"
+    assert result["summary"] == "Read-only role changed repository contents."

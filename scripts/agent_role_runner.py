@@ -46,9 +46,10 @@ ROLE_CHAIN = [
     "orchestrator",
     "eval-runner",
     "report-agent",
+    "publication-prepare",
     "publication",
 ]
-INTERNAL_ROLES = {"issue-intake", "context-compiler"}
+INTERNAL_ROLES = {"issue-intake", "context-compiler", "publication-prepare"}
 ADAPTER_ROLES = set(ROLE_CHAIN) - INTERNAL_ROLES - {"publication"}
 PROMPT_FILES = {
     "context-compiler": "context-compiler.md",
@@ -117,6 +118,18 @@ def blocked_result(summary: str, blockers: list[str]) -> dict[str, Any]:
     }
 
 
+def artifact_result(summary: str, artifacts_created: list[str], next_action: str = "continue") -> dict[str, Any]:
+    return {
+        "status": "completed",
+        "next_action": next_action,
+        "summary": summary,
+        "artifacts_created": artifacts_created,
+        "blockers": [],
+        "warnings": [],
+        "tokens_used": 0,
+    }
+
+
 def awaiting_approval_result(summary: str, blockers: list[str]) -> dict[str, Any]:
     return {
         "status": "awaiting_approval",
@@ -158,6 +171,32 @@ def safe_artifact_name(value: Any) -> bool:
     return not path.is_absolute() and ".." not in path.parts
 
 
+def ensure_project_profile_artifact(artifacts_dir: Path, project_profile: str) -> None:
+    path = artifacts_dir / "project_profile.json"
+    if path.exists():
+        return
+    write_json(
+        path,
+        {
+            "project_profile": project_profile,
+            "confidence": "high",
+            "reasons": ["Selected by the workflow project profile resolver."],
+            "matched_markers": [],
+            "quality_commands_selected": [],
+            "security_commands_selected": [],
+            "frontend_evidence_required": False,
+            "warnings": [],
+        },
+    )
+
+
+def ensure_deterministic_role_artifacts(role: str, artifacts_dir: Path, project_profile: str) -> list[str]:
+    if role != "planner":
+        return []
+    ensure_project_profile_artifact(artifacts_dir, project_profile)
+    return ["project_profile.json"]
+
+
 def git_snapshot(repo: Path) -> str:
     inside = subprocess.run(
         ["git", "rev-parse", "--is-inside-work-tree"],
@@ -192,6 +231,29 @@ def git_snapshot(repo: Path) -> str:
             if path.is_file():
                 digest.update(path.read_bytes())
     return digest.hexdigest()
+
+
+def changed_paths(repo: Path) -> list[str]:
+    paths: set[str] = set()
+    diff = subprocess.run(
+        ["git", "diff", "--name-only", "HEAD"],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if diff.returncode == 0:
+        paths.update(line.strip() for line in diff.stdout.splitlines() if line.strip())
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if untracked.returncode == 0:
+        paths.update(line.strip() for line in untracked.stdout.splitlines() if line.strip())
+    return sorted(paths)
 
 
 def validate_role_artifacts(
@@ -239,10 +301,14 @@ def validate_role_artifacts(
                 errors.extend(validate_artifact_required(data, contract_section(schema, "artifact"), artifact))
             except (OSError, json.JSONDecodeError, ValueError) as exc:
                 errors.append(f"{artifact} is invalid: {exc}")
-    if role == "implementation-agent" and create_task_worktree and worktree.resolve() != source_repository.resolve():
+    if (
+        role_filesystem_access(role) == "task_worktree_write"
+        and create_task_worktree
+        and worktree.resolve() != source_repository.resolve()
+    ):
         source_snapshot_after = git_snapshot(source_repository)
         if source_snapshot_after != source_snapshot_before:
-            errors.append("implementation-agent changed the source repository instead of only the task worktree")
+            errors.append(f"{role} changed the source repository instead of only the task worktree")
     return errors
 
 
@@ -472,6 +538,43 @@ def run_context_compiler(
     }
 
 
+def run_publication_prepare(
+    *,
+    task_id: str,
+    project_profile: str,
+    repository: Path,
+    artifacts_dir: Path,
+    base_branch: str,
+) -> dict[str, Any]:
+    include = changed_paths(repository)
+    write_json(
+        artifacts_dir / "change_set.json",
+        {
+            "target_repository": ".",
+            "project_profile": project_profile,
+            "task_id": task_id,
+            "expected_remote": git_remote(repository),
+            "include": include,
+            "exclude": [],
+        },
+    )
+    title = task_id.replace("-", " ").strip().title() or "Agent workflow update"
+    write_json(
+        artifacts_dir / "publication_payload.json",
+        {
+            "title": title,
+            "body": "Prepared by the deterministic publication-prepare step from the task worktree diff.",
+            "commit_message": title,
+            "base_branch": base_branch or "main",
+        },
+    )
+    return artifact_result(
+        "Publication inputs prepared from the task worktree diff.",
+        ["change_set.json", "publication_payload.json"],
+        "publication",
+    )
+
+
 def run_roles(
     workflow: str = "full_agent_workflow",
     run_id: str = "",
@@ -568,6 +671,14 @@ def run_roles(
                 project_profile=project_profile,
                 token_budget=token_budget,
             )
+        elif role == "publication-prepare":
+            result = run_publication_prepare(
+                task_id=task_id,
+                project_profile=project_profile,
+                repository=worktree,
+                artifacts_dir=run_artifacts,
+                base_branch=effective_base,
+            )
         elif role == "publication":
             result = run_publication(
                 run_id=run_id,
@@ -616,6 +727,13 @@ def run_roles(
         result_errors = validate_role_result(result, role)
         if result_errors:
             result = blocked_result("Role result failed schema validation.", result_errors)
+        deterministic_created = ensure_deterministic_role_artifacts(role, run_artifacts, project_profile)
+        if deterministic_created and result.get("status") == "completed":
+            created = list(result.get("artifacts_created", []))
+            for artifact in deterministic_created:
+                if artifact not in created:
+                    created.append(artifact)
+            result["artifacts_created"] = created
         result.setdefault("duration_ms", int((time.monotonic() - role_started) * 1000))
         if result.get("status") == "completed":
             artifact_errors = validate_role_artifacts(

@@ -4,6 +4,7 @@ workflows:
     description: "Run the full agent-role chain with one run id, task worktree, scoped context manifests, strict role results, and safe publication routing."
     executor: "python3 scripts/agent_role_runner.py --workflow full_agent_workflow --run-id {run_id} --task-id {task_id} --project {project} --repo {repository} --branch {branch} --base-branch {base_branch} --artifacts-dir {artifacts_dir} --create-worktree"
     max_iterations: 1
+    timeout_seconds: 7200
     retry:
       max_retries: 0
       backoff_seconds: 0

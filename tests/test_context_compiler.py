@@ -65,6 +65,28 @@ def test_context_manifest_records_role_capabilities_and_contract(tmp_path: Path)
     assert "apply_patch" in manifest["allowed_tools"]
 
 
+def test_flowfox_implementation_context_omits_python_standards(tmp_path: Path) -> None:
+    path = context_compiler.create_context_manifest(
+        run_id="run-3",
+        role="implementation-agent",
+        goal="Patch Flowfox",
+        repository=tmp_path,
+        artifacts_dir=tmp_path / "artifacts",
+        context_dir=tmp_path / "context",
+        project="flowfox",
+        project_profile="flowfox",
+        token_budget=12000,
+        allowed_tools=[],
+        previous_roles=["planner"],
+    )
+
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+
+    skill_names = {item["name"] for item in manifest["skill_references"]}
+    assert "python-standards" not in skill_names
+    assert "test-writing" in skill_names
+
+
 def test_local_skills_have_yaml_frontmatter() -> None:
     skill_paths = sorted((Path(__file__).resolve().parents[1] / ".agents" / "skills").glob("*/SKILL.md"))
 

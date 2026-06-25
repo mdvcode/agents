@@ -31,6 +31,8 @@ def load_json(path: Path) -> dict[str, Any]:
 
 
 def validate_contract(data: dict[str, Any], schema: dict[str, Any], label: str) -> list[str]:
+    if schema.get("type") == "object" and isinstance(schema.get("properties"), dict):
+        return validate_json_schema_object(data, schema, label)
     errors: list[str] = []
     type_map = {
         "str": str,
@@ -56,6 +58,39 @@ def validate_contract(data: dict[str, Any], schema: dict[str, Any], label: str) 
     for field, allowed in schema.get("enums", {}).items():
         if field in data and data[field] not in allowed:
             errors.append(f"{label}: field {field!r} has invalid value {data[field]!r}")
+    return errors
+
+
+def validate_json_schema_object(data: dict[str, Any], schema: dict[str, Any], label: str) -> list[str]:
+    errors: list[str] = []
+    type_map = {
+        "string": str,
+        "boolean": bool,
+        "array": list,
+        "object": dict,
+        "integer": int,
+        "number": (int, float),
+    }
+    properties = schema.get("properties", {})
+    for field in schema.get("required", []):
+        if field not in data:
+            errors.append(f"{label}: missing required field {field!r}")
+    for field, spec in properties.items():
+        if field not in data or not isinstance(spec, dict):
+            continue
+        type_name = spec.get("type")
+        expected = type_map.get(type_name)
+        if expected is not None and not isinstance(data[field], expected):
+            errors.append(
+                f"{label}: field {field!r} must be {type_name}, got {type(data[field]).__name__}"
+            )
+        allowed = spec.get("enum")
+        if isinstance(allowed, list) and data[field] not in allowed:
+            errors.append(f"{label}: field {field!r} has invalid value {data[field]!r}")
+    if schema.get("additionalProperties") is False:
+        extra = sorted(set(data) - set(properties))
+        for field in extra:
+            errors.append(f"{label}: unexpected field {field!r}")
     return errors
 
 

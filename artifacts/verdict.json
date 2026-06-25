@@ -1,14 +1,14 @@
 {
   "decision": "publish_pr",
   "execution_status": "planned",
-  "task": "P3.1b production Codex role executor completion gates",
+  "task": "P3.1c production Codex execution closure",
   "project_profile": "agent_workspace",
   "risk_class": "medium",
   "checks_attempted": true,
   "checks_passed": true,
   "blockers": [],
   "warnings": [
-    "Initial pytest invocation without PYTEST_DISABLE_PLUGIN_AUTOLOAD failed during third-party plugin autoload before collecting repository tests."
+    "Local codex CLI is installed but currently fails to start because the optional @openai/codex-darwin-arm64 package is missing; opt-in real smoke remains gated by environment variables."
   ],
   "high_risk_triggers": [],
   "protected_paths_touched": [],
@@ -27,10 +27,11 @@
   "approval_required_before_publish": false,
   "approval_required_before_merge": true,
   "reasoning_summary": [
-    "The remaining executor contract gaps were closed with artifact validation, duration normalization, publication contract validation, and focused smoke coverage."
+    "The production executor path now builds a codex exec command with standard output schema, raw JSONL capture, telemetry extraction, sandbox mapping, harness-owned artifacts, read-only mutation checks, and deterministic publication input ownership."
   ],
   "next_actions": [
-    "Proceed to P3.2 dynamic routing and bounded loops after review."
+    "Reinstall or repair the local Codex CLI optional native package before running AGENT_REAL_CODEX_SMOKE=1.",
+    "Proceed to P3.2 deterministic routing and bounded loops after review."
   ],
   "lessons_updated": false
 }

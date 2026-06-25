@@ -56,7 +56,11 @@ elif role == "risk-classifier":
     next_action = "implementation-agent"
 elif role == "implementation-agent":
     (repository / "impl.txt").write_text("implemented\\n", encoding="utf-8")
-    created = ["impl.txt"]
+    (artifacts / "implementation.json").write_text(json.dumps({
+        "changed_files": ["impl.txt"],
+        "summary": "implemented"
+    }), encoding="utf-8")
+    created = ["impl.txt", "implementation.json"]
     next_action = "completed"
 else:
     created = []
@@ -118,7 +122,7 @@ def test_agent_role_runner_invokes_adapter_for_core_roles(tmp_path: Path, monkey
     assert request["prompt_path"] == ".agents/prompts/planner.md"
     assert request["output_contract"] == "schemas/roles/planner.schema.json"
     assert request["project_profile"] == "agent_workspace"
-    assert request["expected_artifacts"] == ["plan.md"]
+    assert request["expected_artifacts"] == ["plan.md", "project_profile.json"]
     assert request["filesystem_access"] == "read_only"
     assert request["allowed_tools"] == ["filesystem_read", "repository_search"]
 

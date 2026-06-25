@@ -100,6 +100,11 @@ roles:
       - filesystem_read
       - repository_search
     filesystem: artifacts_write
+  publication-prepare:
+    tools:
+      - filesystem_read
+      - git_diff
+    filesystem: artifacts_write
   publication:
     tools:
       - filesystem_read

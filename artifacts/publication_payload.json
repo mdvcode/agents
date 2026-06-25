@@ -1,6 +1,6 @@
 {
-  "title": "Complete production role executor gates",
-  "body": "Adds executor artifact completion gates, per-role duration coverage, publication artifact validation, and production executor smoke coverage.",
-  "commit_message": "Complete production role executor gates",
+  "title": "Close production Codex execution path",
+  "body": "Adds codex exec execution, sandbox/output-schema handling, harness-owned artifacts, telemetry capture, deterministic publication inputs, and workflow timeout coverage.",
+  "commit_message": "Close production Codex execution path",
   "base_branch": "main"
 }

@@ -1,0 +1,63 @@
+{
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["completed", "blocked", "failed", "awaiting_approval"]
+    },
+    "next_action": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "artifacts_created": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": ["path", "content"],
+        "additionalProperties": false
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tokens_used": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "status",
+    "next_action",
+    "summary",
+    "artifacts_created",
+    "artifacts",
+    "blockers",
+    "warnings",
+    "tokens_used"
+  ],
+  "additionalProperties": false
+}

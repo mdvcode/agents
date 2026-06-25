@@ -30,6 +30,7 @@
       "orchestrator",
       "eval-runner",
       "report-agent",
+      "publication-prepare",
       "publication",
       "completed"
     ]

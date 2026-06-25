@@ -14,6 +14,9 @@ roles:
     output_contract: schemas/roles/planner.schema.json
     expected_artifacts:
       - plan.md
+      - project_profile.json
+    artifact_schemas:
+      project_profile.json: schemas/project_profile.schema.json
   risk-classifier:
     prompt_path: .agents/prompts/risk-classifier.md
     output_contract: schemas/roles/risk-classifier.schema.json
@@ -24,11 +27,14 @@ roles:
   implementation-agent:
     prompt_path: .agents/prompts/implementation-agent.md
     output_contract: schemas/role_result.schema.json
-    expected_artifacts: []
+    expected_artifacts:
+      - implementation.json
   test-generator:
     prompt_path: .agents/prompts/test-generator.md
     output_contract: schemas/role_result.schema.json
-    expected_artifacts: []
+    expected_artifacts:
+      - test_plan.json
+      - test_result.json
   quality-runner:
     prompt_path: .agents/prompts/quality-runner.md
     output_contract: schemas/roles/quality-runner.schema.json
@@ -70,7 +76,8 @@ roles:
   ci-repair-agent:
     prompt_path: .agents/prompts/ci-repair-agent.md
     output_contract: schemas/role_result.schema.json
-    expected_artifacts: []
+    expected_artifacts:
+      - ci_repair.json
   orchestrator:
     prompt_path: .agents/prompts/orchestrator.md
     output_contract: schemas/roles/orchestrator.schema.json
@@ -90,6 +97,15 @@ roles:
     output_contract: schemas/roles/report-agent.schema.json
     expected_artifacts:
       - report.md
+  publication-prepare:
+    prompt_path: ""
+    output_contract: schemas/role_result.schema.json
+    expected_artifacts:
+      - change_set.json
+      - publication_payload.json
+    artifact_schemas:
+      change_set.json: schemas/change_set.schema.json
+      publication_payload.json: schemas/publication_payload.schema.json
   publication:
     prompt_path: ""
     output_contract: schemas/role_result.schema.json

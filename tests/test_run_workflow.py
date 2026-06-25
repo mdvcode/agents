@@ -72,3 +72,34 @@ workflows:
     markers = list((tmp_path / ".agent-runs").glob("*/artifacts/marker.txt"))
     assert len(markers) == 1
     assert markers[0].read_text(encoding="utf-8") == "ok"
+
+
+def test_workflow_runner_uses_workflow_timeout(tmp_path: Path, monkeypatch: object) -> None:
+    workflows_path = tmp_path / ".agent-workflows.yaml"
+    workflows_path.write_text(
+        """
+version: 1
+workflows:
+  sample:
+    max_iterations: 1
+    timeout_seconds: 17
+    steps:
+      - name: "ok"
+        command: "python3 -c 'print(42)'"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run_workflow, "WORKFLOWS", workflows_path)
+    monkeypatch.setattr(run_workflow, "RUNS_DIR", tmp_path / ".agent-runs")
+    calls: list[int] = []
+
+    def fake_run_command(command: str, cwd: Path, timeout_seconds: int) -> tuple[int, str, str]:
+        calls.append(timeout_seconds)
+        return 0, "ok", ""
+
+    monkeypatch.setattr(run_workflow, "run_command", fake_run_command)
+
+    result = run_workflow.run_workflow("sample", root=tmp_path, timeout_seconds=3)
+
+    assert result == 0
+    assert calls == [17]

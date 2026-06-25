@@ -93,6 +93,20 @@ if role == "risk-classifier":
     }), encoding="utf-8")
 elif role == "planner":
     (artifacts / "plan.md").write_text("# Plan\\n", encoding="utf-8")
+elif role == "implementation-agent":
+    (artifacts / "implementation.json").write_text(json.dumps({
+        "changed_files": [],
+        "summary": "implemented"
+    }), encoding="utf-8")
+elif role == "test-generator":
+    (artifacts / "test_plan.json").write_text(json.dumps({
+        "tests": [],
+        "summary": "no tests needed"
+    }), encoding="utf-8")
+    (artifacts / "test_result.json").write_text(json.dumps({
+        "status": "not_run",
+        "summary": "no tests needed"
+    }), encoding="utf-8")
 elif role == "quality-runner":
     (artifacts / "quality.json").write_text(json.dumps({
         "task": "test",
@@ -136,6 +150,11 @@ elif role == "semantic-conflict-agent":
     }), encoding="utf-8")
 elif role == "reviewer":
     (artifacts / "review.md").write_text("# Review\\nNo findings.\\n", encoding="utf-8")
+elif role == "ci-repair-agent":
+    (artifacts / "ci_repair.json").write_text(json.dumps({
+        "repairs": [],
+        "summary": "not needed"
+    }), encoding="utf-8")
 elif role == "orchestrator":
     (artifacts / "verdict.json").write_text(json.dumps({
         "decision": "publish_pr",
@@ -402,11 +421,11 @@ repository = Path(request["repository"])
 created = []
 next_action = "continue"
 if role == "planner":
-    (artifacts / "plan.md").write_text("# Plan\\n", encoding="utf-8")
-    created = ["plan.md"]
+    created = []
+    result_artifacts = [{"path": "plan.md", "content": "# Plan\\n"}]
     next_action = "risk-classifier"
 elif role == "risk-classifier":
-    (artifacts / "risk.json").write_text(json.dumps({
+    result_artifacts = [{"path": "risk.json", "content": json.dumps({
         "risk_class": "medium",
         "reasons": [],
         "changed_areas": ["impl.txt"],
@@ -423,15 +442,19 @@ elif role == "risk-classifier":
             "deploy_staging": False,
             "deploy_production": False
         }
-    }), encoding="utf-8")
-    created = ["risk.json"]
+    })}]
+    created = []
     next_action = "implementation-agent"
 elif role == "implementation-agent":
     (repository / "impl.txt").write_text("implemented\\n", encoding="utf-8")
+    result_artifacts = [{"path": "implementation.json", "content": json.dumps({
+        "changed_files": ["impl.txt"],
+        "summary": "implemented"
+    })}]
     created = ["impl.txt"]
     next_action = "quality-runner"
 elif role == "quality-runner":
-    (artifacts / "quality.json").write_text(json.dumps({
+    result_artifacts = [{"path": "quality.json", "content": json.dumps({
         "task": "smoke",
         "project_profile": request["project_profile"],
         "overall_status": "pass",
@@ -441,13 +464,15 @@ elif role == "quality-runner":
         "repository_checks_passed": True,
         "coverage": "not measured",
         "warnings": []
-    }), encoding="utf-8")
-    created = ["quality.json"]
+    })}]
+    created = []
     next_action = "reviewer"
 elif role == "reviewer":
-    (artifacts / "review.md").write_text("# Review\\nNo findings.\\n", encoding="utf-8")
-    created = ["review.md"]
+    result_artifacts = [{"path": "review.md", "content": "# Review\\nNo findings.\\n"}]
+    created = []
     next_action = "completed"
+else:
+    result_artifacts = []
 
 assert os.environ["AGENT_ROLE"] == role
 print(json.dumps({
@@ -455,6 +480,7 @@ print(json.dumps({
     "next_action": next_action,
     "summary": f"{role} done",
     "artifacts_created": created,
+    "artifacts": result_artifacts,
     "blockers": [],
     "warnings": [],
     "tokens_used": 3
