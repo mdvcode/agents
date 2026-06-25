@@ -1,24 +1,14 @@
 {
   "evals_run": [
-    {
-      "name": "Policy sequence",
-      "status": "pass",
-      "notes": "Read required control-plane and Flowfox project rules before implementation."
-    },
-    {
-      "name": "Profile selection",
-      "status": "pass",
-      "notes": "Selected Flowfox profile and used Flowfox checks only."
-    },
-    {
-      "name": "Publication gate",
-      "status": "pending",
-      "notes": "publish_pr.py dry-run must run before commit/push/PR."
-    }
+    "Confirmed selected project profile is flowfox.",
+    "Confirmed issue #1454 scope maps to a single dashboard UI component.",
+    "Confirmed publication path must use scripts/publish_pr.py and not direct Codex app publication actions.",
+    "Confirmed external/agents dirty state is excluded from the task change set."
   ],
   "regressions": [],
   "coverage_gaps": [
-    "Authenticated visual verification of the affected dashboard route could not be completed locally."
+    "No authenticated browser session was available for full local visual evidence.",
+    "Root TypeScript check is blocked by an unrelated existing test typing issue."
   ],
-  "next_action": "Run publish_pr.py dry-run and publish draft PR if allowed."
+  "next_action": "Run publication dry-run, then publish through publish_pr.py if allowed."
 }

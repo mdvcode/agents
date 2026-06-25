@@ -2,5 +2,5 @@
   "conflicts": [],
   "risk_level": "low",
   "required_resolution": [],
-  "next_action": "Proceed; note that UI evidence is blocked, so publication should be draft rather than ready."
+  "next_action": "Proceed with draft publication because policy permits LOW-risk Flowfox publication with recorded warnings for failed checks or unavailable evidence."
 }

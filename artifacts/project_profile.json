@@ -2,12 +2,15 @@
   "project_profile": "agent_workspace",
   "confidence": "high",
   "reasons": [
-    "Task changes the local agent control-plane workflow harness under scripts/, schemas/, tests/, and .agent-workflows.yaml."
+    "The active repository is the agent control-plane workspace.",
+    "Changed files are scripts, role contracts, tests, and artifacts under /Users/user/agents."
   ],
   "matched_markers": [
     "AGENTS.md",
     ".agent-policy.yaml",
-    "scripts/agent_role_runner.py",
+    ".agent-project-profiles.yaml",
+    ".agents/**",
+    "scripts/**",
     "schemas/**",
     "tests/**"
   ],

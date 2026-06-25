@@ -1,24 +1,27 @@
 {
   "risk_class": "medium",
   "reasons": [
-    "Changes workflow execution contracts, adapter request shape, role capability routing, and completion gates.",
-    "No production infrastructure, auth, billing, payment, migration, credential, or secret-management files are in scope."
+    "Changes affect the agent control-plane role executor and workflow completion gates.",
+    "No production infrastructure, secrets, migrations, auth, billing, payments, or external target repository files are touched."
   ],
   "changed_areas": [
-    "scripts/adapters/codex_adapter.py",
-    "scripts/adapters/codex_cli_executor.py",
-    "scripts/context_compiler.py",
-    "scripts/agent_role_runner.py",
-    ".agent-role-capabilities.yaml",
     ".agent-role-contracts.yaml",
-    "schemas/context_manifest.schema.json",
-    "schemas/role_request.schema.json",
-    "schemas/roles/*.schema.json",
+    "scripts/adapters/codex_cli_executor.py",
+    "scripts/agent_role_runner.py",
     "tests/test_codex_adapter.py",
-    "tests/test_agent_role_runner.py",
-    "tests/test_context_compiler.py",
     "tests/test_full_agent_workflow.py",
-    "artifacts/*"
+    "tests/test_real_codex_smoke.py",
+    "artifacts/plan.md",
+    "artifacts/risk.json",
+    "artifacts/project_profile.json",
+    "artifacts/review.md",
+    "artifacts/quality.json",
+    "artifacts/security.md",
+    "artifacts/verdict.json",
+    "artifacts/report.md",
+    "artifacts/change_set.json",
+    "artifacts/publication.json",
+    "artifacts/publication_payload.json"
   ],
   "high_risk_triggers": [],
   "protected_paths_touched": [],

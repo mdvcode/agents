@@ -1,0 +1,24 @@
+{
+  "context_files": [
+    "/Users/user/agents/AGENTS.md",
+    "/Users/user/agents/.agent-policy.yaml",
+    "/Users/user/agents/.agent-project-profiles.yaml",
+    "/Users/user/agents/.agent-repositories.yaml",
+    "/Users/user/agents/docs/projects/flowfox/AGENTS.md",
+    "/Users/user/agents/docs/projects/flowfox/privacy.md",
+    "/Users/user/agents/artifacts/lessons_learned.md",
+    "/Users/user/flowfox/app/(dashboard)/settings/users-card.tsx",
+    "/Users/user/flowfox/app/(dashboard)/settings/users/UsersManagementClient.tsx",
+    "/Users/user/flowfox/app/(dashboard)/settings/roles/page.tsx"
+  ],
+  "project_profile": "flowfox",
+  "known_constraints": [
+    "Use only allowed branch prefixes: feat/, fix/, issue/, tast/.",
+    "Publication must go through /Users/user/agents/scripts/publish_pr.py.",
+    "Do not stage or publish private control-plane files or external/agents.",
+    "No merge, deploy, force-push, or production credential changes.",
+    "Flowfox user-visible changes require frontend evidence or a warning and draft PR."
+  ],
+  "open_questions": [],
+  "next_action": "Run verification and frontend evidence, then publish through the required publication executor if gates pass."
+}

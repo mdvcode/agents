@@ -1,10 +1,10 @@
 {
   "run_id": "",
-  "task_id": "p3.1-real-codex-adapter",
+  "task_id": "p3.1b-production-role-executor-completion-gates",
   "execution_status": "planned",
-  "target_repository": "/Users/user/agents",
+  "target_repository": ".",
   "worktree": "",
-  "branch": "feat/p3.1-real-codex-adapter",
+  "branch": "",
   "base_branch": "main",
   "commit_created": false,
   "commit_sha": "",

@@ -1,14 +1,14 @@
 {
   "decision": "publish_pr",
   "execution_status": "planned",
-  "task": "P3.1b production Codex role executor contracts",
+  "task": "P3.1b production Codex role executor completion gates",
   "project_profile": "agent_workspace",
   "risk_class": "medium",
   "checks_attempted": true,
   "checks_passed": true,
   "blockers": [],
   "warnings": [
-    "Optional real Codex smoke test skipped unless explicitly enabled with AGENT_REAL_CODEX_SMOKE=1 and AGENT_CODEX_COMMAND."
+    "Initial pytest invocation without PYTEST_DISABLE_PLUGIN_AUTOLOAD failed during third-party plugin autoload before collecting repository tests."
   ],
   "high_risk_triggers": [],
   "protected_paths_touched": [],
@@ -27,13 +27,10 @@
   "approval_required_before_publish": false,
   "approval_required_before_merge": true,
   "reasoning_summary": [
-    "The task stays within the agent_workspace profile.",
-    "Risk is medium because role execution contracts and workflow gates changed.",
-    "Required local verification passed; publication has not been run in this turn."
+    "The remaining executor contract gaps were closed with artifact validation, duration normalization, publication contract validation, and focused smoke coverage."
   ],
   "next_actions": [
-    "Review the P3.1b patch.",
-    "Implement P3.2 dynamic routing and bounded repair loops as the next slice."
+    "Proceed to P3.2 dynamic routing and bounded loops after review."
   ],
   "lessons_updated": false
 }

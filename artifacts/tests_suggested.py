@@ -1,16 +1,13 @@
 """
-Flowfox issue 1138 test generator notes.
+Issue 1454 test generator note.
 
-No real test file was added. The behavior change is a narrow Tailwind layout
-constraint in a dashboard component; a unit test would mostly assert className
-strings and provide weak regression value. Verification is covered by
-TypeScript, targeted ESLint, whitespace checks, and frontend evidence attempt.
+No real test file was added for this task. The patch removes a duplicate static
+title/subtitle block from a large client component and does not change state,
+data fetching, permissions, or business logic.
 
-Suggested manual/browser coverage when authenticated seed data is available:
-- Open /campaigns/{campaignId}/landing-pages/{docId} with walkthroughVideoUrl.
-- Confirm the Walkthrough-Video player is capped to a compact width on desktop.
-- Confirm controls, regenerate buttons, and the URL link still work.
-- Open a document without walkthroughVideoUrl and confirm the empty state is
-  compact.
-- Check mobile width for overflow.
+Recommended regression signal:
+- browser/staging visual check for /settings/users with an authenticated
+  manage_users session;
+- verify Benutzerverwaltung appears once in the PageHeader;
+- verify Mitarbeiter/Kunden/Affiliates tabs and Deine Rolle badge remain usable.
 """

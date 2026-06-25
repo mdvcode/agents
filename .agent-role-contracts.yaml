@@ -90,3 +90,10 @@ roles:
     output_contract: schemas/roles/report-agent.schema.json
     expected_artifacts:
       - report.md
+  publication:
+    prompt_path: ""
+    output_contract: schemas/role_result.schema.json
+    expected_artifacts:
+      - publication.json
+    artifact_schemas:
+      publication.json: schemas/publication.schema.json

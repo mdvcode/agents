@@ -30,6 +30,13 @@ from codex_adapter import (  # noqa: E402
 )
 
 
+def safe_artifact_name(value: Any) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    path = Path(value)
+    return not path.is_absolute() and ".." not in path.parts
+
+
 def configured_codex_command() -> list[str]:
     command = os.environ.get("AGENT_CODEX_CLI_COMMAND", "codex")
     args = os.environ.get("AGENT_CODEX_CLI_ARGS", "")
@@ -113,6 +120,22 @@ def parse_role_result(stdout: str, output_contract: dict[str, Any], duration_ms:
     return result
 
 
+def validate_expected_artifacts(request: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    artifacts_dir = Path(str(request["artifacts_dir"]))
+    for artifact in request.get("expected_artifacts", []):
+        if not safe_artifact_name(artifact):
+            errors.append(f"expected_artifacts contains unsafe path {artifact!r}")
+            continue
+        artifact_path = artifacts_dir / artifact
+        if not artifact_path.exists():
+            errors.append(f"role must create run-scoped {artifact}")
+            continue
+        if artifact_path.is_file() and artifact_path.stat().st_size == 0:
+            errors.append(f"role must create non-empty run-scoped {artifact}")
+    return errors
+
+
 def run_codex(
     *,
     request: dict[str, Any],
@@ -148,7 +171,12 @@ def run_codex(
     if completed.returncode != 0:
         output = (completed.stderr or completed.stdout).strip()
         return blocked_result("Codex CLI command failed.", [output or f"exit {completed.returncode}"])
-    return parse_role_result(completed.stdout, output_contract, duration_ms)
+    result = parse_role_result(completed.stdout, output_contract, duration_ms)
+    if result.get("status") == "completed":
+        artifact_errors = validate_expected_artifacts(request)
+        if artifact_errors:
+            return blocked_result("Codex CLI completed without required artifacts.", artifact_errors)
+    return result
 
 
 def execute_role() -> dict[str, Any]:

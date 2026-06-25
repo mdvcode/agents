@@ -1,11 +1,16 @@
 {
   "consistency_status": "pass",
-  "findings": [],
+  "findings": [
+    "The canonical PageHeader remains in app/(dashboard)/settings/users/UsersManagementClient.tsx.",
+    "The patch removes only duplicate local layout copy from UsersCard and preserves existing tabs, role badge, table rendering, API calls, permissions, and data flow.",
+    "No protected architecture boundaries were crossed."
+  ],
   "protected_boundaries": [
-    "No shared PageGrid behavior changed.",
-    "No Customer Portal deal modal preview changed.",
-    "No API, Sanity, Prisma, auth, permission, or migration files changed."
+    "auth/permissions unchanged",
+    "API routes unchanged",
+    "database and migrations unchanged",
+    "private control-plane files excluded from publication"
   ],
   "recommended_repairs": [],
-  "next_action": "Continue to semantic conflict review and publication gate."
+  "next_action": "Continue to semantic conflict and review gates."
 }

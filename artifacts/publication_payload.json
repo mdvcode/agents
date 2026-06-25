@@ -1,6 +1,6 @@
 {
-  "title": "Add real role adapter workflow context",
-  "body": "## Summary\n- Add strict role request/result schemas, context manifests, and a Codex adapter command contract.\n- Route the full workflow through one run id, task worktree setup, run-scoped artifacts, and publish_pr.py for publication.\n- Add focused and integration tests for adapter execution, blocked missing-adapter behavior, run-scoped validation, and task worktree isolation.\n\n## Checks\n- PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_codex_adapter.py tests/test_agent_role_runner.py tests/test_run_workflow.py tests/test_validate_artifacts.py tests/test_full_agent_workflow.py\n- make check\n- make security\n\n## Risk\nMedium: workflow orchestration behavior changes, no protected production/auth/billing/secret paths touched.",
-  "commit_message": "Add real role adapter workflow context",
+  "title": "Complete production role executor gates",
+  "body": "Adds executor artifact completion gates, per-role duration coverage, publication artifact validation, and production executor smoke coverage.",
+  "commit_message": "Complete production role executor gates",
   "base_branch": "main"
 }

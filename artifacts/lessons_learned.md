@@ -231,3 +231,12 @@
   Example bad pattern: adding a Landing Page-only button that hardcodes live URLs and bypasses `/api/preview` for drafts or autosaved documents.
   Example good pattern: use a shared `buildContentViewTarget` helper plus a content-type guard in the footer action, while preserving the existing Advertorial exports for compatibility.
   Scope: Flowfox Sanity Studio content footer actions
+
+- Date: 2026-06-24
+  Agent: Codex
+  Failure: A stale Flowfox working branch briefly made a one-file UI fix appear to delete freshly merged neighboring code after `publish_pr.py --dry-run` fetched a newer `origin/main`.
+  Root cause: The implementation diff was checked against local `HEAD` before publication, but the publisher builds its worktree from current `origin/main`.
+  Prevention rule: For Flowfox publication, after the publication dry-run fetches or updates `origin/main`, compare the task-scoped diff against `origin/main` and repair any accidental rollback before the real publish step.
+  Example bad pattern: publishing a selected file copied from a stale local branch when that file has changed on `origin/main`.
+  Example good pattern: run `git diff origin/main -- <changed-file>` after dry-run fetches, ensure only the intended task hunk remains, then publish.
+  Scope: Flowfox publication workflow

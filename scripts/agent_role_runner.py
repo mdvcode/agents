@@ -8,6 +8,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -216,7 +217,7 @@ def validate_role_artifacts(
         if not expected_path.exists():
             errors.append(f"{role} must create run-scoped {expected}")
             continue
-        if expected_path.is_file() and not expected_path.read_text(encoding="utf-8").strip():
+        if expected_path.is_file() and expected_path.stat().st_size == 0:
             errors.append(f"{role} must create non-empty run-scoped {expected}")
 
     artifact_schemas = contract.get("artifact_schemas", {})
@@ -541,6 +542,7 @@ def run_roles(
     while role:
         guard += 1
         role_visits[role] = role_visits.get(role, 0) + 1
+        role_started = time.monotonic()
         if guard > len(ROLE_CHAIN) * 3 or role_visits[role] > 3:
             result = blocked_result("Workflow routing exceeded the safety limit.", ["dynamic routing loop detected"])
         elif role == "issue-intake":
@@ -614,6 +616,7 @@ def run_roles(
         result_errors = validate_role_result(result, role)
         if result_errors:
             result = blocked_result("Role result failed schema validation.", result_errors)
+        result.setdefault("duration_ms", int((time.monotonic() - role_started) * 1000))
         if result.get("status") == "completed":
             artifact_errors = validate_role_artifacts(
                 role=role,

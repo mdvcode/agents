@@ -1,82 +1,60 @@
 # TASK
 
-P3.1b: add a production Codex role executor layer with explicit role prompts, role-specific capabilities, output contracts, project profile propagation, and artifact completion gates.
+Implement the remaining P3.1b production Codex role executor contract items from the attached review.
 
 # PROJECT_PROFILE
 
 Selected profile: `agent_workspace`.
 
-Reason: The work is in `/Users/user/agents` and changes the local agent control-plane harness: scripts, schemas, workflow config, tests, and root task artifacts.
+Reason: The work changes the local agent control plane under `/Users/user/agents`: role executor scripts, workflow runner behavior, role contracts, and repository-local tests.
 
 Quality commands:
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_codex_adapter.py tests/test_agent_role_runner.py tests/test_full_agent_workflow.py tests/test_context_compiler.py -q`
 - `make check`
-- focused pytest for adapter, role runner, context compiler, and full workflow tests
 
 Security commands:
 - `make security`
+- focused review of subprocess usage, artifact path handling, protected paths, and hardcoded secrets
 
 Frontend evidence required: no.
 
 # CONTEXT
 
-The previous P3.1 work introduced run-scoped role requests, context manifests, strict role results, task worktrees, and safe publication routing. The attached review says the next gap is P3.1b: the workflow still needs explicit role prompt paths, per-role tool/sandbox capability metadata, role-specific output contract paths, expected artifacts, and stricter completion gates for all critical roles.
+The existing P3.1b implementation already has role request fields for `prompt_path`, `output_contract`, `project_profile`, `expected_artifacts`, role capability and contract YAML files, role schemas, context manifests with project profile, high-risk approval gating, and publication dry-run routing tests.
 
-# FILES_TO_INSPECT
-
-- `scripts/adapters/codex_adapter.py`
-- `scripts/agent_role_runner.py`
-- `scripts/context_compiler.py`
-- `schemas/role_request.schema.json`
-- `schemas/role_result.schema.json`
-- `schemas/context_manifest.schema.json`
-- `.agent-workflows.yaml`
-- existing tests under `tests/`
+The remaining gaps addressed here:
+- `codex_cli_executor.py` accepted `completed` role results without checking that required artifacts actually exist.
+- workflow checkpoints did not guarantee `duration_ms` for internal roles and publication.
+- publication did not have a role contract for mandatory `publication.json` validation.
+- tests did not include a production-executor smoke path through `codex_cli_executor.py` from planner through reviewer.
 
 # FILES_TO_CHANGE
 
-- `scripts/adapters/codex_adapter.py`
+- `.agent-role-contracts.yaml`
 - `scripts/adapters/codex_cli_executor.py`
 - `scripts/agent_role_runner.py`
-- `scripts/context_compiler.py`
-- `.agent-role-capabilities.yaml`
-- `.agent-role-contracts.yaml`
-- `schemas/role_request.schema.json`
-- `schemas/context_manifest.schema.json`
-- `schemas/roles/*.schema.json`
-- focused tests under `tests/`
-- current task artifacts
+- `tests/test_codex_adapter.py`
+- `tests/test_full_agent_workflow.py`
+- `tests/test_real_codex_smoke.py`
+- `artifacts/*`
 
 # DO_NOT_TOUCH
 
-- target project private memory
-- Flowfox repository files
-- migrations, auth, billing, payments, secrets, credentials, production infrastructure
-- unrelated dirty screenshots and issue journals currently present in the workspace
-
-# ASSUMPTIONS
-
-- `CodexAdapter` remains the strict shell boundary for role execution.
-- `scripts/adapters/codex_cli_executor.py` is the production executor command that can be selected through `AGENT_CODEX_COMMAND`.
-- Local tests can use fake adapter commands and should not require a real Codex CLI.
-- Role-specific capabilities are declared and propagated now; OS-level sandbox enforcement can still be delegated to the concrete executor/runtime.
-
-# CHECKS_TO_RUN
-
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_codex_adapter.py tests/test_agent_role_runner.py tests/test_context_compiler.py tests/test_full_agent_workflow.py`
-- `make check`
-- `make security`
+- target project repositories
+- secrets, credentials, `.env*`, private keys
+- production infrastructure, deployment scripts, billing, payments, auth/session/CSRF surfaces
 
 # INITIAL_RISK_CLASS
 
-Medium. This changes orchestration and execution contracts in the agent control plane, but does not touch protected production/auth/billing/secret paths.
+Medium. This changes the control-plane workflow executor and publication role contract, but only inside the private agent workspace and without touching protected production or secret-bearing paths.
 
 # DONE_CRITERIA
 
-- RoleRequest includes `prompt_path`, `output_contract`, `project_profile`, `expected_artifacts`, and capability/sandbox metadata.
-- Context manifests include non-empty project profile and role-specific capabilities.
-- Role contracts and capabilities live in reviewable YAML files.
-- Critical roles cannot return `completed` without required artifacts.
-- JSON artifacts are validated against role-specific schemas where available.
-- `codex_cli_executor.py` reads the role prompt, context manifest, and output contract and returns structured role failures instead of tracebacks.
-- Focused tests cover role request enrichment, capability propagation, artifact gates, and executor behavior.
+- Executor loads explicit prompt, context manifest, and role output contract.
+- Executor blocks structured `completed` results when expected artifacts are missing or unsafe.
+- Role-specific capabilities/contracts remain available to requests and manifests.
+- Publication has a mandatory `publication.json` contract.
+- Workflow records token usage and duration for every role checkpoint.
+- Smoke coverage exercises issue intake through planner, risk, implementation, quality, and reviewer using `codex_cli_executor.py`.
+- Focused tests pass.
 - `make check` and `make security` pass or blockers are recorded.

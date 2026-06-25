@@ -1,26 +1,26 @@
 {
-  "task": "P3.1b production Codex role executor contracts",
+  "task": "P3.1b production Codex role executor completion gates",
   "project_profile": "agent_workspace",
   "overall_status": "pass",
   "checks": [
     {
-      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_codex_adapter.py tests/test_agent_role_runner.py tests/test_context_compiler.py tests/test_full_agent_workflow.py",
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_codex_adapter.py tests/test_agent_role_runner.py tests/test_full_agent_workflow.py tests/test_context_compiler.py -q",
       "status": "pass",
-      "notes": "14 passed"
+      "details": "16 passed"
     },
     {
       "command": "make check",
       "status": "pass",
-      "notes": "artifact validation passed; security scan passed; JSON artifacts valid; 93 pytest tests passed; 1 optional real Codex smoke test skipped"
+      "details": "95 passed, 1 skipped"
     },
     {
       "command": "make security",
       "status": "pass",
-      "notes": "no obvious secrets, private keys, private paths, or protected staged files found"
+      "details": "No obvious secrets, private keys, private paths, or protected staged files found."
     }
   ],
   "commands_attempted": [
-    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_codex_adapter.py tests/test_agent_role_runner.py tests/test_context_compiler.py tests/test_full_agent_workflow.py",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_codex_adapter.py tests/test_agent_role_runner.py tests/test_full_agent_workflow.py tests/test_context_compiler.py -q",
     "make check",
     "make security"
   ],
@@ -28,6 +28,6 @@
   "repository_checks_passed": true,
   "coverage": "not measured",
   "warnings": [
-    "Optional real Codex smoke test remains skipped unless explicitly enabled with AGENT_REAL_CODEX_SMOKE=1 and AGENT_CODEX_COMMAND."
+    "Initial pytest invocation without PYTEST_DISABLE_PLUGIN_AUTOLOAD failed during third-party plugin autoload before collecting repository tests."
   ]
 }

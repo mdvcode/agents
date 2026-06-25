@@ -31,7 +31,12 @@ def test_real_codex_runtime_smoke(tmp_path: Path) -> None:
         "repository": str(tmp_path),
         "artifacts_dir": str(tmp_path / "artifacts"),
         "context_manifest": str(manifest),
+        "prompt_path": ".agents/prompts/planner.md",
+        "output_contract": "schemas/roles/planner.schema.json",
+        "project_profile": "agent_workspace",
+        "expected_artifacts": ["plan.md"],
         "allowed_tools": ["filesystem_read"],
+        "filesystem_access": "read_only",
         "token_budget": 1000,
         "timeout_seconds": 60,
     }

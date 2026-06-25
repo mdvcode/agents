@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -192,6 +193,36 @@ print(json.dumps({
 
     def fake_publication(**kwargs: object) -> dict[str, object]:
         calls.append(kwargs)
+        artifacts_dir = Path(kwargs["artifacts_dir"])
+        (artifacts_dir / "publication.json").write_text(
+            json.dumps(
+                {
+                    "run_id": str(kwargs["run_id"]),
+                    "task_id": "task",
+                    "execution_status": "completed",
+                    "target_repository": str(kwargs["repository"]),
+                    "worktree": str(kwargs["repository"]),
+                    "branch": "",
+                    "base_branch": "main",
+                    "commit_created": False,
+                    "commit_sha": "",
+                    "branch_pushed": False,
+                    "push_completed": False,
+                    "pr_created_or_updated": False,
+                    "pr_number": 0,
+                    "pr_url": "",
+                    "pr_state": "not_created",
+                    "dry_run": bool(kwargs["dry_run"]),
+                    "run_dir": "",
+                    "input_fingerprint": "",
+                    "pr_comment_posted": False,
+                    "command_results": [],
+                    "warnings": [],
+                    "errors": [],
+                }
+            ),
+            encoding="utf-8",
+        )
         return {
             "status": "completed",
             "next_action": "completed",
@@ -347,3 +378,113 @@ def test_publication_role_invokes_publish_pr_with_run_context(
             "--dry-run",
         ]
     ]
+
+
+def test_production_codex_executor_smoke_planner_to_reviewer(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    codex_cli = tmp_path / "fake_codex_cli.py"
+    codex_cli.write_text(
+        """
+from pathlib import Path
+import json
+import os
+import sys
+
+prompt = sys.stdin.read()
+request_text = prompt.split("Role execution request:", 1)[1].split("Context manifest:", 1)[0]
+request = json.loads(request_text)
+role = request["role"]
+artifacts = Path(request["artifacts_dir"])
+repository = Path(request["repository"])
+
+created = []
+next_action = "continue"
+if role == "planner":
+    (artifacts / "plan.md").write_text("# Plan\\n", encoding="utf-8")
+    created = ["plan.md"]
+    next_action = "risk-classifier"
+elif role == "risk-classifier":
+    (artifacts / "risk.json").write_text(json.dumps({
+        "risk_class": "medium",
+        "reasons": [],
+        "changed_areas": ["impl.txt"],
+        "high_risk_triggers": [],
+        "protected_paths_touched": [],
+        "protected_actions_required": [],
+        "autonomy_allowed": {
+            "patch": True,
+            "commit": True,
+            "push": True,
+            "open_pr": True,
+            "update_pr": True,
+            "auto_merge": False,
+            "deploy_staging": False,
+            "deploy_production": False
+        }
+    }), encoding="utf-8")
+    created = ["risk.json"]
+    next_action = "implementation-agent"
+elif role == "implementation-agent":
+    (repository / "impl.txt").write_text("implemented\\n", encoding="utf-8")
+    created = ["impl.txt"]
+    next_action = "quality-runner"
+elif role == "quality-runner":
+    (artifacts / "quality.json").write_text(json.dumps({
+        "task": "smoke",
+        "project_profile": request["project_profile"],
+        "overall_status": "pass",
+        "checks": [],
+        "commands_attempted": [],
+        "focused_tests_passed": True,
+        "repository_checks_passed": True,
+        "coverage": "not measured",
+        "warnings": []
+    }), encoding="utf-8")
+    created = ["quality.json"]
+    next_action = "reviewer"
+elif role == "reviewer":
+    (artifacts / "review.md").write_text("# Review\\nNo findings.\\n", encoding="utf-8")
+    created = ["review.md"]
+    next_action = "completed"
+
+assert os.environ["AGENT_ROLE"] == role
+print(json.dumps({
+    "status": "completed",
+    "next_action": next_action,
+    "summary": f"{role} done",
+    "artifacts_created": created,
+    "blockers": [],
+    "warnings": [],
+    "tokens_used": 3
+}))
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agent_role_runner, "RUNS", tmp_path / ".agent-runs")
+    monkeypatch.setenv("AGENT_CODEX_CLI_COMMAND", f"{sys.executable} {codex_cli}")
+    executor = Path(__file__).resolve().parents[1] / "scripts" / "adapters" / "codex_cli_executor.py"
+
+    state = agent_role_runner.run_roles(
+        run_id="run-production-executor-smoke",
+        artifacts_dir=tmp_path / ".agent-runs" / "run-production-executor-smoke" / "artifacts",
+        repository=tmp_path,
+        adapter_command=f"{sys.executable} {executor}",
+        dry_run=True,
+    )
+
+    assert state["execution_status"] == "completed"
+    assert [item["role"] for item in state["roles"]] == [
+        "issue-intake",
+        "context-compiler",
+        "planner",
+        "risk-classifier",
+        "implementation-agent",
+        "quality-runner",
+        "reviewer",
+    ]
+    assert (tmp_path / "impl.txt").read_text(encoding="utf-8") == "implemented\n"
+    for checkpoint in state["roles"]:
+        assert isinstance(checkpoint["result"]["tokens_used"], int)
+        assert isinstance(checkpoint["result"]["duration_ms"], int)
