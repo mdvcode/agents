@@ -92,6 +92,17 @@ def check_codex_runtime(
     except (OSError, subprocess.TimeoutExpired) as exc:
         return result("blocked", [f"Codex CLI help probe failed: {exc}"], warnings)
 
+    if help_result.returncode != 0:
+        output_text = (help_result.stderr or help_result.stdout).strip()
+        return result(
+            "blocked",
+            ["Codex CLI is not available or not authenticated.", output_text or f"exit {help_result.returncode}"],
+            warnings,
+            command=" ".join(shlex.quote(part) for part in base_command),
+            repo=str(repo),
+            sandbox=sandbox,
+        )
+
     help_text = f"{help_result.stdout}\n{help_result.stderr}"
     missing_flags = [flag for flag in REQUIRED_EXEC_FLAGS if flag not in help_text]
     if missing_flags:

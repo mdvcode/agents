@@ -1,26 +1,37 @@
 {
-  "task": "P3.1d production Codex execution path and role trust boundaries",
+  "task": "P3.1e real Codex smoke gate",
   "project_profile": "agent_workspace",
-  "overall_status": "pass",
+  "overall_status": "fail",
   "checks": [
     {
-      "command": "python3 -m py_compile scripts/run_workflow.py scripts/agent_role_runner.py scripts/adapters/codex_cli_executor.py scripts/check_codex_runtime.py scripts/tool_preflight.py scripts/context_compiler.py",
-      "status": "pass"
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_makefile_codex_targets.py tests/test_real_codex_smoke.py -q",
+      "status": "pass",
+      "summary": "2 passed, 1 skipped"
     },
     {
-      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_run_workflow.py tests/test_agent_role_runner.py tests/test_codex_adapter.py tests/test_context_compiler.py tests/test_full_agent_workflow.py tests/test_real_codex_smoke.py",
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_makefile_codex_targets.py tests/test_codex_runtime_preflight.py -q",
       "status": "pass",
-      "summary": "28 passed, 1 skipped"
+      "summary": "3 passed"
     },
     {
-      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests",
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_makefile_codex_targets.py tests/test_codex_runtime_preflight.py tests/test_real_codex_smoke.py -q",
       "status": "pass",
-      "summary": "105 passed, 1 skipped"
+      "summary": "3 passed, 1 skipped"
+    },
+    {
+      "command": "make codex-preflight",
+      "status": "fail",
+      "summary": "blocked: local codex runtime is unavailable; npm package is missing the native vendor binary"
+    },
+    {
+      "command": "make codex-smoke",
+      "status": "fail",
+      "summary": "strict smoke ran and failed because the executor returned blocked instead of completed due to the broken local Codex runtime"
     },
     {
       "command": "make check",
       "status": "pass",
-      "summary": "artifact validation passed; security scan passed; JSON artifacts valid; full pytest passed with 105 passed, 1 skipped; git diff check passed"
+      "summary": "artifact validation passed; security scan passed; JSON artifacts valid; full pytest passed with 108 passed, 1 skipped; git diff check passed"
     },
     {
       "command": "make security",
@@ -29,17 +40,25 @@
     }
   ],
   "commands_attempted": [
-    "python3 -m py_compile scripts/run_workflow.py scripts/agent_role_runner.py scripts/adapters/codex_cli_executor.py scripts/check_codex_runtime.py scripts/tool_preflight.py scripts/context_compiler.py",
-    "python3 -m pytest tests/test_run_workflow.py tests/test_agent_role_runner.py tests/test_codex_adapter.py tests/test_context_compiler.py tests/test_full_agent_workflow.py tests/test_real_codex_smoke.py",
-    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_run_workflow.py tests/test_agent_role_runner.py tests/test_codex_adapter.py tests/test_context_compiler.py tests/test_full_agent_workflow.py tests/test_real_codex_smoke.py",
-    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_makefile_codex_targets.py tests/test_real_codex_smoke.py -q",
+    "make codex-preflight",
+    "PATH=\"/usr/local/opt/node@22/bin:$PATH\" codex --version",
+    "PATH=\"/usr/local/opt/node@22/bin:$PATH\" codex --help",
+    "PATH=\"/usr/local/opt/node@22/bin:$PATH\" codex exec --help",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_codex_runtime_preflight.py tests/test_makefile_codex_targets.py -q",
+    "make codex-smoke",
+    "make validate-artifacts",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_makefile_codex_targets.py tests/test_codex_runtime_preflight.py tests/test_real_codex_smoke.py -q",
+    "git diff --check",
     "make check",
     "make security"
   ],
   "focused_tests_passed": true,
-  "repository_checks_passed": true,
+  "repository_checks_passed": false,
   "coverage": "not measured",
   "warnings": [
-    "Plain pytest without PYTEST_DISABLE_PLUGIN_AUTOLOAD failed before test collection because a globally installed web3/ethpm pytest plugin is incompatible with the installed protobuf version. The repository Makefile already disables plugin autoload for pytest."
+    "The installed codex wrapper originally used Node v8.9.4; Makefile now prefers Node 22/20 for Codex targets.",
+    "With modern Node, the installed @openai/codex package fails because the native vendor binary path is missing: node_modules/@openai/codex-darwin-x64/vendor/x86_64-apple-darwin/codex/codex.",
+    "The real smoke gate is implemented but cannot pass until the local Codex CLI installation is repaired or reinstalled."
   ]
 }

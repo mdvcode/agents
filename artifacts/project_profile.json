@@ -2,18 +2,20 @@
   "project_profile": "agent_workspace",
   "confidence": "high",
   "reasons": [
-    "The task changes the local agent workflow harness, schemas, scripts, and tests in /Users/user/agents.",
+    "The task changes the local agent harness Makefile, docs, runtime preflight script, and tests.",
     "Repository markers match the agent_workspace profile: AGENTS.md, .agent-policy.yaml, schemas/, scripts/, tests/, and Makefile."
   ],
   "matched_markers": [
     "AGENTS.md",
     ".agent-policy.yaml",
     ".agent-project-profiles.yaml",
-    "schemas/**",
-    "scripts/validate_artifacts.py",
-    "Makefile"
+    "scripts/check_codex_runtime.py",
+    "Makefile",
+    "tests/**",
+    "docs/**"
   ],
   "quality_commands_selected": [
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_makefile_codex_targets.py tests/test_codex_runtime_preflight.py tests/test_real_codex_smoke.py -q",
     "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests",
     "make check"
   ],

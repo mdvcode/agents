@@ -7,6 +7,7 @@
 - Keep `.agents/prompts/` aligned with the docs/onboarding flow.
 
 ## In Progress
+- P3.1e: real Codex smoke gate is implemented; local Codex CLI repair needed before pass.
 - Flowfox issue 1621: migrate Landing Page Workspace entrypoints.
 - Flowfox issue 481: nested sidebar recursion in Advertorial Presentation preview.
 - Flowfox issue 851: simplified, RBAC-aware main navigation structure.

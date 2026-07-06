@@ -1,20 +1,18 @@
 {
   "risk_class": "medium",
   "reasons": [
-    "The patch changes core workflow execution and role trust-boundary behavior.",
-    "The changes are local to the agent harness and covered by focused regression tests.",
-    "No protected production, auth, billing, secret, migration, or deployment paths are changed."
+    "The patch adds explicit real Codex runtime gates and adjusts preflight failure classification.",
+    "The changes are local to the agent harness and do not touch protected production, auth, billing, secret, migration, or deployment paths.",
+    "The real Codex smoke target is intentionally blocking when the local Codex runtime is broken."
   ],
   "changed_areas": [
-    ".agent-workflows.yaml",
-    "scripts/run_workflow.py",
-    "scripts/agent_role_runner.py",
-    "scripts/adapters/codex_cli_executor.py",
+    "Makefile",
+    "docs/onboarding.md",
+    "docs/agent-system.md",
     "scripts/check_codex_runtime.py",
-    "scripts/tool_preflight.py",
-    "scripts/context_compiler.py",
-    "schemas/context_manifest.schema.json",
-    "tests"
+    "tests/test_makefile_codex_targets.py",
+    "tests/test_codex_runtime_preflight.py",
+    "artifacts"
   ],
   "high_risk_triggers": [],
   "protected_paths_touched": [],

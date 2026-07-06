@@ -1,11 +1,14 @@
 # Review
 
-Findings: none blocking after focused self-review.
+Findings:
+- Blocking for acceptance: `make codex-smoke` cannot complete locally because the installed Codex CLI package is missing its native vendor binary. The smoke target itself is present and strict.
 
-Coverage notes:
-- Added regression coverage for workflow adapter propagation, default Codex preflight before roles, context budget manifest fields, role artifact ownership, frontend QA unavailable evidence, strict real-Codex smoke expectations, and production executor smoke with fake Codex CLI.
-- Existing publication dry-run path still invokes `publish_pr.py` with the same `run_id` and `artifacts_dir`.
+Implemented:
+- Added `make codex-preflight`.
+- Added `make codex-smoke`.
+- Documented both commands in onboarding and agent-system docs.
+- Added tests to keep the Makefile/docs gate present.
+- Improved preflight classification when the Codex CLI help probe fails.
 
 Residual risk:
-- The real Codex smoke remains opt-in and was skipped locally because `AGENT_REAL_CODEX_SMOKE=1` was not set.
-- Browser capability detection is intentionally conservative: absent `AGENT_BROWSER_AVAILABLE=1`, frontend QA records unavailable evidence instead of claiming coverage.
+- P3.2 should wait until `make codex-preflight` and `make codex-smoke` pass on a repaired/authenticated Codex CLI installation.

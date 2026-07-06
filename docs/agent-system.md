@@ -39,3 +39,13 @@
 7. Reviewer compares the diff against policy and lessons.
 8. Report Agent writes the human summary.
 9. Orchestrator writes the final verdict and next action.
+
+## Codex Executor Smoke Gate
+Before adding deterministic routing or bounded repair loops, prove the production Codex executor path locally:
+
+```sh
+make codex-preflight
+make codex-smoke
+```
+
+The smoke must run against a real authenticated Codex CLI. It verifies that the Planner role completes, creates `plan.md` and `project_profile.json`, preserves a clean read-only repository, and records raw JSONL plus token usage.

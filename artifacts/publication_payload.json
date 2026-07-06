@@ -1,6 +1,6 @@
 {
-  "title": "Enable production Codex workflow execution",
-  "body": "## Summary\n- Make the full workflow pass the Codex CLI executor by default.\n- Add runtime and role tool preflights before role execution.\n- Enforce role-owned artifact writes and extend context manifests with budget/retrieval fields.\n\n## Validation\n- PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests\n- make check\n- make security",
-  "commit_message": "Enable production Codex workflow execution",
+  "title": "Add real Codex smoke gate",
+  "body": "## Summary\n- Add Makefile targets for Codex runtime preflight and strict real-Codex smoke.\n- Document the gate in onboarding and agent system docs.\n- Improve Codex preflight classification when the CLI runtime itself fails.\n\n## Validation\n- Focused tests pass.\n- make codex-preflight and make codex-smoke are currently blocked by the local Codex CLI installation missing its native vendor binary.",
+  "commit_message": "Add real Codex smoke gate",
   "base_branch": "main"
 }

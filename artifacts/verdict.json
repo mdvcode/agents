@@ -1,15 +1,19 @@
 {
-  "decision": "publish_pr",
-  "execution_status": "planned",
-  "task": "P3.1d production Codex execution path and role trust boundaries",
+  "decision": "reject",
+  "execution_status": "blocked",
+  "task": "P3.1e real Codex smoke gate",
   "project_profile": "agent_workspace",
   "risk_class": "medium",
   "checks_attempted": true,
-  "checks_passed": true,
-  "blockers": [],
+  "checks_passed": false,
+  "blockers": [
+    "make codex-preflight is blocked because the local Codex CLI installation is not runnable.",
+    "make codex-smoke is blocked because the real executor returns blocked instead of completed.",
+    "The installed @openai/codex package is missing the native vendor binary at node_modules/@openai/codex-darwin-x64/vendor/x86_64-apple-darwin/codex/codex."
+  ],
   "warnings": [
-    "Real Codex smoke is opt-in and was skipped locally without AGENT_REAL_CODEX_SMOKE=1.",
-    "Plain pytest without PYTEST_DISABLE_PLUGIN_AUTOLOAD failed before collection because of a globally installed web3/ethpm protobuf incompatibility; repository pytest runs use plugin autoload disabled."
+    "The Makefile now prefers Node 22/20 for Codex targets to avoid the system Node v8.9.4 ESM failure.",
+    "P3.2 should wait until the local Codex CLI is repaired and the real smoke passes."
   ],
   "high_risk_triggers": [],
   "protected_paths_touched": [],
@@ -28,14 +32,14 @@
   "approval_required_before_publish": false,
   "approval_required_before_merge": true,
   "reasoning_summary": [
-    "The full workflow now has a default Codex CLI executor path.",
-    "Production Codex runtime failures block before role execution.",
-    "Role artifact ownership is enforced for harness-written artifacts.",
-    "Tool preflight reports missing frontend QA capabilities as unavailable evidence."
+    "The explicit Codex preflight and smoke commands are implemented and documented.",
+    "Focused regression tests pass.",
+    "The real smoke cannot pass in this local environment until the Codex CLI installation is repaired."
   ],
   "next_actions": [
-    "Optionally run AGENT_REAL_CODEX_SMOKE=1 AGENT_CODEX_CLI_COMMAND=codex PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_real_codex_smoke.py on an authenticated workstation.",
-    "Proceed to P3.2 deterministic routing and bounded repair loops after review."
+    "Repair or reinstall the local Codex CLI so `codex --version` and `codex exec --help` work with Node 20+.",
+    "Re-run `make codex-preflight` and `make codex-smoke`.",
+    "Proceed to P3.2 only after the real smoke passes."
   ],
   "lessons_updated": false
 }

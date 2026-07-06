@@ -33,6 +33,16 @@ Use this checklist before making changes.
 13. Append `artifacts/audit_log.jsonl`.
 14. Leave the next action explicit.
 
+## Codex Runtime Gate
+Run these before building workflow routing or repair-loop changes on top of the production Codex executor:
+
+```sh
+make codex-preflight
+make codex-smoke
+```
+
+`make codex-preflight` checks that `codex exec` is available, authenticated, supports the required JSON/schema/output flags, can access the target repo, and can apply the requested sandbox. `make codex-smoke` runs the strict real-Codex planner smoke: `plan.md` and `project_profile.json` must be created, raw JSONL and token usage must be saved, and the read-only role must leave the repo unchanged.
+
 ## Handoff Rules
 - If implementation is incomplete, leave a concrete blocker in `artifacts/report.md`.
 - If checks fail because of the repository baseline, separate baseline failures from task-specific failures.

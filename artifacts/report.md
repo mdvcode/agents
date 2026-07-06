@@ -1,27 +1,30 @@
 # Report
 
-Task: P3.1d production Codex execution path and role trust boundaries.
+Task: P3.1e real Codex smoke gate.
 
 Implemented:
-- `full_agent_workflow` now declares `adapter_command: "python3 scripts/adapters/codex_cli_executor.py"` and passes it into `agent_role_runner.py`.
-- `scripts/run_workflow.py` accepts `--adapter-command` and falls back to workflow-level `adapter_command`.
-- Added `scripts/check_codex_runtime.py` for Codex CLI availability, flag, auth/exec, repo, and sandbox preflight.
-- Added `scripts/tool_preflight.py` for role-level tool gates, including frontend QA unavailable evidence and publication/quality/security checks.
-- `agent_role_runner.py` now defaults the full workflow to the production Codex adapter, blocks production runtime failures before roles, records preflight output, and runs per-role tool preflight.
-- `codex_cli_executor.py` enforces role-owned artifact paths before writing returned `artifacts[]`, validates claimed artifacts, preserves raw JSONL, and applies context total/file budgets.
-- Context manifests now include `context_budget`, `selected_context`, `excluded_context`, `retrieval_queries`, `source_file_candidates`, and `repo_intelligence`.
-- Real Codex smoke is strict when explicitly enabled.
+- Added `codex-preflight` and `codex-smoke` targets to `Makefile`.
+- `codex-preflight` runs `scripts/check_codex_runtime.py --repo .`.
+- `codex-smoke` runs the strict real-Codex planner smoke with `AGENT_REAL_CODEX_SMOKE=1`, `AGENT_CODEX_CLI_COMMAND=codex`, and pytest plugin autoload disabled.
+- The Makefile now prefers an available Node 22 or Node 20 path for Codex targets, avoiding the old system Node v8.9.4 ESM failure.
+- Documented both commands in `docs/onboarding.md` and `docs/agent-system.md`.
+- Improved `scripts/check_codex_runtime.py` so a failed Codex help probe blocks as a runtime/auth failure.
+- Added regression tests for Makefile/docs target presence and failed help-probe classification.
 
 Validation:
-- `python3 -m py_compile scripts/run_workflow.py scripts/agent_role_runner.py scripts/adapters/codex_cli_executor.py scripts/check_codex_runtime.py scripts/tool_preflight.py scripts/context_compiler.py` passed.
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_run_workflow.py tests/test_agent_role_runner.py tests/test_codex_adapter.py tests/test_context_compiler.py tests/test_full_agent_workflow.py tests/test_real_codex_smoke.py` passed: 28 passed, 1 skipped.
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests` passed: 105 passed, 1 skipped.
-- `make check` passed.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_makefile_codex_targets.py tests/test_real_codex_smoke.py -q` passed: 2 passed, 1 skipped.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_makefile_codex_targets.py tests/test_codex_runtime_preflight.py -q` passed: 3 passed.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_makefile_codex_targets.py tests/test_codex_runtime_preflight.py tests/test_real_codex_smoke.py -q` passed: 3 passed, 1 skipped.
+- `make validate-artifacts` passed.
+- `git diff --check` passed.
+- `make check` passed: 108 passed, 1 skipped.
 - `make security` passed.
+- `make codex-preflight` failed as intended for a broken local Codex runtime.
+- `make codex-smoke` failed as intended for a broken local Codex runtime.
 
-Warnings:
-- Plain `python3 -m pytest ...` failed before test collection due to an unrelated globally installed pytest plugin (`web3/ethpm`) and protobuf incompatibility. The repository Makefile uses `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`.
-- Real Codex smoke was not run because it requires `AGENT_REAL_CODEX_SMOKE=1` and an authenticated Codex CLI.
+Runtime blocker:
+- With the original PATH, `codex` uses `/usr/local/bin/node v8.9.4` and fails on ESM `import`.
+- With Node 22 first in PATH, `codex` fails because the installed package is missing the native binary at `node_modules/@openai/codex-darwin-x64/vendor/x86_64-apple-darwin/codex/codex`.
 
 Next action:
-- Proceed to P3.2 deterministic routing and bounded repair loops after review.
+- Repair/reinstall the local Codex CLI, then run `make codex-preflight` and `make codex-smoke`. Do not start P3.2 until both pass.

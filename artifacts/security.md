@@ -1,17 +1,17 @@
 # Security Review
 
-Task: P3.1d production Codex execution path and role trust boundaries.
+Task: P3.1e real Codex smoke gate.
 
-Status: pass.
+Status: pass for code changes; real Codex runtime remains blocked locally.
 
 Reviewed areas:
-- Subprocess calls use argument lists with `shell=False`.
-- New Codex runtime preflight uses `shlex.split` for configured commands and never executes through a shell.
-- Artifact writes reject absolute paths and `..` path traversal.
-- Role-owned artifact writes are enforced before harness writes returned artifact content.
-- Publication and GitHub actions remain delegated to `scripts/publish_pr.py`; no auto-merge or deployment behavior was added.
+- Makefile targets set `PATH` only for the command invocation and do not introduce shell-evaluated user input.
+- `scripts/check_codex_runtime.py` still uses subprocess argument lists, not `shell=True`.
+- The preflight now classifies failed help probes as blocked runtime/auth failures instead of continuing with misleading missing-flag errors.
+- No secrets, credentials, production settings, migrations, auth, billing, payment, or deployment paths were introduced.
 
-No hardcoded secrets, credentials, production settings, migrations, auth, billing, or payment paths were introduced.
+Runtime blocker:
+- The local `codex` npm package is not runnable with modern Node because the native vendor binary is missing from `node_modules/@openai/codex-darwin-x64/vendor/x86_64-apple-darwin/codex/codex`.
 
 Automated security check:
 - `make security` passed: no obvious secrets, private keys, private paths, or protected staged files found.
