@@ -1,14 +1,12 @@
 {
   "evals_run": [
-    "Confirmed selected project profile is flowfox.",
-    "Confirmed issue #1454 scope maps to a single dashboard UI component.",
-    "Confirmed publication path must use scripts/publish_pr.py and not direct Codex app publication actions.",
-    "Confirmed external/agents dirty state is excluded from the task change set."
+    "Role sequence followed from issue intake through frontend QA and review artifacts.",
+    "Flowfox profile checks used instead of Django checks.",
+    "Publication path reserved for publish_pr.py."
   ],
   "regressions": [],
   "coverage_gaps": [
-    "No authenticated browser session was available for full local visual evidence.",
-    "Root TypeScript check is blocked by an unrelated existing test typing issue."
+    "Authenticated multi-entrypoint browser video was not captured locally."
   ],
-  "next_action": "Run publication dry-run, then publish through publish_pr.py if allowed."
+  "next_action": "Run artifact validation and publication dry-run."
 }

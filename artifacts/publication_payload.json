@@ -1,6 +1,6 @@
 {
-  "title": "Close production Codex execution path",
-  "body": "Adds codex exec execution, sandbox/output-schema handling, harness-owned artifacts, telemetry capture, deterministic publication inputs, and workflow timeout coverage.",
-  "commit_message": "Close production Codex execution path",
+  "title": "Enable production Codex workflow execution",
+  "body": "## Summary\n- Make the full workflow pass the Codex CLI executor by default.\n- Add runtime and role tool preflights before role execution.\n- Enforce role-owned artifact writes and extend context manifests with budget/retrieval fields.\n\n## Validation\n- PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests\n- make check\n- make security",
+  "commit_message": "Enable production Codex workflow execution",
   "base_branch": "main"
 }

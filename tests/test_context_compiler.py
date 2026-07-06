@@ -34,6 +34,12 @@ def test_context_manifest_references_role_scoped_skills(tmp_path: Path) -> None:
 
     skill_names = {item["name"] for item in manifest["skill_references"]}
     assert {"context-engineering", "repo-policy", "structured-output-guard"}.issubset(skill_names)
+    assert manifest["context_budget"] == {"max_total_bytes": 120000, "max_file_bytes": 24000}
+    assert manifest["selected_context"] == []
+    assert manifest["excluded_context"] == []
+    assert manifest["retrieval_queries"] == []
+    assert manifest["source_file_candidates"] == []
+    assert manifest["repo_intelligence"] == {}
 
 
 def test_context_manifest_records_role_capabilities_and_contract(tmp_path: Path) -> None:

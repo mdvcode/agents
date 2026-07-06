@@ -7,6 +7,7 @@
 - Keep `.agents/prompts/` aligned with the docs/onboarding flow.
 
 ## In Progress
+- Flowfox issue 1621: migrate Landing Page Workspace entrypoints.
 - Flowfox issue 481: nested sidebar recursion in Advertorial Presentation preview.
 - Flowfox issue 851: simplified, RBAC-aware main navigation structure.
 - Flowfox issue 490: Advanced CTA vertical spacing controls.
@@ -19,6 +20,7 @@
 - Flowfox issue 493: Pre-image attribution for Advertorial Content Sections.
 
 ## Done
+- P3.1d: production Codex execution path and role trust boundaries implemented and verified.
 - P1.1: Harden autonomy and project profile contracts.
 - P1: Add project profiles for agent_workspace, Django, and Flowfox.
 - P0: Normalize agent autonomy contract, publication policy, and artifact schemas.

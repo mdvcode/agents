@@ -1,16 +1,16 @@
 {
   "consistency_status": "pass",
   "findings": [
-    "The canonical PageHeader remains in app/(dashboard)/settings/users/UsersManagementClient.tsx.",
-    "The patch removes only duplicate local layout copy from UsersCard and preserves existing tabs, role badge, table rendering, API calls, permissions, and data flow.",
-    "No protected architecture boundaries were crossed."
+    "New dashboard route follows existing app-router pattern under app/(dashboard).",
+    "Route-level permission uses existing verifyPermission helper.",
+    "Entry URLs are centralized in lib/landing-page-workspace/url.ts.",
+    "Create-mode publish reuses existing lib/cms.createLandingPage instead of introducing a parallel Sanity writer."
   ],
   "protected_boundaries": [
-    "auth/permissions unchanged",
-    "API routes unchanged",
-    "database and migrations unchanged",
-    "private control-plane files excluded from publication"
+    "No migrations touched.",
+    "No auth model, billing, payment, production settings, or production infra changes.",
+    "external/agents remains unrelated and excluded."
   ],
   "recommended_repairs": [],
-  "next_action": "Continue to semantic conflict and review gates."
+  "next_action": "Proceed to review and publication gate."
 }

@@ -1,39 +1,45 @@
 {
-  "task": "P3.1c production Codex execution closure",
+  "task": "P3.1d production Codex execution path and role trust boundaries",
   "project_profile": "agent_workspace",
   "overall_status": "pass",
   "checks": [
     {
-      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_codex_adapter.py tests/test_agent_role_runner.py tests/test_full_agent_workflow.py tests/test_context_compiler.py tests/test_run_workflow.py -q",
+      "command": "python3 -m py_compile scripts/run_workflow.py scripts/agent_role_runner.py scripts/adapters/codex_cli_executor.py scripts/check_codex_runtime.py scripts/tool_preflight.py scripts/context_compiler.py",
+      "status": "pass"
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_run_workflow.py tests/test_agent_role_runner.py tests/test_codex_adapter.py tests/test_context_compiler.py tests/test_full_agent_workflow.py tests/test_real_codex_smoke.py",
       "status": "pass",
-      "details": "21 passed"
+      "summary": "28 passed, 1 skipped"
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests",
+      "status": "pass",
+      "summary": "105 passed, 1 skipped"
     },
     {
       "command": "make check",
       "status": "pass",
-      "details": "98 passed, 1 skipped"
+      "summary": "artifact validation passed; security scan passed; JSON artifacts valid; full pytest passed with 105 passed, 1 skipped; git diff check passed"
     },
     {
       "command": "make security",
       "status": "pass",
-      "details": "No obvious secrets, private keys, private paths, or protected staged files found."
-    },
-    {
-      "command": "python3 -m compileall -q scripts tests",
-      "status": "pass",
-      "details": "Python compilation passed."
+      "summary": "security: no obvious secrets, private keys, private paths, or protected staged files found"
     }
   ],
   "commands_attempted": [
-    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_codex_adapter.py tests/test_agent_role_runner.py tests/test_full_agent_workflow.py tests/test_context_compiler.py tests/test_run_workflow.py -q",
+    "python3 -m py_compile scripts/run_workflow.py scripts/agent_role_runner.py scripts/adapters/codex_cli_executor.py scripts/check_codex_runtime.py scripts/tool_preflight.py scripts/context_compiler.py",
+    "python3 -m pytest tests/test_run_workflow.py tests/test_agent_role_runner.py tests/test_codex_adapter.py tests/test_context_compiler.py tests/test_full_agent_workflow.py tests/test_real_codex_smoke.py",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_run_workflow.py tests/test_agent_role_runner.py tests/test_codex_adapter.py tests/test_context_compiler.py tests/test_full_agent_workflow.py tests/test_real_codex_smoke.py",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests",
     "make check",
-    "make security",
-    "python3 -m compileall -q scripts tests"
+    "make security"
   ],
   "focused_tests_passed": true,
   "repository_checks_passed": true,
   "coverage": "not measured",
   "warnings": [
-    "Local codex CLI is installed but currently fails to start because the optional @openai/codex-darwin-arm64 package is missing; opt-in real smoke remains gated by environment variables."
+    "Plain pytest without PYTEST_DISABLE_PLUGIN_AUTOLOAD failed before test collection because a globally installed web3/ethpm pytest plugin is incompatible with the installed protobuf version. The repository Makefile already disables plugin autoload for pytest."
   ]
 }

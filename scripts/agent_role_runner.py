@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
@@ -19,8 +20,10 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from adapters.codex_adapter import CodexAdapter, contract_section, load_json, validate_contract
+from check_codex_runtime import check_codex_runtime
 from context_compiler import create_context_manifest, role_capability, role_contract
 from repository_registry import RepositoryRecord, find_by_remote
+from tool_preflight import role_tool_preflight
 from validate_artifacts import validate_required as validate_artifact_required
 from worktree_manager import create_worktree, slug
 
@@ -70,6 +73,7 @@ PROMPT_FILES = {
 }
 DEFAULT_ALLOWED_TOOLS = ["filesystem_read", "repository_search"]
 KNOWN_PROJECT_PROFILES = {"agent_workspace", "django", "flowfox"}
+DEFAULT_CODEX_ADAPTER_COMMAND = "python3 scripts/adapters/codex_cli_executor.py"
 
 
 def make_run_id(workflow: str) -> str:
@@ -268,9 +272,13 @@ def validate_role_artifacts(
 ) -> list[str]:
     errors: list[str] = []
     contract = role_contract(role)
+    expected = {str(item) for item in contract.get("expected_artifacts", []) if isinstance(item, str)}
     for artifact in result.get("artifacts_created", []):
         if not safe_artifact_name(artifact):
             errors.append(f"{role}: artifacts_created contains unsafe path {artifact!r}")
+            continue
+        if role in ADAPTER_ROLES and str(artifact) not in expected:
+            errors.append(f"{role} cannot claim artifact it does not own: {artifact}")
     for expected in contract.get("expected_artifacts", []):
         if not safe_artifact_name(expected):
             errors.append(f"{role}: expected artifact uses unsafe path {expected!r}")
@@ -404,6 +412,62 @@ def build_role_request(
         "token_budget": token_budget,
         "timeout_seconds": timeout_seconds,
     }
+
+
+def effective_adapter_command(workflow: str, adapter_command: str) -> str:
+    if adapter_command:
+        return adapter_command
+    configured = os.environ.get("AGENT_CODEX_COMMAND", "") or os.environ.get("AGENT_LLM_COMMAND", "")
+    if configured:
+        return configured
+    if workflow == "full_agent_workflow":
+        return DEFAULT_CODEX_ADAPTER_COMMAND
+    return ""
+
+
+def uses_production_codex_executor(command: str) -> bool:
+    return "codex_cli_executor.py" in command
+
+
+def frontend_qa_unavailable_result(artifacts_dir: Path, warnings: list[str]) -> dict[str, Any]:
+    write_json(
+        artifacts_dir / "frontend_qa.json",
+        {
+            "evidence_required": True,
+            "evidence_collected": False,
+            "screenshots": [],
+            "console_errors": [],
+            "network_errors": [],
+            "blockers": warnings,
+            "local_url": "",
+            "dev_server": {},
+            "next_action": "continue",
+        },
+    )
+    result = completed_result("Frontend QA evidence is unavailable in this runtime.", "continue")
+    result["artifacts_created"] = ["frontend_qa.json"]
+    result["warnings"] = warnings
+    return result
+
+
+def preflight_role_execution(
+    *,
+    role: str,
+    project_profile: str,
+    artifacts_dir: Path,
+    dry_run: bool,
+) -> dict[str, Any] | None:
+    outcome = role_tool_preflight(
+        role=role,
+        allowed_tools=role_tools(role),
+        project_profile=project_profile,
+        dry_run=dry_run,
+    )
+    if outcome["status"] == "blocked":
+        return blocked_result("Role tool preflight failed.", list(outcome["blockers"]))
+    if outcome["status"] == "unavailable" and role == "frontend-qa-agent":
+        return frontend_qa_unavailable_result(artifacts_dir, list(outcome["warnings"]))
+    return None
 
 
 def run_publication(
@@ -602,6 +666,7 @@ def run_roles(
     run_artifacts.mkdir(parents=True, exist_ok=True)
     goal = goal or task_id
     repository = repository.resolve()
+    adapter_command = effective_adapter_command(workflow, adapter_command)
     worktree, effective_branch, effective_base, setup_errors = prepare_worktree(
         repository,
         task_id,
@@ -635,6 +700,17 @@ def run_roles(
         write_json(run_dir / "agent_workflow.json", state)
         append_trace(run_dir, {"event": "workflow_blocked", "blockers": setup_errors})
         return state
+
+    if uses_production_codex_executor(adapter_command):
+        runtime_preflight = check_codex_runtime(repo=worktree, sandbox="read-only", timeout_seconds=min(timeout_seconds, 60))
+        write_json(run_dir / "codex_runtime_preflight.json", runtime_preflight)
+        if runtime_preflight.get("execution_status") != "completed":
+            blockers = [str(item) for item in runtime_preflight.get("blockers", [])]
+            state["execution_status"] = "blocked"
+            state["blockers"] = blockers or ["Codex CLI is not available or not authenticated."]
+            write_json(run_dir / "agent_workflow.json", state)
+            append_trace(run_dir, {"event": "workflow_blocked", "blockers": state["blockers"]})
+            return state
 
     adapter = CodexAdapter(command=adapter_command, timeout_seconds=timeout_seconds, raw_output_dir=raw_dir)
     completed_roles: list[str] = []
@@ -680,7 +756,13 @@ def run_roles(
                 base_branch=effective_base,
             )
         elif role == "publication":
-            result = run_publication(
+            preflight_result = preflight_role_execution(
+                role=role,
+                project_profile=project_profile,
+                artifacts_dir=run_artifacts,
+                dry_run=dry_run,
+            )
+            result = preflight_result or run_publication(
                 run_id=run_id,
                 repository=worktree,
                 artifacts_dir=run_artifacts,
@@ -710,19 +792,28 @@ def run_roles(
             if manifest_errors:
                 result = blocked_result("Context manifest failed schema validation.", manifest_errors)
             else:
-                request = build_role_request(
-                    run_id=run_id,
+                preflight_result = preflight_role_execution(
                     role=role,
-                    goal=goal,
-                    repository=worktree,
-                    artifacts_dir=run_artifacts,
-                    context_manifest=manifest_path,
-                    token_budget=token_budget,
-                    timeout_seconds=timeout_seconds,
                     project_profile=project_profile,
+                    artifacts_dir=run_artifacts,
+                    dry_run=dry_run,
                 )
-                write_json(requests_dir / f"{role}.json", request)
-                result = adapter.invoke(request)
+                if preflight_result is not None:
+                    result = preflight_result
+                else:
+                    request = build_role_request(
+                        run_id=run_id,
+                        role=role,
+                        goal=goal,
+                        repository=worktree,
+                        artifacts_dir=run_artifacts,
+                        context_manifest=manifest_path,
+                        token_budget=token_budget,
+                        timeout_seconds=timeout_seconds,
+                        project_profile=project_profile,
+                    )
+                    write_json(requests_dir / f"{role}.json", request)
+                    result = adapter.invoke(request)
 
         result_errors = validate_role_result(result, role)
         if result_errors:

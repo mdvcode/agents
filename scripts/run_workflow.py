@@ -115,6 +115,7 @@ def run_workflow(
     repository: Path | None = None,
     branch: str = "",
     base_branch: str = "main",
+    adapter_command: str = "",
 ) -> int:
     workflows = read_workflows()
     workflow = workflows.get("workflows", {}).get(workflow_name)
@@ -132,6 +133,7 @@ def run_workflow(
     max_retries = int(retry.get("max_retries", 0)) if isinstance(retry, dict) else 0
     backoff_seconds = float(retry.get("backoff_seconds", 0)) if isinstance(retry, dict) else 0.0
     steps = workflow_steps(workflow)
+    effective_adapter_command = adapter_command or str(workflow.get("adapter_command", ""))
     artifacts_dir = run_dir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     append_trace(
@@ -158,7 +160,14 @@ def run_workflow(
                 .replace("{repository}", quote_placeholder(repository_value))
                 .replace("{branch}", quote_placeholder(branch_value))
                 .replace("{base_branch}", quote_placeholder(base_branch))
+                .replace("{adapter_command}", quote_placeholder(effective_adapter_command))
             )
+            if (
+                effective_adapter_command
+                and command.startswith("python3 scripts/agent_role_runner.py")
+                and "--adapter-command" not in command
+            ):
+                command = f"{command} --adapter-command {quote_placeholder(effective_adapter_command)}"
             if (
                 dry_run
                 and command.startswith(("python3 scripts/publish_pr.py", "python3 scripts/agent_role_runner.py"))
@@ -201,6 +210,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo", type=Path, default=None)
     parser.add_argument("--branch", default="")
     parser.add_argument("--base-branch", default="main")
+    parser.add_argument("--adapter-command", default="")
     return parser.parse_args()
 
 
@@ -216,6 +226,7 @@ def main() -> int:
         repository=args.repo,
         branch=args.branch,
         base_branch=args.base_branch,
+        adapter_command=args.adapter_command,
     )
 
 

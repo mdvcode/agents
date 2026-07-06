@@ -2,20 +2,19 @@
   "project_profile": "agent_workspace",
   "confidence": "high",
   "reasons": [
-    "The active repository is /Users/user/agents.",
-    "Changed files are agent workspace contracts, scripts, schemas, tests, and artifacts."
+    "The task changes the local agent workflow harness, schemas, scripts, and tests in /Users/user/agents.",
+    "Repository markers match the agent_workspace profile: AGENTS.md, .agent-policy.yaml, schemas/, scripts/, tests/, and Makefile."
   ],
   "matched_markers": [
     "AGENTS.md",
     ".agent-policy.yaml",
     ".agent-project-profiles.yaml",
-    ".agent-role-capabilities.yaml",
-    ".agent-role-contracts.yaml",
-    "scripts/**",
     "schemas/**",
-    "tests/**"
+    "scripts/validate_artifacts.py",
+    "Makefile"
   ],
   "quality_commands_selected": [
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests",
     "make check"
   ],
   "security_commands_selected": [

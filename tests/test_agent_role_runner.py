@@ -60,7 +60,7 @@ elif role == "implementation-agent":
         "changed_files": ["impl.txt"],
         "summary": "implemented"
     }), encoding="utf-8")
-    created = ["impl.txt", "implementation.json"]
+    created = ["implementation.json"]
     next_action = "completed"
 else:
     created = []
@@ -81,16 +81,33 @@ print(json.dumps({
     return f"{sys.executable} {path}"
 
 
-def test_agent_role_runner_blocks_without_adapter(tmp_path: Path, monkeypatch: object) -> None:
+def test_agent_role_runner_preflights_default_codex_executor_before_roles(tmp_path: Path, monkeypatch: object) -> None:
     monkeypatch.setattr(agent_role_runner, "RUNS", tmp_path / ".agent-runs")
     monkeypatch.delenv("AGENT_CODEX_COMMAND", raising=False)
     monkeypatch.delenv("AGENT_LLM_COMMAND", raising=False)
+    calls: list[Path] = []
 
-    state = agent_role_runner.run_roles(run_id="run-1", artifacts_dir=tmp_path / "artifacts", dry_run=True)
+    def fake_check_codex_runtime(**kwargs: object) -> dict[str, object]:
+        calls.append(Path(str(kwargs["repo"])))
+        return {
+            "execution_status": "blocked",
+            "blockers": ["Codex CLI is not available or not authenticated."],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(agent_role_runner, "check_codex_runtime", fake_check_codex_runtime)
+
+    state = agent_role_runner.run_roles(
+        run_id="run-1",
+        artifacts_dir=tmp_path / "artifacts",
+        repository=tmp_path,
+        dry_run=True,
+    )
 
     assert state["execution_status"] == "blocked"
-    assert [item["role"] for item in state["roles"]] == ["issue-intake", "context-compiler", "planner"]
-    assert state["roles"][-1]["result"]["summary"] == "No Codex adapter command configured."
+    assert state["roles"] == []
+    assert calls == [tmp_path.resolve()]
+    assert state["blockers"] == ["Codex CLI is not available or not authenticated."]
 
 
 def test_agent_role_runner_invokes_adapter_for_core_roles(tmp_path: Path, monkeypatch: object) -> None:
@@ -160,3 +177,49 @@ def test_implementation_artifact_validation_detects_source_repo_mutation(tmp_pat
     )
 
     assert "implementation-agent changed the source repository instead of only the task worktree" in errors
+
+
+def test_adapter_role_cannot_claim_foreign_artifact(tmp_path: Path) -> None:
+    (tmp_path / "artifacts").mkdir()
+    (tmp_path / "artifacts" / "plan.md").write_text("# Plan\n", encoding="utf-8")
+    (tmp_path / "artifacts" / "verdict.json").write_text("{}", encoding="utf-8")
+
+    errors = agent_role_runner.validate_role_artifacts(
+        role="planner",
+        result={
+            "status": "completed",
+            "next_action": "continue",
+            "summary": "done",
+            "artifacts_created": ["plan.md", "verdict.json"],
+            "blockers": [],
+            "warnings": [],
+            "tokens_used": 1,
+        },
+        artifacts_dir=tmp_path / "artifacts",
+        worktree=tmp_path,
+        source_repository=tmp_path,
+        source_snapshot_before="",
+        create_task_worktree=False,
+    )
+
+    assert "planner cannot claim artifact it does not own: verdict.json" in errors
+
+
+def test_frontend_qa_preflight_marks_evidence_unavailable(tmp_path: Path, monkeypatch: object) -> None:
+    monkeypatch.delenv("AGENT_BROWSER_AVAILABLE", raising=False)
+    monkeypatch.setattr(agent_role_runner, "RUNS", tmp_path / ".agent-runs")
+
+    result = agent_role_runner.preflight_role_execution(
+        role="frontend-qa-agent",
+        project_profile="flowfox",
+        artifacts_dir=tmp_path / "artifacts",
+        dry_run=True,
+    )
+
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["artifacts_created"] == ["frontend_qa.json"]
+    artifact = json.loads((tmp_path / "artifacts" / "frontend_qa.json").read_text(encoding="utf-8"))
+    assert artifact["evidence_required"] is True
+    assert artifact["evidence_collected"] is False
+    assert artifact["blockers"]

@@ -1,12 +1,11 @@
 # Review
 
-Findings: none after focused self-review.
+Findings: none blocking after focused self-review.
 
-Checked:
-- `codex_cli_executor.py` uses `codex exec` flags for JSONL, sandbox, approval policy, output schema, and last-message file.
-- Harness-owned artifact writing avoids requiring read-only roles to write control-plane files.
-- Read-only snapshot guard runs before harness artifact writes.
-- `publication-prepare` deterministically owns `change_set.json` and `publication_payload.json`.
-- Role contracts now assign ownership for implementation/test/CI artifacts.
-- Flowfox implementation context no longer receives Python-specific implementation standards.
-- Full workflow timeout can be set per workflow and is raised for `full_agent_workflow`.
+Coverage notes:
+- Added regression coverage for workflow adapter propagation, default Codex preflight before roles, context budget manifest fields, role artifact ownership, frontend QA unavailable evidence, strict real-Codex smoke expectations, and production executor smoke with fake Codex CLI.
+- Existing publication dry-run path still invokes `publish_pr.py` with the same `run_id` and `artifacts_dir`.
+
+Residual risk:
+- The real Codex smoke remains opt-in and was skipped locally because `AGENT_REAL_CODEX_SMOKE=1` was not set.
+- Browser capability detection is intentionally conservative: absent `AGENT_BROWSER_AVAILABLE=1`, frontend QA records unavailable evidence instead of claiming coverage.

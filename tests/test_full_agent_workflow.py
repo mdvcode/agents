@@ -411,7 +411,19 @@ import json
 import os
 import sys
 
+if "--help" in sys.argv:
+    print("--json --sandbox --output-schema --output-last-message")
+    raise SystemExit(0)
+
 prompt = sys.stdin.read()
+result_path = Path(sys.argv[sys.argv.index("--output-last-message") + 1])
+if "Role execution request:" not in prompt:
+    result_path.write_text(json.dumps({
+        "status": "ok",
+        "summary": "runtime preflight"
+    }), encoding="utf-8")
+    print(json.dumps({"type": "thread.started", "thread_id": "preflight"}))
+    raise SystemExit(0)
 request_text = prompt.split("Role execution request:", 1)[1].split("Context manifest:", 1)[0]
 request = json.loads(request_text)
 role = request["role"]
@@ -451,7 +463,7 @@ elif role == "implementation-agent":
         "changed_files": ["impl.txt"],
         "summary": "implemented"
     })}]
-    created = ["impl.txt"]
+    created = []
     next_action = "quality-runner"
 elif role == "quality-runner":
     result_artifacts = [{"path": "quality.json", "content": json.dumps({

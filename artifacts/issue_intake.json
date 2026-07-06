@@ -1,18 +1,17 @@
 {
-  "issue": 1454,
-  "repo": "primest-spec/flowfox",
-  "url": "https://github.com/PrimestSpec/flowfox/issues/1454",
-  "title": "Remove duplicate Benutzerverwaltung heading on User Management page",
-  "state": "OPEN",
-  "labels": ["Low", "Project <User Management>"],
-  "summary": "Remove the duplicate User Management title/subtitle from the card on /settings/users while keeping the standard PageHeader.",
-  "acceptance_criteria": [
-    "The page title and subtitle appear only once in PageHeader.",
-    "The card starts with the Mitarbeiter/Kunden/Affiliates tab switcher and Deine Rolle badge.",
-    "Tab switching, table content, and actions continue to work unchanged.",
-    "Desktop and narrow/mobile layout remain usable."
-  ],
-  "privacy_notes": [
-    "Raw issue body and screenshots are private project context and must not be copied into public PR text."
+  "task": "Flowfox issue 1621",
+  "issue_url": "https://github.com/PrimestSpec/flowfox/issues/1621",
+  "project": "flowfox",
+  "branch": "feat/landing-page-workspace-migrate-entrypoints-and-retire-landing-page-generation-modal",
+  "status": "in_progress",
+  "privacy_policy_read": true,
+  "issue_journal": "/Users/user/agents/docs/projects/flowfox/issues/issue-1621.md",
+  "kanban_updated": true,
+  "summary": "Migrate Landing Page create/edit entrypoints to the Landing Page Workspace route and retire direct legacy modal entrypoints.",
+  "constraints": [
+    "Use Flowfox project profile",
+    "Do not commit protected/private control-plane files to Flowfox",
+    "Publish only through publish_pr.py",
+    "Stop before commit/push/PR if risk becomes high"
   ]
 }

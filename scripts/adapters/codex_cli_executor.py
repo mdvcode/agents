@@ -206,7 +206,20 @@ def write_standard_schema(
     return path
 
 
-def context_reference_contents(manifest: dict[str, Any], max_bytes_per_file: int = 24000) -> str:
+def context_budget(manifest: dict[str, Any]) -> tuple[int, int]:
+    budget = manifest.get("context_budget", {})
+    if not isinstance(budget, dict):
+        return 120000, 24000
+    max_total = budget.get("max_total_bytes", 120000)
+    max_file = budget.get("max_file_bytes", 24000)
+    return (
+        max_total if isinstance(max_total, int) and max_total > 0 else 120000,
+        max_file if isinstance(max_file, int) and max_file > 0 else 24000,
+    )
+
+
+def context_reference_contents(manifest: dict[str, Any]) -> str:
+    max_total_bytes, max_bytes_per_file = context_budget(manifest)
     references: list[tuple[str, str]] = []
     for item in manifest.get("context_files", []):
         if isinstance(item, dict) and isinstance(item.get("path"), str):
@@ -219,10 +232,12 @@ def context_reference_contents(manifest: dict[str, Any], max_bytes_per_file: int
             references.append((f"artifact:{item.get('kind', 'file')}", str(item["path"])))
     chunks: list[str] = []
     seen: set[str] = set()
+    excluded = {str(item) for item in manifest.get("excluded_context", []) if isinstance(item, str)}
+    total_bytes = 0
     for kind, path_value in references:
         path = Path(path_value)
         key = str(path)
-        if key in seen or not path.is_file():
+        if key in seen or key in excluded or not path.is_file():
             continue
         seen.add(key)
         try:
@@ -232,9 +247,19 @@ def context_reference_contents(manifest: dict[str, Any], max_bytes_per_file: int
         except OSError as exc:
             chunks.append(f"### {kind}: {path}\n[unavailable: {exc}]")
             continue
-        if len(content.encode("utf-8")) > max_bytes_per_file:
+        encoded = content.encode("utf-8")
+        if len(encoded) > max_bytes_per_file:
             content = content[:max_bytes_per_file] + "\n[truncated]"
+            encoded = content.encode("utf-8")
+        if total_bytes + len(encoded) > max_total_bytes:
+            remaining = max_total_bytes - total_bytes
+            if remaining <= 0:
+                chunks.append("[context budget exhausted]")
+                break
+            content = content[:remaining] + "\n[truncated: context budget exhausted]"
+            encoded = content.encode("utf-8")
         chunks.append(f"### {kind}: {path}\n{content}")
+        total_bytes += len(encoded)
     return "\n\n".join(chunks)
 
 
@@ -330,6 +355,7 @@ def write_artifacts_from_result(request: dict[str, Any], result: dict[str, Any])
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     created = list(result.get("artifacts_created", []))
     artifacts = result.get("artifacts", [])
+    allowed = {str(path) for path in request.get("expected_artifacts", []) if isinstance(path, str)}
     if not isinstance(artifacts, list):
         return ["role_result.artifacts must be a list"]
     for artifact in artifacts:
@@ -341,6 +367,12 @@ def write_artifacts_from_result(request: dict[str, Any], result: dict[str, Any])
         if not safe_artifact_name(path_value):
             errors.append(f"artifact path is unsafe: {path_value!r}")
             continue
+        if str(path_value) not in allowed:
+            errors.append(
+                "Role attempted to write an artifact it does not own: "
+                f"{request['role']} cannot write {path_value}"
+            )
+            continue
         if not isinstance(content, str):
             errors.append(f"artifact {path_value!r} content must be a string")
             continue
@@ -350,6 +382,21 @@ def write_artifacts_from_result(request: dict[str, Any], result: dict[str, Any])
         if path_value not in created:
             created.append(str(path_value))
     result["artifacts_created"] = created
+    return errors
+
+
+def validate_artifact_ownership(request: dict[str, Any], result: dict[str, Any]) -> list[str]:
+    allowed = {str(path) for path in request.get("expected_artifacts", []) if isinstance(path, str)}
+    errors: list[str] = []
+    for path_value in result.get("artifacts_created", []):
+        if not safe_artifact_name(path_value):
+            errors.append(f"artifacts_created contains unsafe path {path_value!r}")
+            continue
+        if str(path_value) not in allowed:
+            errors.append(
+                "Role attempted to publish an artifact it does not own: "
+                f"{request['role']} cannot claim {path_value}"
+            )
     return errors
 
 
@@ -469,6 +516,7 @@ def run_codex(
         result["tokens_used"] = usage_total
     artifact_errors = write_artifacts_from_result(request, result)
     write_deterministic_artifacts(request, result)
+    artifact_errors.extend(validate_artifact_ownership(request, result))
     if artifact_errors:
         return blocked_result("Codex CLI returned invalid artifacts.", artifact_errors)
     if result.get("status") == "completed":

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import subprocess
@@ -10,30 +9,30 @@ from pathlib import Path
 import pytest
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "adapters" / "codex_adapter.py"
-SPEC = importlib.util.spec_from_file_location("codex_adapter_smoke", MODULE_PATH)
-assert SPEC is not None
-codex_adapter = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
-sys.modules[SPEC.name] = codex_adapter
-SPEC.loader.exec_module(codex_adapter)
-
-
 @pytest.mark.skipif(
     os.environ.get("AGENT_REAL_CODEX_SMOKE") != "1" or not os.environ.get("AGENT_CODEX_CLI_COMMAND"),
     reason="optional real Codex smoke requires AGENT_REAL_CODEX_SMOKE=1 and AGENT_CODEX_CLI_COMMAND",
 )
 def test_real_codex_runtime_smoke(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    (repo / "README.md").write_text("smoke\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, capture_output=True, text=True)
     manifest = tmp_path / "context.json"
     raw_dir = tmp_path / "raw"
+    artifacts_dir = tmp_path / "artifacts"
     manifest.write_text(
         json.dumps(
             {
                 "run_id": "real-smoke",
                 "role": "planner",
-                "goal": "Return a valid role_result JSON object for smoke testing.",
-                "repository": str(tmp_path),
-                "artifacts_dir": str(tmp_path / "artifacts"),
+                "goal": "Return a valid completed planner role_result JSON object for smoke testing. Create plan.md only; project_profile.json will be created deterministically by the harness.",
+                "repository": str(repo),
+                "artifacts_dir": str(artifacts_dir),
                 "project": "agent_workspace",
                 "project_profile": "agent_workspace",
                 "token_budget": 1000,
@@ -41,8 +40,14 @@ def test_real_codex_runtime_smoke(tmp_path: Path) -> None:
                 "filesystem_access": "read_only",
                 "prompt_path": ".agents/prompts/planner.md",
                 "output_contract": "schemas/roles/planner.schema.json",
-                "expected_artifacts": ["plan.md"],
+                "expected_artifacts": ["plan.md", "project_profile.json"],
                 "created_at": "2026-06-25T00:00:00+00:00",
+                "context_budget": {"max_total_bytes": 120000, "max_file_bytes": 24000},
+                "selected_context": [],
+                "excluded_context": [],
+                "retrieval_queries": [],
+                "source_file_candidates": [],
+                "repo_intelligence": {},
                 "context_files": [],
                 "artifact_references": [],
                 "skill_references": [],
@@ -56,14 +61,14 @@ def test_real_codex_runtime_smoke(tmp_path: Path) -> None:
     request = {
         "run_id": "real-smoke",
         "role": "planner",
-        "goal": "Return a valid role_result JSON object for smoke testing.",
-        "repository": str(tmp_path),
-        "artifacts_dir": str(tmp_path / "artifacts"),
+        "goal": "Return a valid completed planner role_result JSON object for smoke testing. Create plan.md only; project_profile.json will be created deterministically by the harness.",
+        "repository": str(repo),
+        "artifacts_dir": str(artifacts_dir),
         "context_manifest": str(manifest),
         "prompt_path": ".agents/prompts/planner.md",
         "output_contract": "schemas/roles/planner.schema.json",
         "project_profile": "agent_workspace",
-        "expected_artifacts": ["plan.md"],
+        "expected_artifacts": ["plan.md", "project_profile.json"],
         "allowed_tools": ["filesystem_read"],
         "filesystem_access": "read_only",
         "token_budget": 1000,
@@ -82,4 +87,13 @@ def test_real_codex_runtime_smoke(tmp_path: Path) -> None:
 
     assert completed.returncode == 0
     result = json.loads(completed.stdout)
-    assert result["status"] in {"completed", "blocked", "failed", "awaiting_approval"}
+    assert result["status"] == "completed", result
+    assert (artifacts_dir / "plan.md").exists()
+    assert (artifacts_dir / "project_profile.json").exists()
+    assert result["thread_id"]
+    assert isinstance(result["input_tokens"], int)
+    assert isinstance(result["output_tokens"], int)
+    assert isinstance(result["duration_ms"], int)
+    assert (raw_dir / "planner.jsonl").exists()
+    status = subprocess.run(["git", "status", "--porcelain"], cwd=repo, text=True, capture_output=True, check=False)
+    assert status.stdout == ""

@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILLS = ROOT / ".agents" / "skills"
 ROLE_CAPABILITIES = ROOT / ".agent-role-capabilities.yaml"
 ROLE_CONTRACTS = ROOT / ".agent-role-contracts.yaml"
+DEFAULT_MAX_TOTAL_CONTEXT_BYTES = 120000
+DEFAULT_MAX_FILE_CONTEXT_BYTES = 24000
 ROLE_SKILLS = {
     "issue-intake": ["issue-intake", "repo-policy", "context-engineering"],
     "context-compiler": ["context-engineering", "repo-policy"],
@@ -146,6 +148,15 @@ def create_context_manifest(
         "output_contract": contract_path,
         "expected_artifacts": artifacts,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "context_budget": {
+            "max_total_bytes": DEFAULT_MAX_TOTAL_CONTEXT_BYTES,
+            "max_file_bytes": DEFAULT_MAX_FILE_CONTEXT_BYTES,
+        },
+        "selected_context": [],
+        "excluded_context": [],
+        "retrieval_queries": [],
+        "source_file_candidates": [],
+        "repo_intelligence": {},
         "context_files": [
             {"path": str((ROOT / "AGENTS.md").resolve()), "kind": "policy"},
             {"path": str((ROOT / ".agent-policy.yaml").resolve()), "kind": "policy"},

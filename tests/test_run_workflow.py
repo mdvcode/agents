@@ -103,3 +103,70 @@ workflows:
 
     assert result == 0
     assert calls == [17]
+
+
+def test_workflow_runner_passes_adapter_command_from_workflow(tmp_path: Path, monkeypatch: object) -> None:
+    workflows_path = tmp_path / ".agent-workflows.yaml"
+    workflows_path.write_text(
+        """
+version: 1
+workflows:
+  sample:
+    adapter_command: "python3 scripts/adapters/codex_cli_executor.py"
+    max_iterations: 1
+    steps:
+      - name: "roles"
+        command: "python3 scripts/agent_role_runner.py --workflow sample --adapter-command {adapter_command}"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run_workflow, "WORKFLOWS", workflows_path)
+    monkeypatch.setattr(run_workflow, "RUNS_DIR", tmp_path / ".agent-runs")
+    commands: list[str] = []
+
+    def fake_run_command(command: str, cwd: Path, timeout_seconds: int) -> tuple[int, str, str]:
+        commands.append(command)
+        return 0, "ok", ""
+
+    monkeypatch.setattr(run_workflow, "run_command", fake_run_command)
+
+    result = run_workflow.run_workflow("sample", root=tmp_path)
+
+    assert result == 0
+    assert commands == [
+        "python3 scripts/agent_role_runner.py --workflow sample --adapter-command "
+        "'python3 scripts/adapters/codex_cli_executor.py'"
+    ]
+
+
+def test_workflow_runner_cli_adapter_command_overrides_workflow(tmp_path: Path, monkeypatch: object) -> None:
+    workflows_path = tmp_path / ".agent-workflows.yaml"
+    workflows_path.write_text(
+        """
+version: 1
+workflows:
+  sample:
+    adapter_command: "default-adapter"
+    max_iterations: 1
+    steps:
+      - name: "roles"
+        command: "python3 scripts/agent_role_runner.py --workflow sample"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run_workflow, "WORKFLOWS", workflows_path)
+    monkeypatch.setattr(run_workflow, "RUNS_DIR", tmp_path / ".agent-runs")
+    commands: list[str] = []
+
+    def fake_run_command(command: str, cwd: Path, timeout_seconds: int) -> tuple[int, str, str]:
+        commands.append(command)
+        return 0, "ok", ""
+
+    monkeypatch.setattr(run_workflow, "run_command", fake_run_command)
+
+    result = run_workflow.run_workflow("sample", root=tmp_path, adapter_command="custom-adapter")
+
+    assert result == 0
+    assert commands == [
+        "python3 scripts/agent_role_runner.py --workflow sample --adapter-command custom-adapter"
+    ]

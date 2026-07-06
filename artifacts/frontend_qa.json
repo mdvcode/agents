@@ -2,19 +2,14 @@
   "evidence_required": true,
   "evidence_collected": false,
   "screenshots": [
-    "/Users/user/agents/artifacts/flowfox-issue-1454-auth-redirect-clean.png"
+    "/Users/user/agents/artifacts/flowfox-issue-1621-auth-redirect.png"
   ],
-  "console_errors": [
-    {
-      "message": "A stale Turbopack error remained in browser logs after a prior Turbopack dev-server attempt. Classic Next dev server returned a clean 307 redirect from /settings/users to /authentication/sign-in for unauthenticated access."
-    }
-  ],
+  "local_url": "http://localhost:3000/landing-page-workspace?campaignId=test-campaign&tab=create",
+  "final_url": "http://localhost:3000/authentication/sign-in",
+  "console_errors": [],
   "network_errors": [],
   "blockers": [
-    "No authenticated local browser session with manage_users was available, so /settings/users redirected to /authentication/sign-in and the fixed dashboard view could not be visually inspected.",
-    "The first Turbopack dev-server attempt produced a local Turbopack panic on the sign-in route; classic Next dev server was used to confirm the auth redirect."
+    "Local in-app browser has no authenticated Supabase session; dashboard route redirects to sign-in before the workspace UI can be visually verified."
   ],
-  "local_url": "http://localhost:3000/settings/users",
-  "observed_url": "http://localhost:3000/authentication/sign-in",
-  "next_action": "Publish only as draft and request authenticated/staging visual verification before marking ready."
+  "next_action": "Publish as draft if policy gate allows; collect authenticated workspace video/screenshot before marking ready."
 }

@@ -1,65 +1,61 @@
-# TASK
+TASK
+- P3.1d: make the full agent workflow use the Codex CLI executor by default and close role trust boundaries.
 
-P3.1c: close the production Codex execution path so role execution uses `codex exec`, standard output schemas, sandbox mapping, harness-owned non-code artifacts, telemetry capture, deterministic publication inputs, and longer workflow orchestration timeout.
+PROJECT_PROFILE
+- Selected profile: agent_workspace.
+- Reason: task changes the local agent harness, workflow scripts, schemas, and tests under `/Users/user/agents`.
+- Quality commands: `python3 -m pytest ...`; `make check`.
+- Security commands: `make security`; focused review for unsafe subprocess/path handling.
+- Frontend evidence required: no.
 
-# PROJECT_PROFILE
-
-Selected profile: `agent_workspace`.
-
-Reason: The task changes the private agent control-plane repository: executor scripts, workflow runner behavior, context compiler, role contracts, schemas, tests, and artifacts.
-
-Quality commands:
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_codex_adapter.py tests/test_agent_role_runner.py tests/test_full_agent_workflow.py tests/test_context_compiler.py tests/test_run_workflow.py -q`
-- `make check`
-
-Security commands:
-- `make security`
-- focused subprocess/path review
-
-Frontend evidence required: no.
-
-# CONTEXT
-
-The attached review says P3.1b had strong contracts and fake-executor tests, but real Codex execution was not closed. P3.1c must make `codex_cli_executor.py` use `codex exec`, pass an explicit sandbox and output schema, write non-code artifacts from the returned JSON instead of asking read-only roles to modify files, preserve read-only repository snapshots, capture raw JSONL/usage telemetry, prepare publisher inputs deterministically, and avoid a 300-second outer timeout for the full workflow.
-
-# FILES_TO_CHANGE
-
-- `.agent-role-capabilities.yaml`
-- `.agent-role-contracts.yaml`
+FILES_TO_INSPECT
 - `.agent-workflows.yaml`
-- `schemas/role_result.schema.json`
-- `schemas/standard_role_result.schema.json`
-- `scripts/adapters/codex_adapter.py`
-- `scripts/adapters/codex_cli_executor.py`
-- `scripts/agent_role_runner.py`
-- `scripts/context_compiler.py`
+- `.agent-role-contracts.yaml`
+- `.agent-role-capabilities.yaml`
 - `scripts/run_workflow.py`
+- `scripts/agent_role_runner.py`
+- `scripts/adapters/codex_cli_executor.py`
+- `scripts/context_compiler.py`
+- `schemas/context_manifest.schema.json`
+- `tests/test_*workflow*.py`
 - `tests/test_agent_role_runner.py`
 - `tests/test_codex_adapter.py`
 - `tests/test_context_compiler.py`
-- `tests/test_full_agent_workflow.py`
 - `tests/test_real_codex_smoke.py`
-- `tests/test_run_workflow.py`
-- `artifacts/*`
 
-# DO_NOT_TOUCH
+FILES_TO_CHANGE
+- `.agent-workflows.yaml`
+- `scripts/run_workflow.py`
+- `scripts/agent_role_runner.py`
+- `scripts/adapters/codex_cli_executor.py`
+- `scripts/check_codex_runtime.py`
+- `scripts/tool_preflight.py`
+- `scripts/context_compiler.py`
+- `schemas/context_manifest.schema.json`
+- Focused tests for workflow adapter defaults, runtime/tool preflight, artifact ownership, context budget, and real Codex smoke.
+- Required `artifacts/*` state files for this task.
 
-- target project repositories
-- secrets, `.env*`, private keys, credentials, auth, billing, payments, migrations, production infrastructure, deployment scripts
+DO_NOT_TOUCH
+- Target project private issue journals and Flowfox artifacts except existing dirty files already present.
+- `.env*`, secrets, credentials, production infra, migrations, auth, billing, payments.
+- Existing unrelated user changes.
 
-# INITIAL_RISK_CLASS
+RISK
+- Initial risk class: medium.
+- Rationale: workflow execution and trust boundaries are core harness behavior, but changes are local, reviewable, and avoid protected production paths.
 
-Medium. This changes the agent control-plane executor and workflow gates, but it stays inside the private agent workspace and does not touch production/protected target-project surfaces.
+CHECKS_TO_RUN
+- `python3 -m pytest tests/test_run_workflow.py tests/test_agent_role_runner.py tests/test_codex_adapter.py tests/test_context_compiler.py tests/test_real_codex_smoke.py`
+- `python3 -m pytest tests`
+- `make check`
+- `make security`
 
-# DONE_CRITERIA
-
-- Executor invokes `codex exec`, not interactive `codex`.
-- Executor passes `--json`, explicit `--sandbox`, `--ask-for-approval never`, `--output-schema`, and `--output-last-message`.
-- Harness writes returned non-code artifacts from `artifacts[]`.
-- Read-only roles are blocked if repository snapshots change.
-- Write roles remain constrained to task worktree publication flow.
-- Publication inputs are owned by deterministic `publication-prepare`.
-- Context contents are included in the sandboxed prompt.
-- Codex JSONL raw stream and usage telemetry are captured.
-- Workflow supports longer full-chain orchestration timeout.
-- Focused and full checks pass or blockers are recorded.
+DONE_CRITERIA
+- `full_agent_workflow` passes `scripts/adapters/codex_cli_executor.py` by default.
+- `scripts/run_workflow.py` accepts `--adapter-command`.
+- `scripts/check_codex_runtime.py` exists and blocks before role execution when the production Codex path is unavailable.
+- Roles can only write contract-owned artifacts through harness-managed `artifacts[]`.
+- Role-specific tool preflight reports blockers or unavailable evidence before pretending a role ran.
+- Context manifests include global budget, selected/excluded context, retrieval queries, source candidates, and repo intelligence.
+- Real Codex smoke is strict when explicitly enabled.
+- Publication still invokes `publish_pr.py` with the same `run_id` and `artifacts_dir`.

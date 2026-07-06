@@ -1,21 +1,27 @@
 # Report
 
-Implemented P3.1c production execution closure:
-- `codex_cli_executor.py` now builds a `codex exec` command with JSONL output, explicit sandbox, no approval prompts, standard output schema, and last-message output file.
-- Harness writes returned non-code artifacts from `artifacts[]`; read-only roles no longer need write access to create `plan.md`, `review.md`, `security.md`, and similar files.
-- Read-only roles are checked with a git snapshot before and after Codex execution.
-- Raw Codex JSONL and final result files are stored under `.agent-runs/<run-id>/raw/`; thread id and token usage are copied into the role result.
-- `publication-prepare` deterministically creates `change_set.json` and `publication_payload.json` from the task worktree diff.
-- Role contracts now assign owners for planner project profile, implementation, test generator, CI repair, publication prepare, and publication artifacts.
-- Context prompt payload now includes selected context/skill/artifact file contents, so sandboxed Codex can read control-plane context without disabling sandboxing.
-- Flowfox implementation context no longer includes `python-standards`.
-- Full workflow timeout is configurable and set to 7200 seconds for the full agent chain.
+Task: P3.1d production Codex execution path and role trust boundaries.
 
-Verification:
-- Focused pytest: `21 passed`.
-- `make check`: `98 passed, 1 skipped`.
-- `make security`: passed.
-- Python compilation: passed for `scripts` and `tests`.
+Implemented:
+- `full_agent_workflow` now declares `adapter_command: "python3 scripts/adapters/codex_cli_executor.py"` and passes it into `agent_role_runner.py`.
+- `scripts/run_workflow.py` accepts `--adapter-command` and falls back to workflow-level `adapter_command`.
+- Added `scripts/check_codex_runtime.py` for Codex CLI availability, flag, auth/exec, repo, and sandbox preflight.
+- Added `scripts/tool_preflight.py` for role-level tool gates, including frontend QA unavailable evidence and publication/quality/security checks.
+- `agent_role_runner.py` now defaults the full workflow to the production Codex adapter, blocks production runtime failures before roles, records preflight output, and runs per-role tool preflight.
+- `codex_cli_executor.py` enforces role-owned artifact paths before writing returned `artifacts[]`, validates claimed artifacts, preserves raw JSONL, and applies context total/file budgets.
+- Context manifests now include `context_budget`, `selected_context`, `excluded_context`, `retrieval_queries`, `source_file_candidates`, and `repo_intelligence`.
+- Real Codex smoke is strict when explicitly enabled.
 
-Known environment note:
-- Local `codex` is present, but the installed npm package is missing `@openai/codex-darwin-arm64`; real opt-in smoke remains skipped until the local CLI install is repaired.
+Validation:
+- `python3 -m py_compile scripts/run_workflow.py scripts/agent_role_runner.py scripts/adapters/codex_cli_executor.py scripts/check_codex_runtime.py scripts/tool_preflight.py scripts/context_compiler.py` passed.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_run_workflow.py tests/test_agent_role_runner.py tests/test_codex_adapter.py tests/test_context_compiler.py tests/test_full_agent_workflow.py tests/test_real_codex_smoke.py` passed: 28 passed, 1 skipped.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests` passed: 105 passed, 1 skipped.
+- `make check` passed.
+- `make security` passed.
+
+Warnings:
+- Plain `python3 -m pytest ...` failed before test collection due to an unrelated globally installed pytest plugin (`web3/ethpm`) and protobuf incompatibility. The repository Makefile uses `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`.
+- Real Codex smoke was not run because it requires `AGENT_REAL_CODEX_SMOKE=1` and an authenticated Codex CLI.
+
+Next action:
+- Proceed to P3.2 deterministic routing and bounded repair loops after review.
