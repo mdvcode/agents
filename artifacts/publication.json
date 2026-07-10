@@ -1,7 +1,7 @@
 {
-  "run_id": "local-p3.1e",
-  "task_id": "p3.1e-real-codex-smoke-gate",
-  "execution_status": "blocked",
+  "run_id": "local-p3.1f",
+  "task_id": "p3.1f-remove-obsolete-project-coupling",
+  "execution_status": "planned",
   "target_repository": ".",
   "worktree": "/Users/user/agents",
   "branch": "feat/v2",
@@ -19,10 +19,6 @@
   "input_fingerprint": "",
   "pr_comment_posted": false,
   "command_results": [],
-  "warnings": [
-    "Publication not attempted because the real Codex smoke gate is blocked locally."
-  ],
-  "errors": [
-    "Local Codex CLI installation is not runnable: native vendor binary is missing from the installed @openai/codex package."
-  ]
+  "warnings": [],
+  "errors": []
 }

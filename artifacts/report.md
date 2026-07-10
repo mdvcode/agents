@@ -1,30 +1,21 @@
 # Report
 
-Task: P3.1e real Codex smoke gate.
+P3.1f removed the obsolete project coupling from the agent control plane.
 
-Implemented:
-- Added `codex-preflight` and `codex-smoke` targets to `Makefile`.
-- `codex-preflight` runs `scripts/check_codex_runtime.py --repo .`.
-- `codex-smoke` runs the strict real-Codex planner smoke with `AGENT_REAL_CODEX_SMOKE=1`, `AGENT_CODEX_CLI_COMMAND=codex`, and pytest plugin autoload disabled.
-- The Makefile now prefers an available Node 22 or Node 20 path for Codex targets, avoiding the old system Node v8.9.4 ESM failure.
-- Documented both commands in `docs/onboarding.md` and `docs/agent-system.md`.
-- Improved `scripts/check_codex_runtime.py` so a failed Codex help probe blocks as a runtime/auth failure.
-- Added regression tests for Makefile/docs target presence and failed help-probe classification.
+## Changes
+- Removed the obsolete repository record, private project memory, stale screenshots, stale role outputs, and old audit/history entries from root artifacts.
+- Replaced the project-specific web profile with `nextjs_web` across policy, profiles, schemas, scripts, prompts, docs, and tests.
+- Renamed the project-specific visual evidence contract to generic `visual_evidence`.
+- Kept transient untracked `tmp/` and `output/` scratch directories out of repository grep by ignoring them instead of mutating personal scratch files.
 
-Validation:
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_makefile_codex_targets.py tests/test_real_codex_smoke.py -q` passed: 2 passed, 1 skipped.
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_makefile_codex_targets.py tests/test_codex_runtime_preflight.py -q` passed: 3 passed.
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_makefile_codex_targets.py tests/test_codex_runtime_preflight.py tests/test_real_codex_smoke.py -q` passed: 3 passed, 1 skipped.
-- `make validate-artifacts` passed.
-- `git diff --check` passed.
-- `make check` passed: 108 passed, 1 skipped.
-- `make security` passed.
-- `make codex-preflight` failed as intended for a broken local Codex runtime.
-- `make codex-smoke` failed as intended for a broken local Codex runtime.
+## Validation
+- Obsolete-name repository grep: 0 matches.
+- `make validate-artifacts`: passed.
+- `make security`: passed.
+- Focused pytest: 92 passed.
+- Full pytest: 108 passed, 1 skipped.
+- `make check`: passed.
+- `git diff --check`: passed.
 
-Runtime blocker:
-- With the original PATH, `codex` uses `/usr/local/bin/node v8.9.4` and fails on ESM `import`.
-- With Node 22 first in PATH, `codex` fails because the installed package is missing the native binary at `node_modules/@openai/codex-darwin-x64/vendor/x86_64-apple-darwin/codex/codex`.
-
-Next action:
-- Repair/reinstall the local Codex CLI, then run `make codex-preflight` and `make codex-smoke`. Do not start P3.2 until both pass.
+## Next Action
+Proceed to P3.1e local Codex runtime repair or P3.2 only after the runtime smoke gate is healthy.

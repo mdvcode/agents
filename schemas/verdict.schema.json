@@ -12,7 +12,7 @@
     "high_risk_triggers",
     "protected_paths_touched",
     "publication_result",
-    "flowfox_visual_evidence",
+    "visual_evidence",
     "approval_required_before_publish",
     "approval_required_before_merge",
     "reasoning_summary",
@@ -22,7 +22,7 @@
   "enums": {
     "decision": ["publish_pr", "await_approval", "reject", "no_changes"],
     "execution_status": ["planned", "running", "completed", "blocked", "failed"],
-    "project_profile": ["agent_workspace", "django", "flowfox"],
+    "project_profile": ["agent_workspace", "django", "nextjs_web"],
     "risk_class": ["low", "medium", "high"]
   },
   "types": {
@@ -38,7 +38,7 @@
     "high_risk_triggers": "list",
     "protected_paths_touched": "list",
     "publication_result": "dict",
-    "flowfox_visual_evidence": "dict",
+    "visual_evidence": "dict",
     "approval_required_before_publish": "bool",
     "approval_required_before_merge": "bool",
     "reasoning_summary": "list",
@@ -53,7 +53,7 @@
       "pr_url",
       "pr_state"
     ],
-    "flowfox_visual_evidence": [
+    "visual_evidence": [
       "required",
       "provided",
       "items"
@@ -67,7 +67,7 @@
       "pr_url": "str",
       "pr_state": "str"
     },
-    "flowfox_visual_evidence": {
+    "visual_evidence": {
       "required": "bool",
       "provided": "bool",
       "items": "list"

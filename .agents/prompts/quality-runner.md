@@ -12,7 +12,7 @@ Before running quality checks, read:
 
 Use the selected project profile to choose validation commands.
 Do not run hard-coded Django/Python checks unless the selected profile is `django`.
-Do not run hard-coded Flowfox/Bun checks unless the selected profile is `flowfox`.
+Do not run hard-coded Bun/Next.js checks unless the selected profile is `nextjs_web`.
 
 For `agent_workspace`, prefer:
 - `make validate-artifacts`
@@ -24,7 +24,7 @@ For `django`, prefer:
 - `mypy .`
 - `pytest --tb=short --maxfail=1`
 
-For `flowfox`, prefer:
+For `nextjs_web`, prefer:
 - `bun node_modules/typescript/lib/tsc.js --noEmit`
 - `git diff --check`
 - focused tests when relevant
@@ -36,7 +36,7 @@ If a command cannot be run because the environment is missing dependencies, reco
 ```json
 {
   "task": "",
-  "project_profile": "agent_workspace|django|flowfox",
+  "project_profile": "agent_workspace|django|nextjs_web",
   "overall_status": "pass|warn|fail|not_run",
   "checks": [],
   "commands_attempted": [],

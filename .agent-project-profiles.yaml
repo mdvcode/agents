@@ -80,8 +80,8 @@ profiles:
     frontend_evidence:
       required: false
       reason: "Django profile does not require browser evidence unless the task explicitly changes UI behavior."
-  flowfox:
-    description: "Flowfox: Next.js / React / Prisma / Sanity / Bun / TypeScript project."
+  nextjs_web:
+    description: "Generic Next.js / React / Prisma / Sanity / Bun / TypeScript project."
     kind: nextjs_react_prisma_sanity_bun
     path_markers:
       - "package.json"
@@ -119,7 +119,7 @@ profiles:
       required_for:
         - "ui"
         - "routing"
-        - "public_cms_rendering"
+        - "public_rendering"
         - "studio_ui"
         - "dashboard_ui"
         - "user_visible_behavior"

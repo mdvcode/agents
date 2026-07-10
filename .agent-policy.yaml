@@ -40,7 +40,7 @@ risk_classes:
     deploy_production: false
 
 projects:
-  flowfox:
+  nextjs_web:
     publication:
       allowed_branch_prefixes:
         - "feat/"
@@ -65,10 +65,13 @@ projects:
     require_visual_evidence_for:
       - ui
       - routing
-      - public_cms_rendering
+      - public_rendering
       - studio_ui
       - dashboard_ui
       - user_visible_behavior
+    visual_evidence_policy:
+      ready_pr_requires_evidence: true
+      missing_evidence_creates_draft_pr: true
     protected_paths:
       - ".agents/**"
       - "artifacts/**"

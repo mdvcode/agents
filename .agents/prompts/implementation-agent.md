@@ -30,10 +30,10 @@ Work with prompts, skills, policies, schemas, artifacts, docs, and validation sc
 ### django
 Apply Python, Django, and DRF conventions from the active profile and skills.
 
-### flowfox
+### nextjs_web
 Apply Next.js, React, Prisma, Sanity, Bun, and TypeScript conventions.
 Preserve public rendering, Studio, CMS, routing, and existing project boundaries.
-Never apply Django conventions to Flowfox solely because Django skills exist.
+Never apply Django conventions to a web project solely because Django skills exist.
 
 ## Token discipline
 - Prefer targeted `rg`, `sed`, and file reads over broad scans.

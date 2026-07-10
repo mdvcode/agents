@@ -6,3 +6,5 @@ __pycache__/
 .env.*
 .agent-runs/
 .agent-worktrees/
+tmp/
+output/

@@ -59,7 +59,7 @@ def verdict_payload(**overrides: Any) -> dict[str, Any]:
         },
         "approval_required_before_publish": False,
         "approval_required_before_merge": True,
-        "flowfox_visual_evidence": {
+        "visual_evidence": {
             "required": False,
             "provided": False,
             "items": [],
@@ -121,9 +121,13 @@ def policy_payload(branch_prefixes: list[str] | None = None) -> dict[str, Any]:
             },
         },
         "projects": {
-            "flowfox": {
+            "nextjs_web": {
                 "publication": publication,
                 "require_visual_evidence_for": ["ui"],
+                "visual_evidence_policy": {
+                    "ready_pr_requires_evidence": True,
+                    "missing_evidence_creates_draft_pr": True,
+                },
                 "protected_paths": ["artifacts/**", ".env", ".env.*", "**/migrations/**"],
                 "public_output_forbidden_phrases": ["created by Codex"],
                 "public_output_filter_applies_to": ["branch name"],
@@ -158,9 +162,9 @@ def test_repository_registry_requires_trusted_branch_prefixes() -> None:
     registry = {
         "version": 1,
         "repositories": {
-            "flowfox": {
-                "project_profile": "flowfox",
-                "expected_remotes": ["git@example.com:org/flowfox.git"],
+            "nextjs_web": {
+                "project_profile": "nextjs_web",
+                "expected_remotes": ["git@example.com:org/nextjs_web.git"],
                 "base_branch": "main",
                 "allowed_branch_prefixes": ["feat/", "fix/", "issue/", "tast/"],
                 "protected_paths": [".env"],
@@ -168,7 +172,7 @@ def test_repository_registry_requires_trusted_branch_prefixes() -> None:
         },
     }
     assert validator.validate_registry_data(registry) == []
-    registry["repositories"]["flowfox"]["allowed_branch_prefixes"] = ["feat/", "fix/", "issue/", "legacy/"]
+    registry["repositories"]["nextjs_web"]["allowed_branch_prefixes"] = ["feat/", "fix/", "issue/", "legacy/"]
     assert any("allowed_branch_prefixes" in error for error in validator.validate_registry_data(registry))
 
 
@@ -258,7 +262,7 @@ def test_missing_visual_evidence_ready_pr_fails() -> None:
     errors = validator.validate_verdict_invariants(
         verdict_payload(
             publication_result={"pr_state": "ready"},
-            flowfox_visual_evidence={"required": True, "provided": False, "items": []},
+            visual_evidence={"required": True, "provided": False, "items": []},
         )
     )
     assert any("pr_state=ready requires required visual evidence" in error for error in errors)
@@ -308,7 +312,7 @@ def test_profile_mismatch_across_artifacts_fails() -> None:
     errors = validator.validate_cross_artifact_invariants(
         {
             "project_profile": {"project_profile": "agent_workspace"},
-            "quality": {"project_profile": "flowfox"},
+            "quality": {"project_profile": "nextjs_web"},
             "verdict": {"project_profile": "agent_workspace", "risk_class": "medium"},
             "risk": {"risk_class": "medium"},
         }

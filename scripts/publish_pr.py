@@ -164,6 +164,31 @@ def read_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
+def project_policy(policy: dict[str, Any], project_profile: str) -> dict[str, Any]:
+    projects = policy.get("projects", {})
+    if not isinstance(projects, dict):
+        return {}
+    project = projects.get(project_profile, {})
+    return project if isinstance(project, dict) else {}
+
+
+def publication_policy(policy: dict[str, Any], project_profile: str) -> dict[str, Any]:
+    project = project_policy(policy, project_profile)
+    publication = project.get("publication") if project else None
+    if isinstance(publication, dict):
+        return publication
+    projects = policy.get("projects", {})
+    if not isinstance(projects, dict):
+        return {}
+    for project in projects.values():
+        if not isinstance(project, dict):
+            continue
+        publication = project.get("publication", {})
+        if isinstance(publication, dict):
+            return publication
+    return {}
+
+
 def command_failed(result: CommandResult) -> bool:
     return result.returncode != 0
 
@@ -224,7 +249,7 @@ def make_run_id(task_id: str) -> str:
 
 
 def determine_pr_state(quality: dict[str, Any], verdict: dict[str, Any]) -> str:
-    evidence = verdict.get("flowfox_visual_evidence", {})
+    evidence = verdict.get("visual_evidence", {})
     missing_evidence = (
         isinstance(evidence, dict)
         and evidence.get("required") is True
@@ -252,10 +277,10 @@ def protected_path_blockers(
     else:
         if project_profile == "agent_workspace":
             return []
-        flowfox = policy.get("projects", {}).get("flowfox", {})
-        protected = flowfox.get("protected_paths", [])
+        project = project_policy(policy, project_profile)
+        protected = project.get("protected_paths", [])
         if not isinstance(protected, list):
-            return ["policy missing Flowfox protected_paths"]
+            return [f"policy missing {project_profile} protected_paths"]
     return [
         path
         for path in change_set.get("include", [])
@@ -265,20 +290,25 @@ def protected_path_blockers(
 
 def forbidden_public_output_blockers(
     policy: dict[str, Any],
+    project_profile: str,
     branch: str,
     title: str,
     body: str,
 ) -> list[str]:
-    flowfox = policy.get("projects", {}).get("flowfox", {})
-    phrases = flowfox.get("public_output_forbidden_phrases", [])
+    project = project_policy(policy, project_profile)
+    if not project:
+        return []
+    phrases = project.get("public_output_forbidden_phrases", [])
+    if phrases is None:
+        return []
     if not isinstance(phrases, list):
         return ["policy missing public_output_forbidden_phrases"]
     public_text = "\n".join([branch, title, body])
     return [f"public output contains forbidden phrase: {phrase}" for phrase in phrases if phrase in public_text]
 
 
-def allowed_branch_prefixes(policy: dict[str, Any]) -> list[str]:
-    publication = policy.get("projects", {}).get("flowfox", {}).get("publication", {})
+def allowed_branch_prefixes(policy: dict[str, Any], project_profile: str) -> list[str]:
+    publication = publication_policy(policy, project_profile)
     prefixes = publication.get("allowed_branch_prefixes") if isinstance(publication, dict) else None
     if not isinstance(prefixes, list):
         return []
@@ -361,7 +391,11 @@ class Publisher:
         if record is None:
             return policy
         effective = json.loads(json.dumps(policy))
-        publication = effective.setdefault("projects", {}).setdefault("flowfox", {}).setdefault("publication", {})
+        publication = (
+            effective.setdefault("projects", {})
+            .setdefault(record.project_profile, {})
+            .setdefault("publication", {})
+        )
         publication["allowed_branch_prefixes"] = list(record.allowed_branch_prefixes)
         return effective
 
@@ -674,7 +708,7 @@ class Publisher:
         for protected_path in protected_path_blockers(change_set, policy, profile, protected_patterns):
             result.errors.append(f"protected path in change set: {protected_path}")
         if branch:
-            self.validate_publication_branch(branch, base_branch, result, allowed_branch_prefixes(policy))
+            self.validate_publication_branch(branch, base_branch, result, allowed_branch_prefixes(policy, profile))
 
         if not skip_checks:
             validation = self.run_command(["python3", "scripts/validate_artifacts.py"], cwd=self.root)
@@ -1019,13 +1053,14 @@ class Publisher:
         project_profile: str,
         publication: PublicationResult,
     ) -> None:
-        if project_profile != "flowfox":
-            return
         task_id = str(change_set.get("task_id", ""))
         match = re.search(r"issue-(\d+)", task_id)
         if match is None:
             return
-        issue_path = self.root / "docs" / "projects" / "flowfox" / "issues" / f"issue-{match.group(1)}.md"
+        project_id = str(change_set.get("project") or change_set.get("repository_id") or "").strip()
+        if not project_id or not re.fullmatch(r"[A-Za-z0-9_.-]+", project_id):
+            return
+        issue_path = self.root / "docs" / "projects" / project_id / "issues" / f"issue-{match.group(1)}.md"
         if not issue_path.exists():
             return
         text = issue_path.read_text(encoding="utf-8").rstrip()
@@ -1235,9 +1270,13 @@ class Publisher:
             body = str(payload.get("body", ""))
             commit_message = str(payload.get("commit_message", title))
             publication.errors.extend(
-                forbidden_public_output_blockers(policy, publication.branch, title, body + "\n" + commit_message)
-                if profile_name == "flowfox"
-                else []
+                forbidden_public_output_blockers(
+                    policy,
+                    profile_name,
+                    publication.branch,
+                    title,
+                    body + "\n" + commit_message,
+                )
             )
             selected = self.selected_change_set_paths(target_repo, change_set, publication, require_pending_change=not publication.commit_sha)
             self.validate_change_set_completeness(target_repo, change_set, risk, publication)

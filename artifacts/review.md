@@ -1,14 +1,28 @@
 # Review
 
-Findings:
-- Blocking for acceptance: `make codex-smoke` cannot complete locally because the installed Codex CLI package is missing its native vendor binary. The smoke target itself is present and strict.
+## SUMMARY
+No correctness findings after focused and repository checks.
 
-Implemented:
-- Added `make codex-preflight`.
-- Added `make codex-smoke`.
-- Documented both commands in onboarding and agent-system docs.
-- Added tests to keep the Makefile/docs gate present.
-- Improved preflight classification when the Codex CLI help probe fails.
+## CORRECTNESS_FINDINGS
+None.
 
-Residual risk:
-- P3.2 should wait until `make codex-preflight` and `make codex-smoke` pass on a repaired/authenticated Codex CLI installation.
+## DJANGO_DRF_FINDINGS
+Not applicable.
+
+## ARCHITECTURE_FINDINGS
+None. The cleanup removes project-specific coupling and keeps future web behavior behind the generic `nextjs_web` profile.
+
+## PROJECT_PROFILE_FINDINGS
+Selected profile is `agent_workspace`, which matches the changed control-plane files.
+
+## POLICY_VIOLATIONS
+None.
+
+## KNOWN_LESSON_CONFLICTS
+None.
+
+## SUGGESTED_PATCH
+None.
+
+## NOTES
+Validation passed: focused pytest, full pytest, `make validate-artifacts`, `make security`, `make check`, and diff whitespace checks.

@@ -239,49 +239,61 @@ def validate_policy_data(policy: Any, label: str = ".agent-policy.yaml") -> list
     projects = policy.get("projects")
     if not isinstance(projects, dict):
         return errors + [f"{label}: missing object 'projects'"]
-    flowfox = projects.get("flowfox")
-    if not isinstance(flowfox, dict):
-        return errors + [f"{label}: projects.flowfox must be an object"]
-    publication = flowfox.get("publication")
+    web_project = projects.get("nextjs_web")
+    if not isinstance(web_project, dict):
+        return errors + [f"{label}: projects.nextjs_web must be an object"]
+    publication = web_project.get("publication")
     if not isinstance(publication, dict):
-        errors.append(f"{label}: projects.flowfox.publication must be an object")
+        errors.append(f"{label}: projects.nextjs_web.publication must be an object")
     else:
         allowed_prefixes = publication.get("allowed_branch_prefixes")
         expected_prefixes = ["feat/", "fix/", "issue/", "tast/"]
         if allowed_prefixes != expected_prefixes:
             errors.append(
-                f"{label}: projects.flowfox.publication.allowed_branch_prefixes must be {expected_prefixes!r}"
+                f"{label}: projects.nextjs_web.publication.allowed_branch_prefixes must be {expected_prefixes!r}"
             )
         for risk_class in ("low", "medium", "high"):
             rules = publication.get(risk_class)
             if not isinstance(rules, dict):
-                errors.append(f"{label}: projects.flowfox.publication.{risk_class} must be an object")
+                errors.append(f"{label}: projects.nextjs_web.publication.{risk_class} must be an object")
                 continue
             expected = risk_class in {"low", "medium"}
             for field in ("commit", "push", "open_pr", "update_pr"):
                 if rules.get(field) is not expected:
                     errors.append(
-                        f"{label}: projects.flowfox.publication.{risk_class}.{field} must be {expected}"
+                        f"{label}: projects.nextjs_web.publication.{risk_class}.{field} must be {expected}"
                     )
-    protected_paths = flowfox.get("protected_paths")
+    protected_paths = web_project.get("protected_paths")
     if not isinstance(protected_paths, list) or not protected_paths:
-        errors.append(f"{label}: projects.flowfox.protected_paths must be a non-empty list")
+        errors.append(f"{label}: projects.nextjs_web.protected_paths must be a non-empty list")
     else:
         required_patterns = ("artifacts/**", ".env", ".env.*", "**/migrations/**")
         for pattern in required_patterns:
             if pattern not in protected_paths:
-                errors.append(f"{label}: projects.flowfox.protected_paths missing {pattern!r}")
-    evidence = flowfox.get("require_visual_evidence_for")
+                errors.append(f"{label}: projects.nextjs_web.protected_paths missing {pattern!r}")
+    evidence = web_project.get("require_visual_evidence_for")
     if not isinstance(evidence, list) or not evidence:
-        errors.append(f"{label}: projects.flowfox.require_visual_evidence_for must be a non-empty list")
-    forbidden_phrases = flowfox.get("public_output_forbidden_phrases")
+        errors.append(f"{label}: projects.nextjs_web.require_visual_evidence_for must be a non-empty list")
+    evidence_policy = web_project.get("visual_evidence_policy")
+    if not isinstance(evidence_policy, dict):
+        errors.append(f"{label}: projects.nextjs_web.visual_evidence_policy must be an object")
+    else:
+        if evidence_policy.get("ready_pr_requires_evidence") is not True:
+            errors.append(
+                f"{label}: projects.nextjs_web.visual_evidence_policy.ready_pr_requires_evidence must be true"
+            )
+        if evidence_policy.get("missing_evidence_creates_draft_pr") is not True:
+            errors.append(
+                f"{label}: projects.nextjs_web.visual_evidence_policy.missing_evidence_creates_draft_pr must be true"
+            )
+    forbidden_phrases = web_project.get("public_output_forbidden_phrases")
     if not isinstance(forbidden_phrases, list) or not forbidden_phrases:
-        errors.append(f"{label}: projects.flowfox.public_output_forbidden_phrases must be a non-empty list")
+        errors.append(f"{label}: projects.nextjs_web.public_output_forbidden_phrases must be a non-empty list")
     if "AI" in forbidden_phrases:
-        errors.append(f"{label}: projects.flowfox.public_output_forbidden_phrases must not ban the product term 'AI'")
-    applies_to = flowfox.get("public_output_filter_applies_to")
+        errors.append(f"{label}: projects.nextjs_web.public_output_forbidden_phrases must not ban the product term 'AI'")
+    applies_to = web_project.get("public_output_filter_applies_to")
     if not isinstance(applies_to, list) or not applies_to:
-        errors.append(f"{label}: projects.flowfox.public_output_filter_applies_to must be a non-empty list")
+        errors.append(f"{label}: projects.nextjs_web.public_output_filter_applies_to must be a non-empty list")
     return errors
 
 
@@ -303,7 +315,7 @@ def validate_project_profiles_data(
     profiles = profiles_doc.get("profiles")
     if not isinstance(profiles, dict):
         return errors + [f"{label}: missing object 'profiles'"]
-    for profile in ("agent_workspace", "django", "flowfox"):
+    for profile in ("agent_workspace", "django", "nextjs_web"):
         value = profiles.get(profile)
         if not isinstance(value, dict):
             errors.append(f"{label}: profiles.{profile} must be an object")
@@ -382,7 +394,7 @@ def validate_verdict_invariants(verdict: dict[str, Any], label: str = "verdict.j
     publication_result = verdict.get("publication_result")
     checks_passed = verdict.get("checks_passed")
     approval_before_publish = verdict.get("approval_required_before_publish")
-    visual_evidence = verdict.get("flowfox_visual_evidence")
+    visual_evidence = verdict.get("visual_evidence")
     high_risk_triggers = verdict.get("high_risk_triggers")
     protected_paths_touched = verdict.get("protected_paths_touched")
 

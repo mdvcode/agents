@@ -57,7 +57,7 @@ def verdict_payload(checks_passed: bool = True, evidence_required: bool = False)
         "approval_required_before_publish": False,
         "blockers": [],
         "checks_passed": checks_passed,
-        "flowfox_visual_evidence": {
+        "visual_evidence": {
             "required": evidence_required,
             "provided": not evidence_required,
             "items": [],
@@ -68,7 +68,7 @@ def verdict_payload(checks_passed: bool = True, evidence_required: bool = False)
 def base_policy() -> dict[str, object]:
     return {
         "projects": {
-            "flowfox": {
+            "nextjs_web": {
                 "publication": {
                     "allowed_branch_prefixes": ["feat/", "fix/", "issue/", "tast/"],
                 },
@@ -82,7 +82,7 @@ def base_policy() -> dict[str, object]:
 def profiles_payload(command: str = "make check") -> dict[str, object]:
     return {
         "profiles": {
-            "flowfox": {
+            "nextjs_web": {
                 "quality_commands": {
                     "required": [command],
                 }
@@ -149,8 +149,8 @@ def test_high_risk_blocks_preflight(tmp_path: Path) -> None:
         },
         quality_payload("pass"),
         {"high_risk_triggers": [], "protected_paths_touched": [], **verdict_payload()},
-        {"project_profile": "flowfox"},
-        {"project_profile": "flowfox", "include": ["app/page.tsx"]},
+        {"project_profile": "nextjs_web"},
+        {"project_profile": "nextjs_web", "include": ["app/page.tsx"]},
         skip_checks=True,
     )
     assert result.execution_status == "blocked"
@@ -171,8 +171,8 @@ def test_protected_path_blocks_preflight(tmp_path: Path) -> None:
         },
         quality_payload("pass"),
         {"high_risk_triggers": [], "protected_paths_touched": [], **verdict_payload()},
-        {"project_profile": "flowfox"},
-        {"project_profile": "flowfox", "include": ["artifacts/risk.json"]},
+        {"project_profile": "nextjs_web"},
+        {"project_profile": "nextjs_web", "include": ["artifacts/risk.json"]},
         skip_checks=True,
     )
     assert any("protected path in change set: artifacts/risk.json" in error for error in result.errors)
@@ -194,8 +194,8 @@ def test_missing_git_identity_blocks_preflight(tmp_path: Path) -> None:
         },
         quality_payload("pass"),
         {"high_risk_triggers": [], "protected_paths_touched": [], **verdict_payload()},
-        {"project_profile": "flowfox"},
-        {"project_profile": "flowfox", "include": ["app/page.tsx"]},
+        {"project_profile": "nextjs_web"},
+        {"project_profile": "nextjs_web", "include": ["app/page.tsx"]},
         skip_checks=True,
     )
     assert "missing git identity blocks publication" in result.errors
@@ -217,8 +217,8 @@ def test_verdict_await_approval_blocks_preflight(tmp_path: Path) -> None:
         },
         quality_payload("pass"),
         verdict,
-        {"project_profile": "flowfox"},
-        {"project_profile": "flowfox", "include": ["app/page.tsx"]},
+        {"project_profile": "nextjs_web"},
+        {"project_profile": "nextjs_web", "include": ["app/page.tsx"]},
         skip_checks=True,
     )
     assert "Publication is not permitted by the current verdict or policy." in result.errors
@@ -242,8 +242,8 @@ def test_expected_remote_mismatch_blocks_preflight(tmp_path: Path) -> None:
         },
         quality_payload("pass"),
         {"high_risk_triggers": [], "protected_paths_touched": [], **verdict_payload()},
-        {"project_profile": "flowfox"},
-        {"project_profile": "flowfox", "include": ["app/page.tsx"]},
+        {"project_profile": "nextjs_web"},
+        {"project_profile": "nextjs_web", "include": ["app/page.tsx"]},
         skip_checks=True,
         expected_remote="git@example.com:expected/repo.git",
     )
@@ -254,7 +254,7 @@ def test_profile_quality_command_failure_drafts_pr(tmp_path: Path) -> None:
     runner = base_preflight_runner()
     runner.responses[("python3", "scripts/validate_artifacts.py")] = publish_pr.CommandResult(0, "", "")
     runner.responses[
-        ("python3", "scripts/security_scan.py", "--repo", str(tmp_path), "--profile", "flowfox")
+        ("python3", "scripts/security_scan.py", "--repo", str(tmp_path), "--profile", "nextjs_web")
     ] = publish_pr.CommandResult(0, "", "")
     runner.responses[("bun", "test")] = publish_pr.CommandResult(1, "", "tests failed")
     publisher = publish_pr.Publisher(runner=runner)
@@ -263,7 +263,7 @@ def test_profile_quality_command_failure_drafts_pr(tmp_path: Path) -> None:
     publisher.run_profile_commands(
         tmp_path,
         profiles_payload("bun test"),
-        "flowfox",
+        "nextjs_web",
         publication,
         "quality_commands",
     )
@@ -464,6 +464,7 @@ def test_pr_creation_failure_records_error(tmp_path: Path) -> None:
 def test_forbidden_public_output_blocks_internal_process_phrase() -> None:
     errors = publish_pr.forbidden_public_output_blockers(
         base_policy(),
+        "nextjs_web",
         "issue-943",
         "Title",
         "created by Codex",
@@ -496,7 +497,7 @@ def prepare_publish_root(tmp_path: Path) -> tuple[Path, Path]:
     (root / ".agent-policy.yaml").write_text(
         """
 projects:
-  flowfox:
+  nextjs_web:
     publication:
       allowed_branch_prefixes:
         - "feat/"
@@ -546,7 +547,7 @@ profiles:
             "high_risk_triggers": [],
             "protected_paths_touched": [],
             "warnings": [],
-            "flowfox_visual_evidence": {"required": False, "provided": False, "items": []},
+            "visual_evidence": {"required": False, "provided": False, "items": []},
         },
     )
     write_json(artifacts / "project_profile.json", {"project_profile": "agent_workspace"})
@@ -646,7 +647,7 @@ def test_missing_target_repository_blocks_without_traceback(tmp_path: Path) -> N
 
 def test_record_publication_updates_report_and_issue_journal(tmp_path: Path) -> None:
     root, _ = prepare_publish_root(tmp_path)
-    issue_path = root / "docs" / "projects" / "flowfox" / "issues" / "issue-943.md"
+    issue_path = root / "docs" / "projects" / "example_webapp" / "issues" / "issue-943.md"
     issue_path.parent.mkdir(parents=True)
     issue_path.write_text("# Issue 943\n", encoding="utf-8")
     publisher = publish_pr.Publisher(root=root, runner=base_preflight_runner())
@@ -664,8 +665,8 @@ def test_record_publication_updates_report_and_issue_journal(tmp_path: Path) -> 
 
     publisher.record_publication(
         publication,
-        {"task_id": "issue-943-test"},
-        "flowfox",
+        {"task_id": "issue-943-test", "project": "example_webapp"},
+        "nextjs_web",
     )
 
     report_text = (root / "artifacts" / "report.md").read_text(encoding="utf-8")
@@ -740,7 +741,7 @@ def prepare_e2e_root(tmp_path: Path, repo: Path, remote_url: str) -> Path:
         """
 version: 1
 projects:
-  flowfox:
+  nextjs_web:
     publication:
       allowed_branch_prefixes:
         - "feat/"
@@ -792,7 +793,7 @@ profiles:
             "high_risk_triggers": [],
             "protected_paths_touched": [],
             "warnings": [],
-            "flowfox_visual_evidence": {"required": False, "provided": False, "items": []},
+            "visual_evidence": {"required": False, "provided": False, "items": []},
             "publication_result": {
                 "commit_created": False,
                 "branch_pushed": False,

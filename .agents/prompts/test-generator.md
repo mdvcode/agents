@@ -23,11 +23,11 @@ For `django`:
 - update or add tests near the affected app/module;
 - include DRF tests when serializers/views/API behavior changes.
 
-For `flowfox`:
+For `nextjs_web`:
 - prefer Vitest/focused tests where available;
 - prefer TypeScript checks for type-sensitive changes;
 - recommend browser/frontend evidence when UI or routing changes;
-- do not create Python tests for Flowfox tasks.
+- do not create Python tests for web tasks unless the repository actually has a Python test surface.
 
 ## Rules
 - Match the repository's existing Django `TestCase` and `TransactionTestCase` style where that is already established.

@@ -8,7 +8,7 @@
     "exclude"
   ],
   "enums": {
-    "project_profile": ["agent_workspace", "django", "flowfox"]
+    "project_profile": ["agent_workspace", "django", "nextjs_web"]
   },
   "types": {
     "target_repository": "str",

@@ -15,7 +15,7 @@ For `agent_workspace`:
 For `django`:
 - check Django security concerns, auth, permissions, serializers, querysets, migrations, settings, secrets, dependency risks.
 
-For `flowfox`:
+For `nextjs_web`:
 - check environment variable exposure;
 - check `NEXT_PUBLIC_*` usage;
 - check Sanity tokens and CMS access;
@@ -23,7 +23,7 @@ For `flowfox`:
 - check public rendering vs Studio-only logic;
 - check that public PR text does not expose private agent internals.
 
-Do not run Django-specific tools for Flowfox unless the repository actually contains Django markers.
+Do not run Django-specific tools for web projects unless the repository actually contains Django markers.
 
 ## Must check for
 - unsafe subprocess usage

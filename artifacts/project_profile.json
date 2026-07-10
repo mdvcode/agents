@@ -2,20 +2,23 @@
   "project_profile": "agent_workspace",
   "confidence": "high",
   "reasons": [
-    "The task changes the local agent harness Makefile, docs, runtime preflight script, and tests.",
-    "Repository markers match the agent_workspace profile: AGENTS.md, .agent-policy.yaml, schemas/, scripts/, tests/, and Makefile."
+    "The task changes the local agent control plane: policy, profiles, registry, schemas, scripts, prompts, docs, tests, and artifacts.",
+    "Repository markers match the agent_workspace profile: AGENTS.md, .agent-policy.yaml, schemas/, scripts/, tests/, docs/, and artifacts/."
   ],
   "matched_markers": [
     "AGENTS.md",
     ".agent-policy.yaml",
     ".agent-project-profiles.yaml",
-    "scripts/check_codex_runtime.py",
-    "Makefile",
+    ".agent-repositories.yaml",
+    "schemas/**",
+    "scripts/**",
     "tests/**",
-    "docs/**"
+    "docs/**",
+    "artifacts/**"
   ],
   "quality_commands_selected": [
-    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_makefile_codex_targets.py tests/test_codex_runtime_preflight.py tests/test_real_codex_smoke.py -q",
+    "make validate-artifacts",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_validate_artifacts.py tests/test_context_compiler.py tests/test_publish_pr.py tests/test_security_scan.py tests/test_agent_role_runner.py tests/test_full_agent_workflow.py -q",
     "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests",
     "make check"
   ],

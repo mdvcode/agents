@@ -1,17 +1,22 @@
 {
   "risk_class": "medium",
   "reasons": [
-    "The patch adds explicit real Codex runtime gates and adjusts preflight failure classification.",
-    "The changes are local to the agent harness and do not touch protected production, auth, billing, secret, migration, or deployment paths.",
-    "The real Codex smoke target is intentionally blocking when the local Codex runtime is broken."
+    "The cleanup changes policy, schemas, scripts, prompts, docs, tests, and tracked root artifacts.",
+    "The obsolete project coupling is broad enough that focused and repository-level validation are required.",
+    "The task does not touch production settings, auth, billing, payments, migrations, secrets, or deployment infrastructure."
   ],
   "changed_areas": [
-    "Makefile",
-    "docs/onboarding.md",
-    "docs/agent-system.md",
-    "scripts/check_codex_runtime.py",
-    "tests/test_makefile_codex_targets.py",
-    "tests/test_codex_runtime_preflight.py",
+    ".gitignore",
+    ".agent-policy.yaml",
+    ".agent-project-profiles.yaml",
+    ".agent-repositories.yaml",
+    "AGENTS.md",
+    ".agents/prompts",
+    ".agents/skills/git-workflow/SKILL.md",
+    "schemas",
+    "scripts",
+    "tests",
+    "docs",
     "artifacts"
   ],
   "high_risk_triggers": [],

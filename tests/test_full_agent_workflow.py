@@ -175,7 +175,7 @@ elif role == "orchestrator":
             "pr_url": "",
             "pr_state": "not_created"
         },
-        "flowfox_visual_evidence": {
+        "visual_evidence": {
             "required": False,
             "provided": False,
             "items": []

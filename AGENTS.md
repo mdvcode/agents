@@ -39,9 +39,9 @@ Build safe, reviewable improvements across supported project profiles using a po
 - Before planning, implementing, testing, reviewing, or publishing, agents must determine the active project profile:
   - `agent_workspace` for this agent control-plane repository;
   - `django` for Python / Django / DRF projects;
-  - `flowfox` for Flowfox Next.js / React / Prisma / Sanity / Bun work.
-- Agents must not run Django/Python quality commands on Flowfox tasks unless the task explicitly touches a Django project.
-- Agents must not run Flowfox/Bun/Next.js commands on this agent workspace unless the task explicitly targets a Flowfox repository.
+  - `nextjs_web` for generic Next.js / React / Prisma / Sanity / Bun work.
+- Agents must not run Django/Python quality commands on `nextjs_web` tasks unless the task explicitly touches a Django project.
+- Agents must not run Bun/Next.js commands on this agent workspace unless the task explicitly targets a registered web repository.
 - The selected profile must be recorded in `artifacts/project_profile.json` and referenced in `artifacts/quality.json`, `artifacts/report.md`, and `artifacts/verdict.json`.
 
 ## Global operating rules
@@ -53,7 +53,7 @@ Build safe, reviewable improvements across supported project profiles using a po
 - Keep diffs reviewable.
 
 ## Project-specific rules
-- For Flowfox, read `docs/projects/flowfox/AGENTS.md` before planning, changing, checking, reviewing, or publishing Flowfox work.
+- For registered target projects, read `docs/projects/<project>/AGENTS.md` when it exists before planning, changing, checking, reviewing, or publishing project work.
 - For project-specific durable knowledge, prefer `docs/projects/<project>/wiki/`, `docs/projects/<project>/memory/`, and `docs/projects/<project>/graph/` over expanding this root file.
 
 ## Required verification loop
@@ -117,8 +117,8 @@ For every non-trivial task:
 - LOW risk: may patch locally and, when policy allows, automatically commit, push, and create or update a PR after required verification and local evidence.
 - MEDIUM risk: may patch locally and, when policy allows, automatically commit, push, and create or update a PR after required verification and local evidence, provided protected paths are not touched and blockers are recorded.
 - HIGH risk: may analyze and prepare a patch only, and must await human approval.
-- Flowfox publication exception: completed LOW or MEDIUM Flowfox issue work does not need a separate approve/approved/аппрув/одобряю reply before commit, push, or PR creation. This exception never allows auto-merge, deployment, protected-path changes, secret publication, HIGH-risk publication, or unapproved scope expansion.
-- Flowfox publication text rule: branch names, commit messages, branch descriptions, PR titles, PR bodies, issue comments, and release notes must follow `.agent-policy.yaml` `public_output_forbidden_phrases`. Product terms such as AI are allowed when they describe user-facing product behavior rather than the internal development process.
+- Publication exception: completed LOW or MEDIUM work in a registered target repository does not need a separate approve/approved/аппрув/одобряю reply before commit, push, or PR creation when `.agent-policy.yaml` and `.agent-repositories.yaml` allow it. This exception never allows auto-merge, deployment, protected-path changes, secret publication, HIGH-risk publication, or unapproved scope expansion.
+- Publication text rule: branch names, commit messages, branch descriptions, PR titles, PR bodies, issue comments, and release notes must follow the active project policy's `public_output_forbidden_phrases`. Product terms such as AI are allowed when they describe user-facing product behavior rather than the internal development process.
 
 ## Denylist and protected paths
 Treat changes touching any of the following as HIGH risk and protected:
@@ -173,7 +173,7 @@ A task is not done until:
 - risk is classified
 - artifacts are updated
 - tests are added or updated if needed
-- for Flowfox UI or user-visible work, local screenshot/video/trace evidence is captured, or a warning is recorded and any PR is draft when policy allows publication without evidence
+- for UI or user-visible work that requires visual evidence, local screenshot/video/trace evidence is captured, or a warning is recorded and any PR is draft when policy allows publication without evidence
 - the next action is clearly stated
 - an audit log entry is written for autonomous actions
 

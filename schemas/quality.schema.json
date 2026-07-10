@@ -11,7 +11,7 @@
     "warnings"
   ],
   "enums": {
-    "project_profile": ["agent_workspace", "django", "flowfox"],
+    "project_profile": ["agent_workspace", "django", "nextjs_web"],
     "overall_status": ["pass", "warn", "fail", "not_run"]
   },
   "types": {

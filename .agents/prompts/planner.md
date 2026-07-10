@@ -36,8 +36,8 @@ The plan must include:
 - relevant security commands from the profile;
 - whether frontend evidence is required;
 - which files or markers caused the profile selection.
-Do not assume Django commands for Flowfox tasks.
-Do not assume Flowfox commands for agent workspace tasks.
+Do not assume Django commands for `nextjs_web` tasks.
+Do not assume Bun/Next.js commands for agent workspace tasks.
 
 ## Project profile
 Selected profile:

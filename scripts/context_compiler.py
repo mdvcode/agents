@@ -94,7 +94,7 @@ def artifact_references(artifacts_dir: Path) -> list[dict[str, str]]:
 
 def role_skill_names(role: str, project_profile: str) -> list[str]:
     names = list(ROLE_SKILLS.get(role, []))
-    if project_profile == "flowfox" and role in {"implementation-agent", "ci-repair-agent"}:
+    if project_profile == "nextjs_web" and role in {"implementation-agent", "ci-repair-agent"}:
         names = [name for name in names if name != "python-standards"]
     return names
 

@@ -72,7 +72,7 @@ PROMPT_FILES = {
     "report-agent": "report-agent.md",
 }
 DEFAULT_ALLOWED_TOOLS = ["filesystem_read", "repository_search"]
-KNOWN_PROJECT_PROFILES = {"agent_workspace", "django", "flowfox"}
+KNOWN_PROJECT_PROFILES = {"agent_workspace", "django", "nextjs_web"}
 DEFAULT_CODEX_ADAPTER_COMMAND = "python3 scripts/adapters/codex_cli_executor.py"
 
 

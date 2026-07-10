@@ -1,6 +1,6 @@
 {
-  "title": "Add real Codex smoke gate",
-  "body": "## Summary\n- Add Makefile targets for Codex runtime preflight and strict real-Codex smoke.\n- Document the gate in onboarding and agent system docs.\n- Improve Codex preflight classification when the CLI runtime itself fails.\n\n## Validation\n- Focused tests pass.\n- make codex-preflight and make codex-smoke are currently blocked by the local Codex CLI installation missing its native vendor binary.",
-  "commit_message": "Add real Codex smoke gate",
+  "title": "Remove obsolete project coupling",
+  "body": "## Summary\n- Replace obsolete project-specific policy, profile, schema, and prompt wording with generic project-profile rules.\n- Use the generic nextjs_web profile and project-agnostic visual_evidence contract.\n- Clean stale root artifacts and remove obsolete project memory from the control plane.\n\n## Validation\n- make validate-artifacts\n- make security\n- focused pytest\n- full pytest\n- make check",
+  "commit_message": "Remove obsolete project coupling",
   "base_branch": "main"
 }

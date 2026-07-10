@@ -211,7 +211,7 @@ def test_frontend_qa_preflight_marks_evidence_unavailable(tmp_path: Path, monkey
 
     result = agent_role_runner.preflight_role_execution(
         role="frontend-qa-agent",
-        project_profile="flowfox",
+        project_profile="nextjs_web",
         artifacts_dir=tmp_path / "artifacts",
         dry_run=True,
     )

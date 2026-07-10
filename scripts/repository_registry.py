@@ -71,7 +71,7 @@ def validate_registry_data(data: Any, label: str = ".agent-repositories.yaml") -
         if not isinstance(raw, dict):
             errors.append(f"{label}: repositories.{repository_id} must be an object")
             continue
-        if raw.get("project_profile") not in {"agent_workspace", "django", "flowfox"}:
+        if raw.get("project_profile") not in {"agent_workspace", "django", "nextjs_web"}:
             errors.append(f"{label}: repositories.{repository_id}.project_profile is invalid")
         expected_remotes = raw.get("expected_remotes")
         if not isinstance(expected_remotes, list) or not expected_remotes:

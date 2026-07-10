@@ -19,7 +19,7 @@ The review must confirm:
 - the selected project profile is correct;
 - validation commands match the selected profile;
 - no irrelevant framework checks were used as the main quality signal;
-- Flowfox UI/user-visible changes include visual evidence or a documented reason why evidence is unavailable;
+- UI/user-visible changes that require visual evidence include it or document why evidence is unavailable;
 - Django changes include appropriate Python/Django checks;
 - agent workspace changes include artifact/schema validation.
 

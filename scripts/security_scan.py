@@ -58,7 +58,7 @@ def load_default_profile() -> str:
     except json.JSONDecodeError:
         return "agent_workspace"
     profile = data.get("project_profile")
-    if profile in {"agent_workspace", "django", "flowfox"}:
+    if profile in {"agent_workspace", "django", "nextjs_web"}:
         return profile
     return "agent_workspace"
 
@@ -174,7 +174,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--head-ref", default="", help="Head git ref for changed-file scanning.")
     parser.add_argument(
         "--profile",
-        choices=("agent_workspace", "django", "flowfox"),
+        choices=("agent_workspace", "django", "nextjs_web"),
         default=None,
         help="Project profile. Defaults to artifacts/project_profile.json.",
     )

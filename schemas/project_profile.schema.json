@@ -10,7 +10,7 @@
     "warnings"
   ],
   "enums": {
-    "project_profile": ["agent_workspace", "django", "flowfox"],
+    "project_profile": ["agent_workspace", "django", "nextjs_web"],
     "confidence": ["low", "medium", "high"]
   },
   "types": {

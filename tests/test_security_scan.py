@@ -16,28 +16,28 @@ SPEC.loader.exec_module(security_scan)
 def test_agent_workspace_allows_private_workspace_artifacts(tmp_path: Path) -> None:
     (tmp_path / "artifacts").mkdir()
     (tmp_path / "artifacts" / "risk.json").write_text("{}", encoding="utf-8")
-    memory = tmp_path / "docs" / "projects" / "flowfox" / "memory"
+    memory = tmp_path / "docs" / "projects" / "nextjs_web" / "memory"
     memory.mkdir(parents=True)
     (memory / "note.md").write_text("private workspace note", encoding="utf-8")
 
     findings = security_scan.scan(
         repo=tmp_path,
         profile="agent_workspace",
-        staged_paths=["artifacts/risk.json", "docs/projects/flowfox/memory/note.md"],
+        staged_paths=["artifacts/risk.json", "docs/projects/nextjs_web/memory/note.md"],
     )
 
     assert findings == []
 
 
-def test_flowfox_blocks_private_workspace_artifacts(tmp_path: Path) -> None:
+def test_target_project_blocks_private_workspace_artifacts(tmp_path: Path) -> None:
     findings = security_scan.scan(
         repo=tmp_path,
-        profile="flowfox",
-        staged_paths=["artifacts/risk.json", "docs/projects/flowfox/wiki/private.md"],
+        profile="nextjs_web",
+        staged_paths=["artifacts/risk.json", "docs/projects/nextjs_web/wiki/private.md"],
     )
 
     assert "staged protected/private path: artifacts/risk.json" in findings
-    assert "staged protected/private path: docs/projects/flowfox/wiki/private.md" in findings
+    assert "staged protected/private path: docs/projects/nextjs_web/wiki/private.md" in findings
 
 
 def test_secret_detection_blocks_token(tmp_path: Path) -> None:

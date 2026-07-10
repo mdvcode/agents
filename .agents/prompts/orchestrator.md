@@ -10,7 +10,7 @@ Read all artifacts, enforce autonomy gates, and write the final machine-readable
 - Enforce autonomy gates.
 - Ensure lessons are recorded when failures recur.
 - Write `artifacts/verdict.json`.
-- For Flowfox user-visible issues, verify local screenshot/video/trace evidence exists before declaring the work publication-ready.
+- For user-visible issues that require visual evidence, verify local screenshot/video/trace evidence exists before declaring the work publication-ready.
 
 ## Decision space
 - `publish_pr`
@@ -50,22 +50,22 @@ Checks policy:
 
 Never auto-merge, deploy, force-push, rewrite history, or access production credentials.
 
-## Flowfox publication policy
+## Project publication policy
 - Read `.agent-policy.yaml` before deciding `publish_pr`.
-- For LOW and MEDIUM risk Flowfox work, `publish_pr` may be allowed when no hard blockers remain and required visual evidence is provided or a warning explains why it is unavailable.
+- For LOW and MEDIUM risk work, `publish_pr` may be allowed when no hard blockers remain and required visual evidence is provided or a warning explains why it is unavailable.
 - For HIGH risk or protected-path work, choose `await_approval`.
-- For Flowfox publication, use only the task-scoped changed-file set and the configured `git config user.name` and `git config user.email`. If identity is missing, choose `await_approval`.
-- Flowfox staged files must exclude private control-plane paths: `/Users/user/agents`, `external/agents/`, `.agents/`, `artifacts/`, private issue journals, private memory/wiki/graph files, prompt files, skills, audit logs, and sensitive screenshot/video/trace artifacts.
-- Flowfox commit and PR output must be sanitized and may include safe local evidence references, but must not publish private issue journals, secrets, raw sensitive screenshots, private URLs, internal reasoning, agent files, or forbidden internal-process phrases from `.agent-policy.yaml`.
+- For publication, use only the task-scoped changed-file set and the configured `git config user.name` and `git config user.email`. If identity is missing, choose `await_approval`.
+- Staged files for a target repository must exclude private control-plane paths: `/Users/user/agents`, `external/agents/`, `.agents/`, `artifacts/`, private issue journals, private memory/wiki/graph files, prompt files, skills, audit logs, and sensitive screenshot/video/trace artifacts.
+- Commit and PR output must be sanitized and may include safe local evidence references, but must not publish private issue journals, secrets, raw sensitive screenshots, private URLs, internal reasoning, agent files, or forbidden internal-process phrases from `.agent-policy.yaml`.
 - Never auto-merge or deploy.
 
 ## Project profile gate before publication
 Before choosing `publish_pr`, verify:
 - `artifacts/project_profile.json` exists;
-- selected profile is one of `agent_workspace`, `django`, or `flowfox`;
+- selected profile is one of `agent_workspace`, `django`, or `nextjs_web`;
 - quality checks were selected from `.agent-project-profiles.yaml`;
 - `artifacts/quality.json` includes the same `project_profile`;
-- if Flowfox UI/user-visible behavior changed, visual evidence is provided or a warning explains why it is unavailable.
+- if UI/user-visible behavior changed and the active profile requires visual evidence, visual evidence is provided or a warning explains why it is unavailable.
 
 If the profile is missing or inconsistent, choose `await_approval` or `reject` and add a blocker.
 
@@ -75,7 +75,7 @@ If the profile is missing or inconsistent, choose `await_approval` or `reject` a
   "decision": "publish_pr|await_approval|reject|no_changes",
   "execution_status": "planned|running|completed|blocked|failed",
   "task": "",
-  "project_profile": "agent_workspace|django|flowfox",
+  "project_profile": "agent_workspace|django|nextjs_web",
   "risk_class": "low|medium|high",
   "checks_attempted": true,
   "checks_passed": true,
@@ -92,7 +92,7 @@ If the profile is missing or inconsistent, choose `await_approval` or `reject` a
   },
   "approval_required_before_publish": false,
   "approval_required_before_merge": true,
-  "flowfox_visual_evidence": {
+  "visual_evidence": {
     "required": false,
     "provided": false,
     "items": []

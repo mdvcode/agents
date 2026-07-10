@@ -71,16 +71,16 @@ def test_context_manifest_records_role_capabilities_and_contract(tmp_path: Path)
     assert "apply_patch" in manifest["allowed_tools"]
 
 
-def test_flowfox_implementation_context_omits_python_standards(tmp_path: Path) -> None:
+def test_nextjs_web_implementation_context_omits_python_standards(tmp_path: Path) -> None:
     path = context_compiler.create_context_manifest(
         run_id="run-3",
         role="implementation-agent",
-        goal="Patch Flowfox",
+        goal="Patch Next.js web",
         repository=tmp_path,
         artifacts_dir=tmp_path / "artifacts",
         context_dir=tmp_path / "context",
-        project="flowfox",
-        project_profile="flowfox",
+        project="nextjs_web",
+        project_profile="nextjs_web",
         token_budget=12000,
         allowed_tools=[],
         previous_roles=["planner"],

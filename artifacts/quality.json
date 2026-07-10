@@ -1,64 +1,55 @@
 {
-  "task": "P3.1e real Codex smoke gate",
+  "task": "P3.1f remove obsolete project coupling",
   "project_profile": "agent_workspace",
-  "overall_status": "fail",
+  "overall_status": "pass",
   "checks": [
     {
-      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_makefile_codex_targets.py tests/test_real_codex_smoke.py -q",
+      "command": "obsolete-name repository grep",
       "status": "pass",
-      "summary": "2 passed, 1 skipped"
+      "summary": "0 matches"
     },
     {
-      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_makefile_codex_targets.py tests/test_codex_runtime_preflight.py -q",
+      "command": "make validate-artifacts",
       "status": "pass",
-      "summary": "3 passed"
-    },
-    {
-      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_makefile_codex_targets.py tests/test_codex_runtime_preflight.py tests/test_real_codex_smoke.py -q",
-      "status": "pass",
-      "summary": "3 passed, 1 skipped"
-    },
-    {
-      "command": "make codex-preflight",
-      "status": "fail",
-      "summary": "blocked: local codex runtime is unavailable; npm package is missing the native vendor binary"
-    },
-    {
-      "command": "make codex-smoke",
-      "status": "fail",
-      "summary": "strict smoke ran and failed because the executor returned blocked instead of completed due to the broken local Codex runtime"
-    },
-    {
-      "command": "make check",
-      "status": "pass",
-      "summary": "artifact validation passed; security scan passed; JSON artifacts valid; full pytest passed with 108 passed, 1 skipped; git diff check passed"
+      "summary": "artifact validation passed"
     },
     {
       "command": "make security",
       "status": "pass",
-      "summary": "security: no obvious secrets, private keys, private paths, or protected staged files found"
+      "summary": "no obvious secrets, private keys, private paths, or protected staged files found"
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_validate_artifacts.py tests/test_context_compiler.py tests/test_publish_pr.py tests/test_security_scan.py tests/test_agent_role_runner.py tests/test_full_agent_workflow.py -q",
+      "status": "pass",
+      "summary": "92 passed"
+    },
+    {
+      "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests",
+      "status": "pass",
+      "summary": "108 passed, 1 skipped"
+    },
+    {
+      "command": "make check",
+      "status": "pass",
+      "summary": "artifact validation, security scan, JSON parsing, full pytest, and git diff check passed"
+    },
+    {
+      "command": "git diff --check",
+      "status": "pass",
+      "summary": "no whitespace errors"
     }
   ],
   "commands_attempted": [
-    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_makefile_codex_targets.py tests/test_real_codex_smoke.py -q",
-    "make codex-preflight",
-    "PATH=\"/usr/local/opt/node@22/bin:$PATH\" codex --version",
-    "PATH=\"/usr/local/opt/node@22/bin:$PATH\" codex --help",
-    "PATH=\"/usr/local/opt/node@22/bin:$PATH\" codex exec --help",
-    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_codex_runtime_preflight.py tests/test_makefile_codex_targets.py -q",
-    "make codex-smoke",
+    "obsolete-name repository grep",
     "make validate-artifacts",
-    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_makefile_codex_targets.py tests/test_codex_runtime_preflight.py tests/test_real_codex_smoke.py -q",
-    "git diff --check",
+    "make security",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_validate_artifacts.py tests/test_context_compiler.py tests/test_publish_pr.py tests/test_security_scan.py tests/test_agent_role_runner.py tests/test_full_agent_workflow.py -q",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests",
     "make check",
-    "make security"
+    "git diff --check"
   ],
   "focused_tests_passed": true,
-  "repository_checks_passed": false,
+  "repository_checks_passed": true,
   "coverage": "not measured",
-  "warnings": [
-    "The installed codex wrapper originally used Node v8.9.4; Makefile now prefers Node 22/20 for Codex targets.",
-    "With modern Node, the installed @openai/codex package fails because the native vendor binary path is missing: node_modules/@openai/codex-darwin-x64/vendor/x86_64-apple-darwin/codex/codex.",
-    "The real smoke gate is implemented but cannot pass until the local Codex CLI installation is repaired or reinstalled."
-  ]
+  "warnings": []
 }
