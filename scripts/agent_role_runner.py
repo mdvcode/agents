@@ -25,6 +25,7 @@ from context_compiler import create_context_manifest, role_capability, role_cont
 from repository_registry import RepositoryRecord, find_by_remote
 from tool_preflight import role_tool_preflight
 from validate_artifacts import validate_required as validate_artifact_required
+from workflow_router import decide_next_role, load_yaml
 from worktree_manager import create_worktree, slug
 
 
@@ -119,6 +120,7 @@ def blocked_result(summary: str, blockers: list[str]) -> dict[str, Any]:
         "blockers": blockers,
         "warnings": [],
         "tokens_used": 0,
+        "duration_ms": 0,
     }
 
 
@@ -143,6 +145,7 @@ def awaiting_approval_result(summary: str, blockers: list[str]) -> dict[str, Any
         "blockers": blockers,
         "warnings": [],
         "tokens_used": 0,
+        "duration_ms": 0,
     }
 
 
@@ -321,13 +324,38 @@ def validate_role_artifacts(
 
 
 def next_role_name(current_role: str, result: dict[str, Any]) -> str:
-    action = str(result.get("next_action", "continue"))
-    if action in {"blocked", "awaiting_approval", "completed"}:
-        return ""
-    if action in ROLE_CHAIN and action != current_role:
-        return action
+    """Deprecated compatibility helper; authoritative routing lives in workflow_router."""
     index = ROLE_CHAIN.index(current_role)
     return ROLE_CHAIN[index + 1] if index + 1 < len(ROLE_CHAIN) else ""
+
+
+def workflow_budgets(workflow: str) -> dict[str, int]:
+    document = load_yaml(ROOT / ".agent-workflows.yaml")
+    configured = document.get("workflows", {}).get(workflow, {}).get("budgets", {})
+    defaults = {
+        "max_roles": 40,
+        "max_repair_iterations": 3,
+        "max_duration_seconds": 7200,
+        "max_tokens": 300000,
+    }
+    if isinstance(configured, dict):
+        for key in defaults:
+            if isinstance(configured.get(key), (int, float)):
+                defaults[key] = int(configured[key])
+    return defaults
+
+
+def initial_loops() -> dict[str, dict[str, Any]]:
+    return {
+        name: {
+            "iterations": 0,
+            "max_iterations": 3,
+            "last_failure_fingerprint": "",
+            "last_diff_fingerprint": "",
+            "progress_detected": False,
+        }
+        for name in ("quality_repair", "review_repair", "ci_repair")
+    }
 
 
 def git_remote(repo: Path) -> str:
@@ -691,6 +719,12 @@ def run_roles(
         "execution_status": "running",
         "roles": [],
         "artifacts_dir": str(run_artifacts),
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "elapsed_seconds": 0,
+        "role_count": 0,
+        "tokens_used": 0,
+        "budgets": workflow_budgets(workflow),
+        "loops": initial_loops(),
     }
     write_json(run_dir / "agent_workflow.json", state)
     append_trace(run_dir, {"event": "workflow_started", "workflow": workflow, "task_id": task_id})
@@ -718,6 +752,7 @@ def run_roles(
     source_snapshot_before = git_snapshot(repository)
     role = ROLE_CHAIN[0]
     guard = 0
+    workflow_started = time.monotonic()
     while role:
         guard += 1
         role_visits[role] = role_visits.get(role, 0) + 1
@@ -850,31 +885,58 @@ def run_roles(
         write_json(run_artifacts / f"{role}.json", checkpoint)
         append_trace(run_dir, {"event": "role_completed", "role": role, "result": result})
 
-        if result["status"] in {"blocked", "failed"} or result["next_action"] == "blocked":
-            state["execution_status"] = "blocked"
-            break
-        if result["status"] == "awaiting_approval" or result["next_action"] == "awaiting_approval":
-            state["execution_status"] = "awaiting_approval"
-            break
-        if role == "risk-classifier" and high_risk_requested_approval(run_artifacts):
-            state["execution_status"] = "awaiting_approval"
-            approval = awaiting_approval_result(
-                "High risk requires human approval before publication.",
-                ["risk.json classified the task as high"],
-            )
-            state["roles"].append(
-                {
+        state["role_count"] = len(state["roles"])
+        state["tokens_used"] = sum(
+            int(item.get("result", {}).get("tokens_used", 0))
+            for item in state["roles"]
+            if isinstance(item.get("result"), dict)
+        )
+        state["elapsed_seconds"] = int(time.monotonic() - workflow_started)
+        route = decide_next_role(
+            current_role=role,
+            role_result=result,
+            run_dir=run_dir,
+            artifacts_dir=run_artifacts,
+            workflow_state=state,
+        )
+        state["last_route"] = route
+        write_json(run_dir / "agent_workflow.json", state)
+        append_trace(
+            run_dir,
+            {
+                "type": "router.decision",
+                "event": "router.decision",
+                "run_id": run_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "current_role": role,
+                "next_role": route["next_role"],
+                "reason": route["reason"],
+                "loop": route.get("loop"),
+                "publication_allowed": route["publication_allowed"],
+                "warnings": route.get("warnings", []),
+            },
+        )
+        if route["stop"]:
+            if route["next_role"] == "approval-gate":
+                state["execution_status"] = "awaiting_approval"
+                approval = awaiting_approval_result(route["reason"], route.get("warnings", []))
+                approval_checkpoint = {
                     "time": datetime.now(timezone.utc).isoformat(),
                     "role": "approval-gate",
                     "prompt_file": "",
                     "prompt": "",
                     "result": approval,
                 }
-            )
-            write_json(run_artifacts / "approval-gate.json", state["roles"][-1])
-            append_trace(run_dir, {"event": "workflow_awaiting_approval", "reason": "high risk"})
+                state["roles"].append(approval_checkpoint)
+                state["role_count"] = len(state["roles"])
+                write_json(run_artifacts / "approval-gate.json", approval_checkpoint)
+                append_trace(run_dir, {"event": "workflow_awaiting_approval", "reason": route["reason"]})
+            elif route["next_role"] == "":
+                state["execution_status"] = "completed"
+            else:
+                state["execution_status"] = "blocked"
             break
-        role = next_role_name(role, result)
+        role = route["next_role"]
 
     if state["execution_status"] == "running":
         state["execution_status"] = "completed"

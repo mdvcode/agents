@@ -62,6 +62,57 @@ elif role == "implementation-agent":
     }), encoding="utf-8")
     created = ["implementation.json"]
     next_action = "completed"
+elif role == "quality-runner":
+    (artifacts / "quality.json").write_text(json.dumps({
+        "task": "test",
+        "project_profile": request["project_profile"],
+        "overall_status": "pass",
+        "checks": [],
+        "commands_attempted": [],
+        "focused_tests_passed": True,
+        "repository_checks_passed": True,
+        "coverage": "not measured",
+        "warnings": []
+    }), encoding="utf-8")
+    created = ["quality.json"]
+    next_action = "publication"
+elif role == "security-agent":
+    (artifacts / "security.md").write_text("# Security\\nNo blockers.\\n", encoding="utf-8")
+    created = ["security.md"]
+    next_action = "publication"
+elif role == "reviewer":
+    (artifacts / "review.md").write_text("# Review\\nNo findings.\\n", encoding="utf-8")
+    created = ["review.md"]
+    next_action = "publication"
+elif role == "orchestrator":
+    (artifacts / "verdict.json").write_text(json.dumps({
+        "decision": "publish_pr",
+        "execution_status": "completed",
+        "task": "test",
+        "project_profile": request["project_profile"],
+        "risk_class": "medium",
+        "checks_attempted": True,
+        "checks_passed": True,
+        "blockers": [],
+        "warnings": [],
+        "high_risk_triggers": [],
+        "protected_paths_touched": [],
+        "publication_result": {
+            "commit_created": False,
+            "branch_pushed": False,
+            "pr_created_or_updated": False,
+            "pr_url": "",
+            "pr_state": "not_created"
+        },
+        "visual_evidence": {"required": False, "provided": False, "items": []},
+        "approval_required_before_publish": False,
+        "approval_required_before_merge": True,
+        "reasoning_summary": [],
+        "next_actions": [],
+        "lessons_updated": False
+    }), encoding="utf-8")
+    created = ["verdict.json"]
+    next_action = "publication"
 else:
     created = []
     next_action = "completed"
@@ -122,13 +173,17 @@ def test_agent_role_runner_invokes_adapter_for_core_roles(tmp_path: Path, monkey
         dry_run=True,
     )
 
-    assert state["execution_status"] == "completed"
-    assert [item["role"] for item in state["roles"]] == [
+    assert state["execution_status"] == "awaiting_approval"
+    assert [item["role"] for item in state["roles"]][:9] == [
         "issue-intake",
         "context-compiler",
         "planner",
         "risk-classifier",
         "implementation-agent",
+        "quality-runner",
+        "security-agent",
+        "reviewer",
+        "orchestrator",
     ]
     assert (tmp_path / "artifacts" / "planner.json").exists()
     assert (tmp_path / "artifacts" / "risk.json").exists()

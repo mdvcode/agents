@@ -1,6 +1,6 @@
 {
-  "title": "Remove obsolete project coupling",
-  "body": "## Summary\n- Replace obsolete project-specific policy, profile, schema, and prompt wording with generic project-profile rules.\n- Use the generic nextjs_web profile and project-agnostic visual_evidence contract.\n- Clean stale root artifacts and remove obsolete project memory from the control plane.\n\n## Validation\n- make validate-artifacts\n- make security\n- focused pytest\n- full pytest\n- make check",
-  "commit_message": "Remove obsolete project coupling",
+  "title": "Add deterministic workflow routing",
+  "body": "## Summary\n- Add policy-driven routing with authoritative gate enforcement.\n- Add bounded quality, review, and CI repair loops with repeated-failure stops.\n- Track workflow budgets and router decisions in run state and trace output.\n\n## Validation\n- make validate-artifacts\n- make security\n- focused router and workflow tests\n- full pytest\n- make check",
+  "commit_message": "Add deterministic workflow routing",
   "base_branch": "main"
 }

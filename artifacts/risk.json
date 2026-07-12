@@ -1,24 +1,11 @@
 {
   "risk_class": "medium",
   "reasons": [
-    "The cleanup changes policy, schemas, scripts, prompts, docs, tests, and tracked root artifacts.",
-    "The obsolete project coupling is broad enough that focused and repository-level validation are required.",
+    "The change modifies the private workflow state machine and publication reachability rules.",
+    "Bounded repair loops and execution budgets affect control-plane termination behavior.",
     "The task does not touch production settings, auth, billing, payments, migrations, secrets, or deployment infrastructure."
   ],
-  "changed_areas": [
-    ".gitignore",
-    ".agent-policy.yaml",
-    ".agent-project-profiles.yaml",
-    ".agent-repositories.yaml",
-    "AGENTS.md",
-    ".agents/prompts",
-    ".agents/skills/git-workflow/SKILL.md",
-    "schemas",
-    "scripts",
-    "tests",
-    "docs",
-    "artifacts"
-  ],
+  "changed_areas": ["workflow_routing", "workflow_state", "repair_loops", "budgets", "tests", "docs"],
   "high_risk_triggers": [],
   "protected_paths_touched": [],
   "protected_actions_required": [],

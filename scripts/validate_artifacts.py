@@ -24,6 +24,7 @@ SCHEMAS = ROOT / "schemas"
 POLICY = ROOT / ".agent-policy.yaml"
 PROJECT_PROFILES = ROOT / ".agent-project-profiles.yaml"
 AGENT_WORKFLOWS = ROOT / ".agent-workflows.yaml"
+AGENT_ROUTING = ROOT / ".agent-routing.yaml"
 AGENT_REPOSITORIES = ROOT / ".agent-repositories.yaml"
 DEPRECATED_COMBINED_PUBLICATION_KEY = "commit" + "_push"
 JSON_ARTIFACTS = {
@@ -353,6 +354,13 @@ def validate_agent_workflows_data(
     if not isinstance(full, dict):
         errors.append(f"{label}: workflows.full_agent_workflow must be an object")
     else:
+        budgets = full.get("budgets")
+        if not isinstance(budgets, dict):
+            errors.append(f"{label}: workflows.full_agent_workflow.budgets must be an object")
+        else:
+            for key in ("max_roles", "max_repair_iterations", "max_duration_seconds", "max_tokens"):
+                if not isinstance(budgets.get(key), int) or budgets[key] <= 0:
+                    errors.append(f"{label}: workflows.full_agent_workflow.budgets.{key} must be a positive integer")
         executor = full.get("executor")
         if not isinstance(executor, str) or "--run-id {run_id}" not in executor:
             errors.append(f"{label}: workflows.full_agent_workflow.executor must pass the shared run id")
@@ -363,6 +371,57 @@ def validate_agent_workflows_data(
     mutation_rules = publish_pr.get("mutation_rules")
     if not isinstance(mutation_rules, list) or not any("git add -A" in rule for rule in mutation_rules):
         errors.append(f"{label}: workflows.publish_pr.mutation_rules must forbid git add -A")
+    return errors
+
+
+def validate_agent_routing_data(
+    routing_doc: Any, label: str = ".agent-routing.yaml"
+) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(routing_doc, dict):
+        return [f"{label}: top-level value must be an object"]
+    if routing_doc.get("version") != 1:
+        errors.append(f"{label}: version must be 1")
+    required = routing_doc.get("required_before_publication")
+    expected_required = [
+        "issue-intake",
+        "context-compiler",
+        "planner",
+        "risk-classifier",
+        "implementation-agent",
+        "quality-runner",
+        "security-agent",
+        "reviewer",
+        "orchestrator",
+        "publication-prepare",
+    ]
+    if required != expected_required:
+        errors.append(f"{label}: required_before_publication must be {expected_required!r}")
+    optional = routing_doc.get("optional_gates")
+    if not isinstance(optional, dict):
+        errors.append(f"{label}: optional_gates must be an object")
+    else:
+        for gate in ("frontend_qa", "architecture_consistency", "semantic_conflict"):
+            value = optional.get(gate)
+            if not isinstance(value, dict) or not isinstance(value.get("role"), str):
+                errors.append(f"{label}: optional_gates.{gate} must define a role")
+    routing = routing_doc.get("routing")
+    if not isinstance(routing, dict):
+        errors.append(f"{label}: routing must be an object")
+    else:
+        for name in ("high_risk", "security_blocked", "quality_failed", "review_blocked", "ci_failed"):
+            if not isinstance(routing.get(name), dict):
+                errors.append(f"{label}: routing.{name} must be an object")
+    schema_path = ROOT / "schemas" / "workflow_route.schema.json"
+    workflow_state_schema = ROOT / "schemas" / "agent_workflow.schema.json"
+    for path in (schema_path, workflow_state_schema):
+        if not path.exists():
+            errors.append(f"{path.relative_to(ROOT)}: missing")
+        else:
+            try:
+                load_json(path)
+            except (OSError, json.JSONDecodeError) as exc:
+                errors.append(f"{path.relative_to(ROOT)}: invalid JSON: {exc}")
     return errors
 
 
@@ -567,6 +626,10 @@ def main(artifacts_dir: Path | None = None) -> int:
     errors.extend(workflow_errors)
     if workflows_doc is not None:
         errors.extend(validate_agent_workflows_data(workflows_doc))
+    routing_doc, routing_errors = load_yaml(AGENT_ROUTING, ".agent-routing.yaml")
+    errors.extend(routing_errors)
+    if routing_doc is not None:
+        errors.extend(validate_agent_routing_data(routing_doc))
     repositories_doc, repository_errors = load_yaml(AGENT_REPOSITORIES, ".agent-repositories.yaml")
     errors.extend(repository_errors)
     if repositories_doc is not None:

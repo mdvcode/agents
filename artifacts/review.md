@@ -1,28 +1,19 @@
 # Review
 
 ## SUMMARY
-No correctness findings after focused and repository checks.
+No correctness findings after focused router, loop, runner, workflow, and repository checks.
 
 ## CORRECTNESS_FINDINGS
 None.
 
-## DJANGO_DRF_FINDINGS
-Not applicable.
-
 ## ARCHITECTURE_FINDINGS
-None. The cleanup removes project-specific coupling and keeps future web behavior behind the generic `nextjs_web` profile.
-
-## PROJECT_PROFILE_FINDINGS
-Selected profile is `agent_workspace`, which matches the changed control-plane files.
+The router is isolated in `scripts/workflow_router.py`; role execution remains responsible for role work and artifact validation.
 
 ## POLICY_VIOLATIONS
-None.
+None. HIGH risk and security blockers stop at approval-gate; publication preparation is reachable only after deterministic gates.
 
-## KNOWN_LESSON_CONFLICTS
-None.
+## TEST_GAPS
+The real Codex smoke remains environment-dependent and was skipped.
 
 ## SUGGESTED_PATCH
 None.
-
-## NOTES
-Validation passed: focused pytest, full pytest, `make validate-artifacts`, `make security`, `make check`, and diff whitespace checks.

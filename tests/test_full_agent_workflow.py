@@ -49,7 +49,7 @@ def test_full_workflow_uses_one_run_id_and_task_worktree(tmp_path: Path, monkeyp
         dry_run=True,
     )
 
-    assert state["execution_status"] == "completed"
+    assert state["execution_status"] == "awaiting_approval"
     worktree = Path(state["worktree"])
     assert worktree != source
     assert (worktree / "impl.txt").exists()
@@ -359,8 +359,12 @@ print(json.dumps({
         dry_run=True,
     )
 
-    assert state["execution_status"] == "blocked"
-    assert state["roles"][-1]["result"]["summary"] == "Role artifact validation failed."
+    assert state["execution_status"] == "awaiting_approval"
+    assert any(
+        checkpoint["role"] == "planner"
+        and checkpoint["result"]["summary"] == "Role artifact validation failed."
+        for checkpoint in state["roles"]
+    )
 
 
 def test_publication_role_invokes_publish_pr_with_run_context(
@@ -512,15 +516,15 @@ print(json.dumps({
         dry_run=True,
     )
 
-    assert state["execution_status"] == "completed"
-    assert [item["role"] for item in state["roles"]] == [
+    assert state["execution_status"] == "awaiting_approval"
+    assert [item["role"] for item in state["roles"]][:7] == [
         "issue-intake",
         "context-compiler",
         "planner",
         "risk-classifier",
         "implementation-agent",
         "quality-runner",
-        "reviewer",
+        "security-agent",
     ]
     assert (tmp_path / "impl.txt").read_text(encoding="utf-8") == "implemented\n"
     for checkpoint in state["roles"]:

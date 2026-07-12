@@ -10,19 +10,13 @@ agent_workspace
 None.
 
 ## MEDIUM
-None.
+Workflow routing changes are medium risk because they affect control-plane termination and publication reachability.
 
 ## LOW
-None.
-
-## DJANGO_SECURITY_NOTES
-Not a Django task.
+No additional findings.
 
 ## SECRETS
-`make security` passed with no obvious secrets, private keys, private paths, or protected staged files found.
-
-## DEPENDENCY_RISKS
-No dependency changes.
+`make security` passed with no obvious secrets, private keys, private paths, or protected staged files.
 
 ## RECOMMENDED_ACTION
-No security follow-up required for this cleanup.
+Keep human approval as the terminal route for HIGH risk, security blockers, exhausted budgets, and repeated failures.

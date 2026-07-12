@@ -1,21 +1,19 @@
 # Report
 
-P3.1f removed the obsolete project coupling from the agent control plane.
+P3.2 adds deterministic dynamic routing and bounded repair loops to the generic agent control plane.
 
 ## Changes
-- Removed the obsolete repository record, private project memory, stale screenshots, stale role outputs, and old audit/history entries from root artifacts.
-- Replaced the project-specific web profile with `nextjs_web` across policy, profiles, schemas, scripts, prompts, docs, and tests.
-- Renamed the project-specific visual evidence contract to generic `visual_evidence`.
-- Kept transient untracked `tmp/` and `output/` scratch directories out of repository grep by ignoring them instead of mutating personal scratch files.
+- Added `.agent-routing.yaml`, `workflow_route.schema.json`, and `agent_workflow.schema.json`.
+- Added an authoritative router that ignores unsafe advisory `next_action` values, enforces required and conditional gates, and computes failure fingerprints.
+- Added loop state, role/time/token/repair budgets, router trace events, and approval stops to the role runner and outer workflow runner.
+- Added focused tests for malicious transitions, optional gates, publication prerequisites, budget stops, progress detection, and bounded loops.
 
 ## Validation
-- Obsolete-name repository grep: 0 matches.
 - `make validate-artifacts`: passed.
 - `make security`: passed.
-- Focused pytest: 92 passed.
-- Full pytest: 108 passed, 1 skipped.
-- `make check`: passed.
+- Focused router/loop/runner/workflow tests: 35 passed.
+- Full pytest: 127 collected, 126 passed, 1 skipped.
 - `git diff --check`: passed.
 
 ## Next Action
-Proceed to P3.1e local Codex runtime repair or P3.2 only after the runtime smoke gate is healthy.
+Review the working-tree diff. No commit, push, PR, merge, or deployment was performed.

@@ -1,0 +1,32 @@
+{
+  "required": [
+    "run_id",
+    "workflow",
+    "task_id",
+    "execution_status",
+    "roles",
+    "loops",
+    "budgets",
+    "role_count",
+    "tokens_used"
+  ],
+  "enums": {
+    "execution_status": ["planned", "running", "completed", "blocked", "failed", "awaiting_approval"]
+  },
+  "types": {
+    "run_id": "str",
+    "workflow": "str",
+    "task_id": "str",
+    "execution_status": "str",
+    "roles": "list",
+    "loops": "dict",
+    "budgets": "dict",
+    "role_count": "int",
+    "tokens_used": "int"
+  },
+  "object_required": {
+    "loops": ["quality_repair", "review_repair", "ci_repair"],
+    "budgets": ["max_roles", "max_repair_iterations", "max_duration_seconds", "max_tokens"]
+  },
+  "additionalProperties": false
+}

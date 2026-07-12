@@ -1,13 +1,13 @@
 {
   "decision": "publish_pr",
   "execution_status": "planned",
-  "task": "P3.1f remove obsolete project coupling",
+  "task": "P3.2 deterministic routing and bounded repair loops",
   "project_profile": "agent_workspace",
   "risk_class": "medium",
   "checks_attempted": true,
   "checks_passed": true,
   "blockers": [],
-  "warnings": [],
+  "warnings": ["Real Codex smoke remains an environment-dependent skipped test."],
   "high_risk_triggers": [],
   "protected_paths_touched": [],
   "publication_result": {
@@ -17,21 +17,14 @@
     "pr_url": "",
     "pr_state": "not_created"
   },
-  "visual_evidence": {
-    "required": false,
-    "provided": false,
-    "items": []
-  },
+  "visual_evidence": {"required": false, "provided": false, "items": []},
   "approval_required_before_publish": false,
   "approval_required_before_merge": true,
   "reasoning_summary": [
-    "The control plane now uses generic project-profile policy instead of obsolete project-specific coupling.",
-    "The generic `nextjs_web` profile preserves web/frontend QA behavior for future registered repositories.",
-    "Validation, security, focused tests, full tests, and whitespace checks passed."
+    "The deterministic router is authoritative over advisory role next_action values.",
+    "Required gates, risk/security stops, relevant optional gates, bounded repair loops, and budgets are enforced.",
+    "Focused tests, full tests, artifact validation, security checks, and diff hygiene passed."
   ],
-  "next_actions": [
-    "Review the cleanup diff.",
-    "Continue with local Codex runtime repair before P3.2 if the smoke gate is still blocked."
-  ],
+  "next_actions": ["Review the P3.2 diff; no commit or publication was created."],
   "lessons_updated": false
 }

@@ -2,6 +2,11 @@ version: 1
 workflows:
   full_agent_workflow:
     description: "Run the full agent-role chain with one run id, task worktree, scoped context manifests, strict role results, and safe publication routing."
+    budgets:
+      max_roles: 40
+      max_repair_iterations: 3
+      max_duration_seconds: 7200
+      max_tokens: 300000
     adapter_command: "python3 scripts/adapters/codex_cli_executor.py"
     executor: "python3 scripts/agent_role_runner.py --workflow full_agent_workflow --run-id {run_id} --task-id {task_id} --project {project} --repo {repository} --branch {branch} --base-branch {base_branch} --artifacts-dir {artifacts_dir} --create-worktree --adapter-command {adapter_command}"
     max_iterations: 1
@@ -15,6 +20,11 @@ workflows:
         command: "python3 scripts/agent_role_runner.py --workflow full_agent_workflow --run-id {run_id} --task-id {task_id} --project {project} --repo {repository} --branch {branch} --base-branch {base_branch} --artifacts-dir {artifacts_dir} --create-worktree --adapter-command {adapter_command}"
   publish_pr:
     description: "Validate, stage an allowlisted change set, commit, push, and create or update a PR when policy gates allow it."
+    budgets:
+      max_roles: 40
+      max_repair_iterations: 3
+      max_duration_seconds: 7200
+      max_tokens: 300000
     executor: "python3 scripts/publish_pr.py"
     max_iterations: 1
     retry:

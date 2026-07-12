@@ -30,18 +30,20 @@
 - If many GitHub issues are active at once, keep one branch and one `docs/issues/issue-<number>.md` journal per issue.
 
 ## Agent Flow
-1. Planner writes scope and checks.
-2. Risk Classifier sets autonomy gates.
+1. Issue Intake and Context Compiler establish the scoped run state.
+2. Planner writes scope and checks; Risk Classifier sets autonomy gates.
 3. Implementation Agent patches narrowly.
-4. Test Generator covers changed behavior.
-5. Quality Runner records quality checks.
-6. Security Agent records security checks.
-7. Reviewer compares the diff against policy and lessons.
-8. Report Agent writes the human summary.
-9. Orchestrator writes the final verdict and next action.
+4. Quality Runner and Security Agent provide required quality and security gates.
+5. Frontend QA runs only for user-visible changes; Architecture and Semantic checks run only for code-impacting changes.
+6. Reviewer compares the diff against policy and lessons.
+7. Orchestrator writes the final verdict; Publication Prepare can run only after required gates pass.
+
+The role result field `next_action` is advisory. `scripts/workflow_router.py` is authoritative and derives the next role from policy, risk, artifacts, changed files, workflow state, budgets, and loop counters. Quality, review, and CI repairs use bounded loops and stop at `approval-gate` when the same failure repeats without progress. Each decision is recorded as a `router.decision` event in the run's `workflow_trace.jsonl`.
+
+The routing contract is defined in `.agent-routing.yaml`; run state includes `loops`, `budgets`, `role_count`, and cumulative `tokens_used` so a workflow cannot silently exceed its execution limits.
 
 ## Codex Executor Smoke Gate
-Before adding deterministic routing or bounded repair loops, prove the production Codex executor path locally:
+The production Codex executor remains an independent environment-dependent smoke gate:
 
 ```sh
 make codex-preflight

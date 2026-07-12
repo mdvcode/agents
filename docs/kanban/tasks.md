@@ -13,6 +13,7 @@
 - Verify that `artifacts/` contains only required current-task files plus lessons and audit log.
 
 ## Done
+- P3.2: deterministic dynamic routing and bounded repair loops.
 - P3.1f: remove obsolete project coupling from the agent control plane.
 - P3.1d: production Codex execution path and role trust boundaries implemented and verified.
 - P1.1: Harden autonomy and project profile contracts.

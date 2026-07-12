@@ -22,6 +22,12 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".agent-workflows.yaml"
 RUNS_DIR = ROOT / ".agent-runs"
 DEFAULT_TIMEOUT_SECONDS = 300
+DEFAULT_BUDGETS = {
+    "max_roles": 40,
+    "max_repair_iterations": 3,
+    "max_duration_seconds": 7200,
+    "max_tokens": 300000,
+}
 
 
 @dataclass
@@ -90,6 +96,16 @@ def append_trace(run_dir: Path, event: dict[str, Any]) -> None:
         handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
+def workflow_budgets(workflow: dict[str, Any]) -> dict[str, int]:
+    budgets = dict(DEFAULT_BUDGETS)
+    configured = workflow.get("budgets")
+    if isinstance(configured, dict):
+        for key in budgets:
+            if isinstance(configured.get(key), (int, float)):
+                budgets[key] = int(configured[key])
+    return budgets
+
+
 def workflow_steps(workflow: dict[str, Any]) -> list[dict[str, str]]:
     steps = workflow.get("steps", [])
     if isinstance(steps, list) and steps:
@@ -136,6 +152,32 @@ def run_workflow(
     effective_adapter_command = adapter_command or str(workflow.get("adapter_command", ""))
     artifacts_dir = run_dir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
+    budgets = workflow_budgets(workflow)
+    started = time.monotonic()
+    workflow_state_path = run_dir / "agent_workflow.json"
+    if not workflow_state_path.exists():
+        workflow_state_path.write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "workflow": workflow_name,
+                    "task_id": task_id,
+                    "execution_status": "running",
+                    "roles": [],
+                    "loops": {
+                        "quality_repair": {"iterations": 0},
+                        "review_repair": {"iterations": 0},
+                        "ci_repair": {"iterations": 0},
+                    },
+                    "budgets": budgets,
+                    "role_count": 0,
+                    "tokens_used": 0,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
     append_trace(
         run_dir,
         {
@@ -144,11 +186,23 @@ def run_workflow(
             "workflow": workflow_name,
             "dry_run": dry_run,
             "max_iterations": max_iterations,
+            "budgets": budgets,
         },
     )
     for iteration in range(1, max_iterations + 1):
         append_trace(run_dir, {"time": datetime.now(timezone.utc).isoformat(), "event": "iteration_started", "iteration": iteration})
         for step in steps:
+            if time.monotonic() - started > budgets["max_duration_seconds"]:
+                append_trace(
+                    run_dir,
+                    {
+                        "time": datetime.now(timezone.utc).isoformat(),
+                        "event": "workflow_awaiting_approval",
+                        "reason": "max_duration_seconds exceeded",
+                    },
+                )
+                print(str(run_dir))
+                return 1
             name = str(step.get("name", "step"))
             command = str(step.get("command", ""))
             command = (
@@ -194,6 +248,18 @@ def run_workflow(
                 )
                 print(str(run_dir))
                 return returncode
+            state_data = json.loads(workflow_state_path.read_text(encoding="utf-8")) if workflow_state_path.exists() else {}
+            if isinstance(state_data, dict) and state_data.get("execution_status") == "awaiting_approval":
+                append_trace(
+                    run_dir,
+                    {
+                        "time": datetime.now(timezone.utc).isoformat(),
+                        "event": "workflow_awaiting_approval",
+                        "reason": "authoritative role router requested approval",
+                    },
+                )
+                print(str(run_dir))
+                return 1
     append_trace(run_dir, {"time": datetime.now(timezone.utc).isoformat(), "event": "workflow_completed"})
     print(str(run_dir))
     return 0

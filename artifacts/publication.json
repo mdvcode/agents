@@ -1,6 +1,6 @@
 {
-  "run_id": "local-p3.1f",
-  "task_id": "p3.1f-remove-obsolete-project-coupling",
+  "run_id": "local-p3.2",
+  "task_id": "p3.2-deterministic-routing-repair-loops",
   "execution_status": "planned",
   "target_repository": ".",
   "worktree": "/Users/user/agents",
