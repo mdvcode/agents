@@ -1,20 +1,23 @@
 {
-  "task": "P3.2 deterministic routing and bounded repair loops",
+  "task": "P4.1 RAG-powered project memory retrieval",
   "project_profile": "agent_workspace",
   "overall_status": "pass",
   "checks": [
-    {"command": "python3 -m py_compile router and workflow scripts", "status": "pass", "summary": "compiled"},
+    {"command": "python3 -m py_compile scripts/project_memory.py scripts/context_compiler.py", "status": "pass", "summary": "retrieval and compiler modules compiled"},
+    {"command": "focused retrieval, context compiler, and adapter pytest", "status": "pass", "summary": "18 passed"},
+    {"command": "project-memory retrieval smoke", "status": "pass", "summary": "18 candidates; 6 bounded sections selected with provenance and injected into the manifest"},
     {"command": "make validate-artifacts", "status": "pass", "summary": "artifact validation passed"},
     {"command": "make security", "status": "pass", "summary": "repository-local security scan passed"},
-    {"command": "focused router, loop, runner, and workflow pytest", "status": "pass", "summary": "35 passed"},
-    {"command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests", "status": "pass", "summary": "127 collected, 126 passed, 1 skipped"},
-    {"command": "git diff --check", "status": "pass", "summary": "no whitespace errors"}
+    {"command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests", "status": "pass", "summary": "133 collected, 132 passed, 1 skipped"},
+    {"command": "git diff --check", "status": "pass", "summary": "no whitespace errors"},
+    {"command": "make check", "status": "pass", "summary": "artifact, security, full test, JSON, and diff checks passed"}
   ],
   "commands_attempted": [
-    "python3 -m py_compile scripts/workflow_router.py scripts/agent_role_runner.py scripts/run_workflow.py scripts/validate_artifacts.py",
+    "python3 -m py_compile scripts/project_memory.py scripts/context_compiler.py",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_project_memory.py tests/test_context_compiler.py tests/test_codex_adapter.py -q",
+    "python3 scripts/context_compiler.py --run-id rag-smoke --role planner --goal 'RAG powered project memory retrieval' --repository . --project agent_workspace --project-profile agent_workspace",
     "make validate-artifacts",
     "make security",
-    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_workflow_router.py tests/test_bounded_repair_loops.py tests/test_agent_role_runner.py tests/test_full_agent_workflow.py tests/test_run_workflow.py -q",
     "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests",
     "git diff --check",
     "make check"

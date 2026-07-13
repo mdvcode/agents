@@ -12,5 +12,8 @@ User gives a registered project issue -> public-safe branch name -> private issu
 ## Knowledge Flow
 Raw source -> project issue journal -> project topic memory -> project wiki page -> future task context.
 
+## Memory Retrieval Flow
+Task goal + role -> select the active project's approved private memory roots -> Markdown heading chunks -> local BM25 ranking -> bounded run-local retrieval file -> context manifest -> role generation.
+
 ## Stop Flow
 Protected path or high risk -> update risk/verdict -> stop and request approval.

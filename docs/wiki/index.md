@@ -5,7 +5,7 @@ This is the compounding knowledge layer for the agent workspace.
 Unlike `artifacts/`, this directory is not cleared between tasks. Agents update it when a task produces durable knowledge that should improve future work.
 
 ## Pages
-- `concepts/agent-memory.md`: memory architecture for this workspace.
+- `concepts/agent-memory.md`: layered memory architecture and local RAG retrieval for role context.
 - `concepts/goal-prompt.md`: `/goal` structure for scoping tasks.
 - `concepts/llm-wiki.md`: persistent wiki pattern from the PDF.
 - `concepts/structured-output-guard.md`: schema and repair expectations for agent outputs.

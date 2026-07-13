@@ -1,11 +1,11 @@
 {
   "risk_class": "medium",
   "reasons": [
-    "The change modifies the private workflow state machine and publication reachability rules.",
-    "Bounded repair loops and execution budgets affect control-plane termination behavior.",
-    "The task does not touch production settings, auth, billing, payments, migrations, secrets, or deployment infrastructure."
+    "The change controls which private project-memory content is injected into role prompts.",
+    "Path scoping and byte limits are security-relevant because target-project memory is private by default.",
+    "The task does not touch production settings, auth, billing, payments, migrations, secrets, deployment infrastructure, or publication behavior."
   ],
-  "changed_areas": ["workflow_routing", "workflow_state", "repair_loops", "budgets", "tests", "docs"],
+  "changed_areas": ["context_compilation", "project_memory", "retrieval", "tests", "docs"],
   "high_risk_triggers": [],
   "protected_paths_touched": [],
   "protected_actions_required": [],

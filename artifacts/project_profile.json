@@ -2,14 +2,14 @@
   "project_profile": "agent_workspace",
   "confidence": "high",
   "reasons": [
-    "The task changes the local control-plane router, workflow state, schemas, tests, docs, and run artifacts.",
+    "The task changes the local context compiler, project-memory retrieval, tests, docs, and run artifacts.",
     "Repository markers match the agent_workspace profile."
   ],
-  "matched_markers": ["AGENTS.md", ".agent-policy.yaml", "schemas/**", "scripts/**", "tests/**", "docs/**", "artifacts/**"],
+  "matched_markers": ["AGENTS.md", ".agent-policy.yaml", "scripts/**", "tests/**", "docs/**", "artifacts/**"],
   "quality_commands_selected": [
     "make validate-artifacts",
     "make security",
-    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_workflow_router.py tests/test_bounded_repair_loops.py tests/test_agent_role_runner.py tests/test_full_agent_workflow.py tests/test_run_workflow.py -q",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_project_memory.py tests/test_context_compiler.py tests/test_codex_adapter.py -q",
     "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests",
     "make check"
   ],

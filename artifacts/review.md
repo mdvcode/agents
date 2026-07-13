@@ -1,19 +1,19 @@
 # Review
 
 ## SUMMARY
-No correctness findings after focused router, loop, runner, workflow, and repository checks.
+No correctness findings after focused retrieval/compiler tests, end-to-end manifest smoke, full tests, and repository checks.
 
 ## CORRECTNESS_FINDINGS
 None.
 
 ## ARCHITECTURE_FINDINGS
-The router is isolated in `scripts/workflow_router.py`; role execution remains responsible for role work and artifact validation.
+Retrieval is isolated in `scripts/project_memory.py`; `context_compiler.py` owns integration with role manifests, and the existing executor remains responsible for bounded prompt injection.
 
 ## POLICY_VIOLATIONS
-None. HIGH risk and security blockers stop at approval-gate; publication preparation is reachable only after deterministic gates.
+None. Target-project retrieval requires `privacy.md`, stays inside the active project's private memory roots, skips symlinks and oversized/non-Markdown files, and makes no network calls.
 
 ## TEST_GAPS
-The real Codex smoke remains environment-dependent and was skipped.
+Ranking quality is covered with deterministic fixtures, not a large relevance benchmark. The real Codex smoke remains environment-dependent and was skipped.
 
 ## SUGGESTED_PATCH
 None.

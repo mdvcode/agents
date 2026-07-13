@@ -24,3 +24,5 @@
 - `docs/memory/` -> global agent-system long-term, daily, scratchpad, and topic memory.
 - `docs/kanban/` -> global boards.
 - `docs/graph/` -> global agent-system maps.
+- `scripts/project_memory.py` -> scoped Markdown chunking, BM25 ranking, and run-local retrieval context generation.
+- `.agent-runs/<run-id>/context/retrieved/<role>.md` -> ephemeral retrieved chunks with provenance for one role execution.

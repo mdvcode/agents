@@ -1,7 +1,7 @@
 {
   "decision": "publish_pr",
   "execution_status": "planned",
-  "task": "P3.2 deterministic routing and bounded repair loops",
+  "task": "P4.1 RAG-powered project memory retrieval",
   "project_profile": "agent_workspace",
   "risk_class": "medium",
   "checks_attempted": true,
@@ -21,10 +21,10 @@
   "approval_required_before_publish": false,
   "approval_required_before_merge": true,
   "reasoning_summary": [
-    "The deterministic router is authoritative over advisory role next_action values.",
-    "Required gates, risk/security stops, relevant optional gates, bounded repair loops, and budgets are enforced.",
-    "Focused tests, full tests, artifact validation, security checks, and diff hygiene passed."
+    "Project memory retrieval is locally ranked, bounded, project-isolated, and included in role prompts with provenance.",
+    "Target-project privacy policy and path controls prevent cross-project or out-of-root retrieval.",
+    "Focused tests, smoke verification, full tests, artifact validation, security checks, and diff hygiene passed."
   ],
-  "next_actions": ["Review the P3.2 diff; no commit or publication was created."],
+  "next_actions": ["Review the P4.1 working-tree diff; no publication was requested or created."],
   "lessons_updated": false
 }

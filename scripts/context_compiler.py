@@ -10,8 +10,11 @@ from typing import Any, Sequence
 
 import yaml
 
+from project_memory import project_privacy_path, retrieve_project_memory
+
 
 ROOT = Path(__file__).resolve().parents[1]
+MEMORY_CONTROL_ROOT = ROOT
 SKILLS = ROOT / ".agents" / "skills"
 ROLE_CAPABILITIES = ROOT / ".agent-role-capabilities.yaml"
 ROLE_CONTRACTS = ROOT / ".agent-role-contracts.yaml"
@@ -133,6 +136,34 @@ def create_context_manifest(
     prompt = prompt_path or str(contract.get("prompt_path", ""))
     contract_path = output_contract or str(contract.get("output_contract", ""))
     artifacts = list(expected_artifacts) or list(contract.get("expected_artifacts", []))
+    retrieval_query = " ".join(part for part in (goal.strip(), role.replace("-", " ")) if part)
+    retrieval = retrieve_project_memory(
+        control_root=MEMORY_CONTROL_ROOT,
+        project=project,
+        project_profile=project_profile,
+        query=retrieval_query,
+        context_path=context_dir / "retrieved" / f"{role}.md",
+    )
+    selected_context = [
+        {
+            "path": item.chunk.display_path,
+            "heading": item.chunk.heading,
+            "score": round(item.score, 6),
+            "bytes": len(item.chunk.content.encode("utf-8")),
+        }
+        for item in retrieval.selected
+    ]
+    context_files = [
+        {"path": str((ROOT / "AGENTS.md").resolve()), "kind": "policy"},
+        {"path": str((ROOT / ".agent-policy.yaml").resolve()), "kind": "policy"},
+        {"path": str((ROOT / ".agent-project-profiles.yaml").resolve()), "kind": "profile"},
+        {"path": str((ROOT / ".agent-repositories.yaml").resolve()), "kind": "registry"},
+    ]
+    privacy_path = project_privacy_path(MEMORY_CONTROL_ROOT, project, project_profile)
+    if privacy_path is not None:
+        context_files.append({"path": str(privacy_path), "kind": "project_privacy"})
+    if retrieval.context_path is not None:
+        context_files.append({"path": str(retrieval.context_path), "kind": "retrieved_project_memory"})
     manifest = {
         "run_id": run_id,
         "role": role,
@@ -152,22 +183,25 @@ def create_context_manifest(
             "max_total_bytes": DEFAULT_MAX_TOTAL_CONTEXT_BYTES,
             "max_file_bytes": DEFAULT_MAX_FILE_CONTEXT_BYTES,
         },
-        "selected_context": [],
+        "selected_context": selected_context,
         "excluded_context": [],
-        "retrieval_queries": [],
-        "source_file_candidates": [],
-        "repo_intelligence": {},
-        "context_files": [
-            {"path": str((ROOT / "AGENTS.md").resolve()), "kind": "policy"},
-            {"path": str((ROOT / ".agent-policy.yaml").resolve()), "kind": "policy"},
-            {"path": str((ROOT / ".agent-project-profiles.yaml").resolve()), "kind": "profile"},
-            {"path": str((ROOT / ".agent-repositories.yaml").resolve()), "kind": "registry"},
-        ],
+        "retrieval_queries": [retrieval_query] if retrieval_query else [],
+        "source_file_candidates": list(retrieval.candidate_paths),
+        "repo_intelligence": {
+            "project_memory_retrieval": {
+                "algorithm": "bm25_markdown_sections",
+                "status": retrieval.status,
+                "candidate_count": len(retrieval.candidate_paths),
+                "selected_count": len(retrieval.selected),
+            }
+        },
+        "context_files": context_files,
         "artifact_references": artifact_references(artifacts_dir),
         "skill_references": skill_references(role, project_profile),
         "previous_roles": list(previous_roles),
         "retrieval_rules": [
             "Read only the listed context files and artifacts needed for this role.",
+            "Treat retrieved project memory as private, potentially stale context rather than authoritative policy.",
             "Use repository search for exact symbols or paths before opening broad files.",
             "Keep raw command outputs outside the context manifest.",
             "Write role outputs as strict JSON matching schemas/role_result.schema.json.",
