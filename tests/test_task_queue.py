@@ -86,3 +86,38 @@ def test_expired_lease_is_reclaimed(tmp_path: Path) -> None:
     assert reclaimed.id == task.id
     assert reclaimed.worker_id == "replacement"
     assert reclaimed.attempts == 2
+
+
+def test_expired_lease_preserves_run_for_checkpoint_resume(tmp_path: Path) -> None:
+    queue = TaskQueue(tmp_path / "queue.db")
+    task = queue.enqueue(
+        task_key="recover",
+        payload={"task_id": "recover", "repository": str(tmp_path), "run_id": "run-recover"},
+        run_id="run-recover",
+    )
+    claimed = queue.claim(worker_id="worker-dead", lease_seconds=30)
+    assert claimed is not None
+    assert queue.mark_running(task.id, "worker-dead")
+    with queue.connect() as connection:
+        connection.execute("UPDATE tasks SET lease_expires_at=0 WHERE id=?", (task.id,))
+
+    recovered = queue.claim(worker_id="worker-new", lease_seconds=30)
+
+    assert recovered is not None
+    assert recovered.run_id == "run-recover"
+    assert any(event["event"] == "lease_expired_resume" for event in queue.events(task.id))
+
+
+def test_worker_registration_heartbeat_and_stale_monitor(tmp_path: Path) -> None:
+    queue = TaskQueue(tmp_path / "queue.db")
+    registered = queue.register_worker(worker_id="svc-1", service_id="svc", pid=123)
+    assert registered.status == "starting"
+    assert queue.worker_heartbeat("svc-1", current_task_id=42)
+    with queue.connect() as connection:
+        connection.execute("UPDATE workers SET heartbeat_at=0 WHERE worker_id='svc-1'")
+
+    stale = queue.stale_workers(stale_seconds=1, mark=True)
+
+    assert [record.worker_id for record in stale] == ["svc-1"]
+    assert stale[0].status == "stalled"
+    assert queue.stop_worker("svc-1")

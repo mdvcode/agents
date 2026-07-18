@@ -1,6 +1,8 @@
 version: 1
 artifacts:
   issue.json: issue-intake
+  approval.json: approval-gate
+  ci_feedback.json: ci-ingestion
   plan.md: planner
   project_profile.json: planner
   risk.json: risk-classifier

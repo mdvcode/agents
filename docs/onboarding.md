@@ -49,6 +49,8 @@ After smoke, Step 1 acceptance requires `make step1-verify RUN_ID=<evidence-run-
 
 Before starting workers, validate `.agent-routing.yaml`, `.agent-tool-policy.yaml`, and role contracts with `make validate-artifacts`. Enqueue idempotent task keys with `scripts/task_queue.py`, run 2–3 workers with `make queue-worker`, and inspect only exceptions with `make list-exceptions` or `scripts/list_runs.py` filters.
 
+For long-lived operation use `make worker-service-start`, verify `make worker-service-health`, and stop with `make worker-service-stop`. Approval is never a direct status edit: use `make approve-run RUN_ID=... ACTOR=...`, then `make resume-run RUN_ID=...`; rejection requires an actor and reason. The loopback control API exposes the same transitions and compact metrics. GitHub Actions webhooks additionally require `AGENT_GITHUB_WEBHOOK_SECRET`; optional API bearer authentication uses `AGENT_CONTROL_PLANE_TOKEN`.
+
 Step 2 acceptance requires `make step2-verify RUN_ID=<evidence-run-id> QUEUE_DB=<queue.db>`. The evidence must come from real Codex runs and include concurrent workers, isolated worktrees, governed tools, independent verification, a PR, and a human exception.
 
 ## Handoff Rules

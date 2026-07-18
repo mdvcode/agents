@@ -8,6 +8,24 @@ default:
   execution_kind: llm_role
   llm_invocation: true
 roles:
+  approval-gate:
+    prompt_path: ""
+    output_contract: schemas/role_result.schema.json
+    execution_kind: harness_stage
+    llm_invocation: false
+    expected_artifacts:
+      - approval.json
+    artifact_schemas:
+      approval.json: schemas/approval.schema.json
+  ci-ingestion:
+    prompt_path: ""
+    output_contract: schemas/role_result.schema.json
+    execution_kind: harness_stage
+    llm_invocation: false
+    expected_artifacts:
+      - ci_feedback.json
+    artifact_schemas:
+      ci_feedback.json: schemas/ci_feedback.schema.json
   issue-intake:
     prompt_path: ""
     output_contract: schemas/role_result.schema.json

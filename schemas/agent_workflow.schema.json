@@ -15,7 +15,7 @@
     "base_branch_sha_after"
   ],
   "enums": {
-    "execution_status": ["planned", "running", "completed", "blocked", "failed", "awaiting_approval"]
+    "execution_status": ["planned", "running", "resuming", "completed", "blocked", "failed", "awaiting_approval"]
   },
   "types": {
     "run_id": "str",
@@ -30,7 +30,13 @@
     "executor": "dict",
     "input_fingerprint": "str",
     "base_branch_sha_before": "str",
-    "base_branch_sha_after": "str"
+    "base_branch_sha_after": "str",
+    "resume_count": "int",
+    "resume_role": "str",
+    "resumed_at": "str",
+    "approval_override": "dict",
+    "approval_grants": "list",
+    "ci_feedback_pending": "bool"
   },
   "object_required": {
     "loops": ["quality_repair", "review_repair", "ci_repair", "frontend_verification_repair"],

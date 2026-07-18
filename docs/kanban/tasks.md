@@ -14,6 +14,7 @@
 - None.
 
 ## Done
+- Step 2 operational control plane: scoped approval/resume API, crash checkpoint recovery, signed CI feedback ingestion, registered worker daemon lifecycle, universal task intake, and compact operational metrics API.
 - Step 2 implementation: deterministic routing, four bounded repair loops, independent verifier contracts, same-worktree publication, SQLite workers, exception CLI, tool governance, and acceptance verifier.
 - Security severity routing and explicit non-LLM Issue Intake harness-stage classification.
 - Step 1 implementation: authoritative run state, artifact ownership, structured errors, metrics, publication idempotency, default-branch safety, and series verifier.

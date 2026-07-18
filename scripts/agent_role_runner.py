@@ -21,6 +21,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from adapters.codex_adapter import CodexAdapter, contract_section, load_json, validate_contract
+from approval_lifecycle import ApprovalError, request_approval
 from check_codex_runtime import check_codex_runtime
 from context_compiler import create_context_manifest, role_capability, role_contract
 from repository_registry import RepositoryRecord, find_by_remote
@@ -800,28 +801,56 @@ def run_roles(
     token_budget: int = 12000,
     timeout_seconds: int = 600,
     create_task_worktree: bool = False,
+    resume: bool = False,
 ) -> dict[str, Any]:
     run_id = run_id or make_run_id(workflow)
-    repository = repository.resolve()
-    goal = goal or task_id
-    fingerprint = task_fingerprint(
-        task_id=task_id,
-        goal=goal,
-        repository=repository,
-        branch=branch,
-        base_branch=base_branch,
-    )
     existing_workflow = RUNS / run_id / "workflow.json"
+    existing: dict[str, Any] = {}
     if existing_workflow.exists():
         try:
             existing = load_json(existing_workflow)
         except (OSError, json.JSONDecodeError, ValueError):
             existing = {}
+    if resume:
+        if not existing:
+            return {"run_id": run_id, "execution_status": "blocked", "blockers": ["resume state is missing"]}
+        if existing.get("execution_status") not in {"resuming", "running"}:
+            return {
+                **existing,
+                "execution_status": "blocked",
+                "blockers": [f"run cannot resume from {existing.get('execution_status')!r}"],
+            }
+        repository = Path(str(existing.get("repository", ""))).resolve()
+        task_id = str(existing.get("task_id", task_id))
+        goal = str(existing.get("goal", goal or task_id))
+        project = str(existing.get("project", project))
+        branch = str(existing.get("branch", branch))
+        base_branch = str(existing.get("base_branch", base_branch))
+        workflow = str(existing.get("workflow", workflow))
+        fingerprint = str(existing.get("input_fingerprint", ""))
+    else:
+        repository = repository.resolve()
+        goal = goal or task_id
+        fingerprint = task_fingerprint(
+            task_id=task_id,
+            goal=goal,
+            repository=repository,
+            branch=branch,
+            base_branch=base_branch,
+        )
         if existing.get("execution_status") == "completed" and existing.get("input_fingerprint") == fingerprint:
             return existing
-    duplicate = find_completed_run(RUNS, fingerprint, exclude_run_id=run_id)
-    if duplicate is not None:
-        return {**duplicate, "deduplicated": True, "duplicate_of": duplicate.get("run_id", "")}
+        if isinstance(existing.get("executor"), dict):
+            if existing.get("input_fingerprint") == fingerprint:
+                return existing
+            return {
+                **existing,
+                "execution_status": "blocked",
+                "blockers": ["run id already belongs to a different or unfinished workflow; use --resume"],
+            }
+        duplicate = find_completed_run(RUNS, fingerprint, exclude_run_id=run_id)
+        if duplicate is not None:
+            return {**duplicate, "deduplicated": True, "duplicate_of": duplicate.get("run_id", "")}
     layout = RunLayout.create(RUNS, run_id)
     try:
         layout.assert_artifacts_dir(artifacts_dir)
@@ -845,56 +874,84 @@ def run_roles(
         return state
     run_dir = layout.root
     run_artifacts = layout.artifacts
-    project_profile = project_profile_for(project)
     context_dir = layout.context
     requests_dir = layout.requests
     raw_dir = layout.raw_events
-    adapter_command = effective_adapter_command(workflow, adapter_command)
-    worktree, effective_branch, effective_base, setup_errors = prepare_worktree(
-        repository,
-        task_id,
-        project,
-        run_id,
-        branch,
-        base_branch,
-        create_task_worktree,
-    )
-    if uses_production_codex_executor(adapter_command) and not create_task_worktree:
-        setup_errors.append(
-            "production Codex full workflow requires --create-worktree; implementation may not run in the source repository"
+    if resume:
+        state = existing
+        project_profile = str(state.get("project_profile", project_profile_for(project)))
+        worktree = Path(str(state.get("worktree", ""))).resolve()
+        effective_branch = str(state.get("branch", branch))
+        effective_base = str(state.get("base_branch", base_branch))
+        executor = state.get("executor", {})
+        configured_adapter = executor.get("command", "") if isinstance(executor, dict) else ""
+        adapter_command = effective_adapter_command(workflow, adapter_command or str(configured_adapter))
+        setup_errors = []
+        if not repository.is_dir() or not worktree.is_dir():
+            setup_errors.append("resume repository or task worktree is missing")
+        role = str(state.pop("resume_role", ""))
+        if not role:
+            last_route = state.get("last_route", {})
+            if isinstance(last_route, dict):
+                candidate = str(last_route.get("next_role", ""))
+                if candidate not in {"", "approval-gate", "blocked"}:
+                    role = candidate
+        if role not in ROLE_CHAIN:
+            setup_errors.append("resume checkpoint role is invalid or missing")
+        state["execution_status"] = "running"
+        state["resume_count"] = int(state.get("resume_count", 0)) + 1
+        state["resumed_at"] = datetime.now(timezone.utc).isoformat()
+        create_task_worktree = True
+        append_trace(layout, {"event": "workflow_resumed", "role": role})
+    else:
+        project_profile = project_profile_for(project)
+        adapter_command = effective_adapter_command(workflow, adapter_command)
+        worktree, effective_branch, effective_base, setup_errors = prepare_worktree(
+            repository,
+            task_id,
+            project,
+            run_id,
+            branch,
+            base_branch,
+            create_task_worktree,
         )
-    state: dict[str, Any] = {
-        "run_id": run_id,
-        "workflow": workflow,
-        "task_id": task_id,
-        "goal": goal,
-        "project": project,
-        "project_profile": project_profile,
-        "repository": str(repository),
-        "worktree": str(worktree.resolve()),
-        "branch": effective_branch,
-        "base_branch": effective_base,
-        "dry_run": dry_run,
-        "execution_status": "running",
-        "roles": [],
-        "artifacts_dir": str(run_artifacts),
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "elapsed_seconds": 0,
-        "role_count": 0,
-        "tokens_used": 0,
-        "input_fingerprint": fingerprint,
-        "executor": {
-            "kind": "codex_cli" if uses_production_codex_executor(adapter_command) else "external_adapter",
-            "command": adapter_command,
-            "production": uses_production_codex_executor(adapter_command),
-        },
-        "base_branch_sha_before": git_ref_sha(repository, effective_base),
-        "base_branch_sha_after": "",
-        "budgets": workflow_budgets(workflow),
-        "loops": initial_loops(),
-    }
+        if uses_production_codex_executor(adapter_command) and not create_task_worktree:
+            setup_errors.append(
+                "production Codex full workflow requires --create-worktree; implementation may not run in the source repository"
+            )
+        state = {
+            "run_id": run_id,
+            "workflow": workflow,
+            "task_id": task_id,
+            "goal": goal,
+            "project": project,
+            "project_profile": project_profile,
+            "repository": str(repository),
+            "worktree": str(worktree.resolve()),
+            "branch": effective_branch,
+            "base_branch": effective_base,
+            "dry_run": dry_run,
+            "execution_status": "running",
+            "roles": [],
+            "artifacts_dir": str(run_artifacts),
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "elapsed_seconds": 0,
+            "role_count": 0,
+            "tokens_used": 0,
+            "input_fingerprint": fingerprint,
+            "executor": {
+                "kind": "codex_cli" if uses_production_codex_executor(adapter_command) else "external_adapter",
+                "command": adapter_command,
+                "production": uses_production_codex_executor(adapter_command),
+            },
+            "base_branch_sha_before": git_ref_sha(repository, effective_base),
+            "base_branch_sha_after": "",
+            "budgets": workflow_budgets(workflow),
+            "loops": initial_loops(),
+        }
+        role = ROLE_CHAIN[0]
+        append_trace(layout, {"event": "workflow_started", "workflow": workflow, "task_id": task_id})
     write_json(layout.workflow, state)
-    append_trace(layout, {"event": "workflow_started", "workflow": workflow, "task_id": task_id})
     write_metrics(layout, state)
     if setup_errors:
         state["execution_status"] = "blocked"
@@ -931,11 +988,24 @@ def run_roles(
             return state
 
     adapter = CodexAdapter(command=adapter_command, timeout_seconds=timeout_seconds, raw_output_dir=raw_dir)
-    completed_roles: list[str] = []
-    role_visits: dict[str, int] = {}
+    prior_roles = [
+        str(item.get("role", ""))
+        for item in state.get("roles", [])
+        if isinstance(item, dict) and isinstance(item.get("role"), str)
+    ]
+    completed_roles = [
+        str(item.get("role", ""))
+        for item in state.get("roles", [])
+        if isinstance(item, dict)
+        and isinstance(item.get("result"), dict)
+        and item["result"].get("status") == "completed"
+    ]
+    role_visits: dict[str, int] = {
+        name: prior_roles.count(name) for name in set(prior_roles)
+    }
     source_snapshot_before = git_snapshot(repository)
-    role = ROLE_CHAIN[0]
     guard = 0
+    elapsed_before_resume = int(state.get("elapsed_seconds", 0) or 0)
     workflow_started = time.monotonic()
     while role:
         guard += 1
@@ -1121,7 +1191,7 @@ def run_roles(
             for item in state["roles"]
             if isinstance(item.get("result"), dict)
         )
-        state["elapsed_seconds"] = int(time.monotonic() - workflow_started)
+        state["elapsed_seconds"] = elapsed_before_resume + int(time.monotonic() - workflow_started)
         route = decide_next_role(
             current_role=role,
             role_result=result,
@@ -1175,6 +1245,8 @@ def run_roles(
                 approval_checkpoint = {
                     "time": datetime.now(timezone.utc).isoformat(),
                     "role": "approval-gate",
+                    "execution_kind": "harness_stage",
+                    "llm_invoked": False,
                     "prompt_file": "",
                     "prompt": "",
                     "result": approval,
@@ -1182,6 +1254,19 @@ def run_roles(
                 state["roles"].append(approval_checkpoint)
                 state["role_count"] = len(state["roles"])
                 write_json(layout.role_results / "approval-gate-1.json", approval_checkpoint)
+                write_json(layout.workflow, state)
+                try:
+                    request_approval(layout.root, reason=route["reason"])
+                except ApprovalError as exc:
+                    state["execution_status"] = "blocked"
+                    state["blockers"] = [f"approval request failed: {exc}"]
+                    record_failure(
+                        layout,
+                        stage="approval",
+                        code="APPROVAL_REQUEST_FAILED",
+                        message="Could not create scoped approval request.",
+                        details=[str(exc)],
+                    )
                 append_trace(layout, {"event": "workflow_awaiting_approval", "reason": route["reason"]})
                 record_failure(
                     layout,
@@ -1231,6 +1316,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--token-budget", type=int, default=12000)
     parser.add_argument("--timeout-seconds", type=int, default=600)
     parser.add_argument("--create-worktree", action="store_true")
+    parser.add_argument("--resume", action="store_true")
     return parser.parse_args()
 
 
@@ -1251,6 +1337,7 @@ def main() -> int:
         args.token_budget,
         args.timeout_seconds,
         args.create_worktree,
+        args.resume,
     )
     print(json.dumps(state, indent=2, ensure_ascii=False))
     return 0 if state["execution_status"] == "completed" else 1

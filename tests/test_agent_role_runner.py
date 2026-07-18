@@ -10,6 +10,9 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from approval_lifecycle import approve_run, prepare_resume  # noqa: E402
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "agent_role_runner.py"
 SPEC = importlib.util.spec_from_file_location("agent_role_runner", MODULE_PATH)
@@ -230,6 +233,57 @@ def test_agent_role_runner_invokes_adapter_for_core_roles(tmp_path: Path, monkey
     assert request["expected_artifacts"] == ["plan.md", "project_profile.json"]
     assert request["filesystem_access"] == "read_only"
     assert request["allowed_tools"] == ["filesystem_read", "repository_search"]
+
+
+def test_approved_run_resumes_same_worktree_from_checkpoint(tmp_path: Path, monkeypatch: object) -> None:
+    runs = tmp_path / ".agent-runs"
+    monkeypatch.setattr(agent_role_runner, "RUNS", runs)
+    command = fake_adapter_script(tmp_path / "fake_adapter.py")
+    first = agent_role_runner.run_roles(
+        run_id="resume-checkpoint",
+        repository=tmp_path,
+        adapter_command=command,
+        dry_run=True,
+    )
+    run_dir = runs / "resume-checkpoint"
+    approval = json.loads((run_dir / "artifacts" / "approval.json").read_text(encoding="utf-8"))
+    approve_run(run_dir, actor="human-reviewer")
+    prepare_resume(run_dir)
+
+    resumed = agent_role_runner.run_roles(run_id="resume-checkpoint", resume=True, dry_run=True)
+
+    assert first["execution_status"] == "awaiting_approval"
+    assert resumed["worktree"] == first["worktree"]
+    assert resumed["resume_count"] == 1
+    checkpoint_role = approval["checkpoint_role"]
+    assert (run_dir / "role-results" / f"{checkpoint_role}-1.json").exists()
+    assert (run_dir / "role-results" / f"{checkpoint_role}-2.json").exists()
+    renewed = json.loads((run_dir / "artifacts" / "approval.json").read_text(encoding="utf-8"))
+    assert renewed["approval_id"] != approval["approval_id"]
+    assert "Workflow blockers" in renewed["reason"]
+
+
+def test_unfinished_run_cannot_be_restarted_without_resume(tmp_path: Path, monkeypatch: object) -> None:
+    runs = tmp_path / ".agent-runs"
+    monkeypatch.setattr(agent_role_runner, "RUNS", runs)
+    command = fake_adapter_script(tmp_path / "fake_adapter.py")
+    first = agent_role_runner.run_roles(
+        run_id="must-resume",
+        repository=tmp_path,
+        adapter_command=command,
+        dry_run=True,
+    )
+    approval_before = (runs / "must-resume" / "artifacts" / "approval.json").read_text(encoding="utf-8")
+
+    repeated = agent_role_runner.run_roles(
+        run_id="must-resume",
+        repository=tmp_path,
+        adapter_command=command,
+        dry_run=True,
+    )
+
+    assert repeated == first
+    assert (runs / "must-resume" / "artifacts" / "approval.json").read_text(encoding="utf-8") == approval_before
 
 
 def test_implementation_artifact_validation_detects_source_repo_mutation(tmp_path: Path) -> None:

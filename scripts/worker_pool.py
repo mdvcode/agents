@@ -11,7 +11,6 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -43,6 +42,9 @@ def safe_payload(record: TaskRecord) -> dict[str, str]:
         "base_branch",
         "run_id",
         "adapter_command",
+        "goal",
+        "source",
+        "event_id",
     }
     unknown = sorted(set(record.payload) - allowed)
     if unknown:
@@ -65,6 +67,7 @@ class WorkflowWorkerPool:
         lease_seconds: int = 120,
         heartbeat_seconds: int = 10,
         handler: TaskHandler | None = None,
+        worker_prefix: str = "worker",
     ) -> None:
         if workers < 1 or workers > 32:
             raise ValueError("workers must be between 1 and 32")
@@ -75,12 +78,19 @@ class WorkflowWorkerPool:
         self.lease_seconds = lease_seconds
         self.heartbeat_seconds = heartbeat_seconds
         self.handler = handler
+        self.worker_prefix = worker_prefix
 
     def run_workflow(self, record: TaskRecord, worker_id: str) -> WorkerOutcome:
         payload = safe_payload(record)
-        run_id = payload.get("run_id") or datetime.now(timezone.utc).strftime(
-            f"%Y%m%dT%H%M%S.%fZ-queue-{record.id}"
-        )
+        run_id = payload.get("run_id") or record.run_id or f"queue-task-{record.id}"
+        if not self.queue.assign_run(record.id, worker_id, run_id):
+            return WorkerOutcome(
+                status="failed",
+                run_id=run_id,
+                error="worker lost task lease before assigning run id",
+                requires_human=True,
+                exception_reason="worker lease lost",
+            )
         command = [
             sys.executable,
             "scripts/run_workflow.py",
@@ -89,6 +99,8 @@ class WorkflowWorkerPool:
             run_id,
             "--task-id",
             payload["task_id"],
+            "--goal",
+            payload.get("goal", payload["task_id"]),
             "--project",
             payload.get("project", "agent_workspace"),
             "--repo",
@@ -100,6 +112,24 @@ class WorkflowWorkerPool:
         ]
         if payload.get("adapter_command"):
             command.extend(["--adapter-command", payload["adapter_command"]])
+        workflow_path = RUNS_DIR / run_id / "workflow.json"
+        if workflow_path.exists():
+            try:
+                workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                workflow = {}
+            status = workflow.get("execution_status") if isinstance(workflow, dict) else ""
+            if status in {"resuming", "running"}:
+                command.append("--resume")
+            elif status == "awaiting_approval":
+                return WorkerOutcome(
+                    status="blocked",
+                    run_id=run_id,
+                    requires_human=True,
+                    exception_reason="approval required",
+                )
+            elif status == "completed":
+                return WorkerOutcome(status="completed", run_id=run_id)
         process = subprocess.Popen(
             command,
             cwd=ROOT,
@@ -109,6 +139,7 @@ class WorkflowWorkerPool:
         )
         while process.poll() is None:
             time.sleep(self.heartbeat_seconds)
+            self.queue.worker_heartbeat(worker_id, current_task_id=record.id)
             if not self.queue.heartbeat(record.id, worker_id, self.lease_seconds):
                 process.terminate()
                 stdout, stderr = process.communicate(timeout=10)
@@ -149,12 +180,13 @@ class WorkflowWorkerPool:
         )
 
     def process_one(self, worker_number: int) -> TaskRecord | None:
-        worker_id = f"worker-{worker_number}"
+        worker_id = f"{self.worker_prefix}-{worker_number}"
         record = self.queue.claim(worker_id=worker_id, lease_seconds=self.lease_seconds)
         if record is None:
             return None
         if not self.queue.mark_running(record.id, worker_id):
             return self.queue.get(record.id)
+        self.queue.worker_heartbeat(worker_id, current_task_id=record.id)
         try:
             outcome = (
                 self.handler(record, worker_id)
@@ -167,7 +199,7 @@ class WorkflowWorkerPool:
                 error=str(exc),
                 exception_reason="worker handler failed",
             )
-        return self.queue.finish(
+        finished = self.queue.finish(
             task_id=record.id,
             worker_id=worker_id,
             status=outcome.status,
@@ -176,6 +208,8 @@ class WorkflowWorkerPool:
             requires_human=outcome.requires_human,
             exception_reason=outcome.exception_reason,
         )
+        self.queue.worker_heartbeat(worker_id, current_task_id=0)
+        return finished
 
     def run_wave(self) -> list[TaskRecord]:
         with ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="agent-worker") as executor:

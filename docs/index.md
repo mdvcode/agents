@@ -41,6 +41,9 @@ This repository is the local operating base for agents working across supported 
 - `make security`: lightweight repository-local scan for obvious secrets, private keys, private paths, and protected staged files.
 - `make agent-status`: print git status and current verdict.
 - `make queue-worker`: process queued workflows with three leased workers.
+- `make worker-service-start|restart|status|health|stop`: operate the registered worker daemon.
+- `make approve-run|resume-run|reject-run RUN_ID=...`: perform scoped supervised-autonomy transitions.
+- `make control-plane`: serve the loopback control API; `make metrics` prints the same compact operational state.
 - `make list-exceptions`: show runs and queue items requiring a human without transcripts.
 - `make step2-verify RUN_ID=<run-id> QUEUE_DB=<path>`: verify real concurrent Step 2 acceptance evidence.
 
@@ -54,3 +57,4 @@ This repository is the local operating base for agents working across supported 
 - `.agent-runs/<run-id>/errors.jsonl`: structured failures and approval stops.
 - Repository-root `artifacts/` is forbidden mutable state.
 - `.agent-queue/tasks.db` is scheduler coordination state only; it does not mirror run artifacts or workflow state.
+- `.agent-queue/events/` stores normalized immutable intake envelopes; worker-service state is operational scheduler metadata, never task workflow state.

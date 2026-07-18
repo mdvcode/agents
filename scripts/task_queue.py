@@ -40,6 +40,20 @@ class TaskRecord:
     exception_reason: str
 
 
+@dataclass(frozen=True)
+class WorkerRecord:
+    worker_id: str
+    service_id: str
+    pid: int
+    status: str
+    started_at: float
+    heartbeat_at: float
+    stopped_at: float
+    current_task_id: int
+    restart_count: int
+    metadata: dict[str, Any]
+
+
 class TaskQueue:
     def __init__(self, path: Path = DEFAULT_DB) -> None:
         self.path = path.resolve()
@@ -89,6 +103,19 @@ class TaskQueue:
                     details_json TEXT NOT NULL DEFAULT '{}',
                     created_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS workers (
+                    worker_id TEXT PRIMARY KEY,
+                    service_id TEXT NOT NULL,
+                    pid INTEGER NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('starting','healthy','draining','stopped','stalled','failed')),
+                    started_at REAL NOT NULL,
+                    heartbeat_at REAL NOT NULL,
+                    stopped_at REAL NOT NULL DEFAULT 0,
+                    current_task_id INTEGER NOT NULL DEFAULT 0,
+                    restart_count INTEGER NOT NULL DEFAULT 0,
+                    metadata_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE INDEX IF NOT EXISTS workers_heartbeat_idx ON workers(status, heartbeat_at);
                 """
             )
 
@@ -182,7 +209,14 @@ class TaskQueue:
                 """,
                 (status, now, now, reason, int(exhausted), reason if exhausted else "", int(row["id"])),
             )
-            self.event(connection, int(row["id"]), status, details={"reason": reason}, now=now)
+            event = "lease_expired_resume" if status == "queued" and str(row["run_id"]) else status
+            self.event(
+                connection,
+                int(row["id"]),
+                event,
+                details={"reason": reason, "run_id": str(row["run_id"])},
+                now=now,
+            )
 
     def claim(self, *, worker_id: str, lease_seconds: int = 120) -> TaskRecord | None:
         if not worker_id.strip() or lease_seconds <= 0:
@@ -239,6 +273,19 @@ class TaskQueue:
             )
             if cursor.rowcount:
                 self.event(connection, task_id, "heartbeat", worker_id, now=now)
+            return cursor.rowcount == 1
+
+    def assign_run(self, task_id: int, worker_id: str, run_id: str) -> bool:
+        if not run_id:
+            raise ValueError("run_id is required")
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE tasks SET run_id=?,updated_at=?
+                WHERE id=? AND worker_id=? AND status IN ('leased','running')
+                """,
+                (run_id, time.time(), task_id, worker_id),
+            )
             return cursor.rowcount == 1
 
     def finish(
@@ -346,6 +393,100 @@ class TaskQueue:
                 }
                 for row in rows
             ]
+
+    @staticmethod
+    def worker_record(row: sqlite3.Row) -> WorkerRecord:
+        metadata = json.loads(str(row["metadata_json"]))
+        return WorkerRecord(
+            worker_id=str(row["worker_id"]),
+            service_id=str(row["service_id"]),
+            pid=int(row["pid"]),
+            status=str(row["status"]),
+            started_at=float(row["started_at"]),
+            heartbeat_at=float(row["heartbeat_at"]),
+            stopped_at=float(row["stopped_at"]),
+            current_task_id=int(row["current_task_id"]),
+            restart_count=int(row["restart_count"]),
+            metadata=metadata if isinstance(metadata, dict) else {},
+        )
+
+    def register_worker(
+        self,
+        *,
+        worker_id: str,
+        service_id: str,
+        pid: int,
+        restart_count: int = 0,
+        metadata: dict[str, Any] | None = None,
+    ) -> WorkerRecord:
+        if not worker_id or not service_id or pid <= 0:
+            raise ValueError("worker_id, service_id, and positive pid are required")
+        now = time.time()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO workers(worker_id,service_id,pid,status,started_at,heartbeat_at,restart_count,metadata_json)
+                VALUES(?,?,?,'starting',?,?,?,?)
+                ON CONFLICT(worker_id) DO UPDATE SET
+                    service_id=excluded.service_id,pid=excluded.pid,status='starting',
+                    started_at=excluded.started_at,heartbeat_at=excluded.heartbeat_at,stopped_at=0,
+                    current_task_id=0,restart_count=excluded.restart_count,metadata_json=excluded.metadata_json
+                """,
+                (worker_id, service_id, pid, now, now, restart_count, json.dumps(metadata or {}, sort_keys=True)),
+            )
+            row = connection.execute("SELECT * FROM workers WHERE worker_id=?", (worker_id,)).fetchone()
+            return self.worker_record(row)
+
+    def worker_heartbeat(
+        self,
+        worker_id: str,
+        *,
+        status: str = "healthy",
+        current_task_id: int = 0,
+    ) -> bool:
+        if status not in {"healthy", "draining", "failed"}:
+            raise ValueError("invalid worker heartbeat status")
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "UPDATE workers SET status=?,heartbeat_at=?,current_task_id=? WHERE worker_id=?",
+                (status, time.time(), current_task_id, worker_id),
+            )
+            return cursor.rowcount == 1
+
+    def stop_worker(self, worker_id: str, *, status: str = "stopped") -> bool:
+        if status not in {"stopped", "failed", "stalled"}:
+            raise ValueError("invalid terminal worker status")
+        now = time.time()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "UPDATE workers SET status=?,heartbeat_at=?,stopped_at=?,current_task_id=0 WHERE worker_id=?",
+                (status, now, now, worker_id),
+            )
+            return cursor.rowcount == 1
+
+    def list_workers(self) -> list[WorkerRecord]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT * FROM workers ORDER BY service_id,worker_id").fetchall()
+            return [self.worker_record(row) for row in rows]
+
+    def stale_workers(self, *, stale_seconds: int = 60, mark: bool = False) -> list[WorkerRecord]:
+        threshold = time.time() - max(1, stale_seconds)
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM workers WHERE status IN ('starting','healthy','draining') AND heartbeat_at < ?",
+                (threshold,),
+            ).fetchall()
+            if mark and rows:
+                ids = [str(row["worker_id"]) for row in rows]
+                connection.executemany(
+                    "UPDATE workers SET status='stalled' WHERE worker_id=?",
+                    [(worker_id,) for worker_id in ids],
+                )
+                rows = connection.execute(
+                    f"SELECT * FROM workers WHERE worker_id IN ({','.join('?' for _ in ids)}) ORDER BY worker_id",
+                    ids,
+                ).fetchall()
+            return [self.worker_record(row) for row in rows]
 
 
 def parse_args() -> argparse.Namespace:

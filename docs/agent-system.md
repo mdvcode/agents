@@ -52,8 +52,13 @@ Security routing is severity-aware. A `critical` finding returns a hard `blocked
 - UI verification may report `works` only with a real loopback development server, Playwright interaction evidence, screenshots, and console/network observations. `unavailable` keeps publication in draft when evidence is required; `broken` enters the bounded frontend repair loop.
 - Task Intake creates the worktree before implementation. Publication validates and reuses the worktree and branch recorded in `workflow.json`; it does not copy changes into a publication-only checkout.
 - `scripts/task_queue.py` provides an idempotent SQLite queue with atomic leases, heartbeats, retries, and dead letters. `scripts/worker_pool.py` runs three workers by default.
+- `scripts/worker_service.py` is the operational wrapper: registered slots, daemon start/restart/stop, health, graceful draining, heartbeat monitoring, and bounded internal restart handling.
 - `.agent-queue/tasks.db` contains only scheduling state. Task workflow state remains authoritative under `.agent-runs/<run-id>/`.
 - `scripts/list_runs.py` exposes human exceptions without transcripts. `.agent-tool-policy.yaml` governs tool roles/actions/domains/credentials/timeouts and writes sanitized decisions to each run's tool-call audit.
+- `scripts/approval_lifecycle.py` owns scoped approval request/approve/reject/expire/consume transitions. A consumed approval queues the same `run_id`; `agent_role_runner.py --resume` reuses the recorded worktree and checkpoint.
+- `scripts/event_ingestion.py` normalizes CLI, API, webhook, GitHub Issue, and CI deliveries into one idempotent task envelope.
+- `scripts/ci_feedback.py` verifies GitHub webhook HMAC, reads failed logs through tool governance, redacts credential patterns, stores CI evidence inside the run, and queues `ci-repair-agent` against the existing branch and PR.
+- `scripts/control_plane_api.py` is a loopback-only API for intake, approvals, resume, exceptions, and metrics. `scripts/operational_metrics.py` exposes compact runs/workers/queue/leases/budgets/exceptions state without transcripts.
 
 Step 2 production acceptance is evidence-gated by `make step2-verify`. It requires real concurrent Codex runs, isolated worktrees, independent gates, governed tool traces, at least one PR, and at least one human exception; fixture-only concurrency is not sufficient.
 

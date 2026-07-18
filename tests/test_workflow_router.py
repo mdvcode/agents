@@ -204,6 +204,32 @@ def test_high_risk_routes_to_approval_and_cannot_publish(tmp_path: Path) -> None
     assert result["publication_allowed"] is False
 
 
+def test_scoped_high_risk_grant_allows_patch_but_not_publication(tmp_path: Path) -> None:
+    setup_artifacts(tmp_path, "high")
+    state = completed_state(
+        approval_grants=[
+            {
+                "approval_id": "approved-patch",
+                "gate": "risk-classifier",
+                "scope": {
+                    "actions": ["resume_workflow", "patch_high_risk"],
+                    "paths": [],
+                    "gate": "risk-classifier",
+                    "risk_class": "high",
+                },
+            }
+        ]
+    )
+
+    implementation = route(tmp_path, state, "risk-classifier")
+    publication = route(tmp_path, state, "orchestrator")
+
+    assert implementation["next_role"] == "implementation-agent"
+    assert publication["next_role"] == "blocked"
+    assert publication["stop"] is True
+    assert publication["publication_allowed"] is False
+
+
 def test_low_and_medium_risk_reach_publication_prepare_after_required_gates(tmp_path: Path) -> None:
     for risk_class in ("low", "medium"):
         case = tmp_path / risk_class

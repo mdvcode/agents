@@ -14,6 +14,7 @@ Unlike `artifacts/`, this directory is not cleared between tasks. Agents update 
 - `decisions/2026-05-19-pdf-agent-system-upgrade.md`: decision record for the PDF-driven upgrade.
 - `decisions/2026-07-18-step1-authoritative-run-state.md`: single-run state, artifact ownership, and Step 1 acceptance contract.
 - `decisions/2026-07-18-step2-deterministic-concurrency.md`: authoritative routing, bounded repairs, verifier plane, worker queue, and tool governance.
+- `decisions/2026-07-18-step2-operational-control-plane.md`: approval/resume, recovery, event and CI ingestion, worker service lifecycle, and metrics API.
 - `contradictions.md`: claims or practices that need reconciliation.
 
 ## Update Rules

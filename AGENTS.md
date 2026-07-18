@@ -156,6 +156,10 @@ Treat changes touching any of the following as HIGH risk and protected:
 - `.agent-queue/tasks.db` is scheduler state only. It must not duplicate mutable workflow or artifact state from `.agent-runs/<run-id>/`.
 - Issue Intake is a deterministic `harness_stage` with `llm_invocation=false`; it must not be treated as an LLM role.
 - Security routing is severity-aware: CRITICAL findings hard-block the workflow; MEDIUM and HIGH findings require human approval.
+- Approval is a scoped lifecycle, not a status edit: request, approve/reject/expire, consume once, and resume the same run/worktree from its checkpoint. Resume is queued with the existing `run_id`.
+- Worker leases preserve the assigned `run_id`; after a process dies, expiry requeues checkpoint resume instead of creating a fresh workflow state.
+- External CLI, API, webhook, GitHub Issue, and CI events must normalize into the same task envelope before queueing.
+- GitHub Actions repair intake requires a verified webhook signature, governed log access, secret redaction, and repair of the existing run/branch/PR.
 
 ## Artifact hygiene
 - Do not create or mutate repository-root `artifacts/`; it is not workflow state.

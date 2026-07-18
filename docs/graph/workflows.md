@@ -13,6 +13,12 @@ Within one `.agent-runs/<run-id>/`: `plan.md` -> `risk.json` -> implementation -
 
 Task enqueue -> SQLite lease -> worker heartbeat -> Task Intake creates worktree -> authoritative router -> implementation and bounded repair loops -> independent verification plane -> publication from the same worktree or compact exception -> terminal queue status.
 
+Approval required -> run-scoped request and checkpoint fingerprint -> exact-scope human decision -> consume once -> queue existing run id -> resume same worktree/checkpoint -> continue deterministic gates.
+
+Worker process dies -> heartbeat stops -> lease expires -> task requeued with existing run id -> replacement worker detects running/resuming workflow -> `--resume` from checkpoint.
+
+GitHub Actions failure -> HMAC-verified webhook -> governed failed-log read -> secret redaction -> run-scoped CI feedback -> existing run/branch queued at CI repair -> quality and publication update the existing PR.
+
 The queue coordinates tasks; it never replaces `.agent-runs/<run-id>/` as the authoritative state of a task.
 
 ## Deterministic Gate Flow

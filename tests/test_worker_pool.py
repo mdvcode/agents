@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 import sys
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -10,6 +11,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from task_queue import TaskQueue, TaskRecord
 from worker_pool import WorkerOutcome, WorkflowWorkerPool, safe_payload
+import worker_pool
 
 
 def test_three_workers_process_isolated_tasks_concurrently(tmp_path: Path) -> None:
@@ -94,3 +96,43 @@ def test_worker_rejects_adapter_override_outside_harness_test_mode(
         assert "restricted to harness test mode" in str(exc)
     else:
         raise AssertionError("adapter override must be rejected")
+
+
+def test_reclaimed_run_uses_resume_command(tmp_path: Path, monkeypatch: object) -> None:
+    runs = tmp_path / ".agent-runs"
+    run_dir = runs / "run-recover"
+    run_dir.mkdir(parents=True)
+    (run_dir / "workflow.json").write_text(
+        json.dumps({"execution_status": "running"}), encoding="utf-8"
+    )
+    monkeypatch.setattr(worker_pool, "RUNS_DIR", runs)
+    commands: list[list[str]] = []
+
+    class FakeProcess:
+        returncode = 1
+
+        def __init__(self, command: list[str], **_kwargs: object) -> None:
+            commands.append(command)
+
+        def poll(self) -> int:
+            return 1
+
+        def communicate(self, timeout: int | None = None) -> tuple[str, str]:
+            return "", "interrupted"
+
+    monkeypatch.setattr(worker_pool.subprocess, "Popen", FakeProcess)
+    queue = TaskQueue(tmp_path / "queue.db")
+    queued = queue.enqueue(
+        task_key="recover",
+        payload={"task_id": "recover", "repository": str(tmp_path), "run_id": "run-recover"},
+        run_id="run-recover",
+    )
+    claimed = queue.claim(worker_id="replacement", lease_seconds=30)
+    assert claimed is not None
+    assert queue.mark_running(queued.id, "replacement")
+    pool = WorkflowWorkerPool(queue=queue, workers=1, lease_seconds=30, heartbeat_seconds=1)
+
+    outcome = pool.run_workflow(claimed, "replacement")
+
+    assert outcome.run_id == "run-recover"
+    assert commands and "--resume" in commands[0]

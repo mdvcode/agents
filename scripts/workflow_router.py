@@ -662,6 +662,31 @@ def decide_next_role(
     load_yaml(REPOSITORIES_CONFIG)
     warnings: list[str] = []
     advisory = result.get("next_action")
+    approval_override = state.get("approval_override")
+    override_scope = approval_override.get("scope", {}) if isinstance(approval_override, dict) else {}
+    bypass_approval = (
+        isinstance(approval_override, dict)
+        and approval_override.get("gate") == current_role
+        and isinstance(override_scope, dict)
+        and "resume_workflow" in override_scope.get("actions", [])
+    )
+    if bypass_approval:
+        state.pop("approval_override", None)
+        warnings.append("Consumed one scoped approval override for this checkpoint.")
+    grants = state.get("approval_grants", [])
+    valid_grants = [item for item in grants if isinstance(item, dict)] if isinstance(grants, list) else []
+    risk_approved = any(
+        item.get("gate") == "risk-classifier"
+        and isinstance(item.get("scope"), dict)
+        and "patch_high_risk" in item["scope"].get("actions", [])
+        for item in valid_grants
+    )
+    security_approved = any(
+        item.get("gate") == "security-agent"
+        and isinstance(item.get("scope"), dict)
+        and "accept_security_finding" in item["scope"].get("actions", [])
+        for item in valid_grants
+    )
 
     if advisory and advisory not in {"continue", current_role}:
         warnings.append(f"Ignored advisory next_action={advisory!r}; deterministic routing is authoritative.")
@@ -673,10 +698,15 @@ def decide_next_role(
 
     risk = _artifact(artifacts_dir, "risk.json")
     risk_class = risk.get("risk_class") if isinstance(risk, dict) else state.get("risk_class")
-    if risk_class == "high":
+    if risk_class == "high" and risk_approved and current_role == "orchestrator":
+        return _blocked(
+            "HIGH risk implementation passed verification, but publication is forbidden by policy.",
+            warnings,
+        )
+    if risk_class == "high" and not (bypass_approval or risk_approved):
         return _approval("Risk class is HIGH. Publication is not allowed without human approval.", warnings)
 
-    if security:
+    if security and not (bypass_approval or security_approved):
         return _approval(
             f"A {severity.upper()} security finding requires human approval.",
             warnings + security,

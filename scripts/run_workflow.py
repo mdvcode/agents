@@ -31,7 +31,7 @@ RUNS_DIR = ROOT / ".agent-runs"
 DEFAULT_TIMEOUT_SECONDS = 300
 DEFAULT_BUDGETS = {
     "max_roles": 40,
-    "max_repair_iterations": 3,
+    "max_repair_iterations": 12,
     "max_duration_seconds": 7200,
     "max_tokens": 300000,
 }
@@ -139,6 +139,7 @@ def run_workflow(
     branch: str = "",
     base_branch: str = "main",
     adapter_command: str = "",
+    resume: bool = False,
 ) -> int:
     workflows = read_workflows()
     workflow = workflows.get("workflows", {}).get(workflow_name)
@@ -155,7 +156,7 @@ def run_workflow(
         branch=branch_value,
         base_branch=base_branch,
     )
-    existing = find_completed_run(RUNS_DIR, fingerprint, exclude_run_id="")
+    existing = find_completed_run(RUNS_DIR, fingerprint, exclude_run_id="") if not resume else None
     if existing is not None:
         print(str(RUNS_DIR / str(existing.get("run_id", ""))))
         return 0
@@ -248,6 +249,8 @@ def run_workflow(
                 and "--dry-run" not in command
             ):
                 command = command + " --dry-run"
+            if resume and command.startswith("python3 scripts/agent_role_runner.py") and "--resume" not in command:
+                command = command + " --resume"
             for attempt in range(1, max_retries + 2):
                 returncode, stdout, stderr = run_command(command, root, workflow_timeout_seconds)
                 result = StepResult(name, command, attempt, returncode, stdout, stderr)
@@ -304,6 +307,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--branch", default="")
     parser.add_argument("--base-branch", default="main")
     parser.add_argument("--adapter-command", default="")
+    parser.add_argument("--resume", action="store_true")
     return parser.parse_args()
 
 
@@ -320,6 +324,7 @@ def main() -> int:
         branch=args.branch,
         base_branch=args.base_branch,
         adapter_command=args.adapter_command,
+        resume=args.resume,
     )
 
 

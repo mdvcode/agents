@@ -63,8 +63,8 @@ tools:
     side_effects: task_branch
     timeout_seconds: 300
   github:
-    roles: [publication]
-    allowed: [auth_status, read_pr, create_pr, update_pr, comment_pr, mark_ready]
+    roles: [publication, ci-ingestion]
+    allowed: [auth_status, read_pr, read_ci_logs, create_pr, update_pr, comment_pr, mark_ready]
     forbidden: [merge, force_push, delete_branch]
     network_domains: [github.com, api.github.com]
     credentials: [gh_auth]
