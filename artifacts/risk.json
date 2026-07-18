@@ -1,11 +1,11 @@
 {
-  "risk_class": "medium",
+  "risk_class": "low",
   "reasons": [
-    "The change controls which private project-memory content is injected into role prompts.",
-    "Path scoping and byte limits are security-relevant because target-project memory is private by default.",
-    "The task does not touch production settings, auth, billing, payments, migrations, secrets, deployment infrastructure, or publication behavior."
+    "The change creates a new local PDF from user-provided content and leaves the original untouched.",
+    "Personal contact data remains local and the output is not published or uploaded.",
+    "No protected code paths, production systems, credentials, authentication, billing, migrations, or deployment behavior are touched."
   ],
-  "changed_areas": ["context_compilation", "project_memory", "retrieval", "tests", "docs"],
+  "changed_areas": ["output_pdf", "local_audit_artifacts"],
   "high_risk_triggers": [],
   "protected_paths_touched": [],
   "protected_actions_required": [],

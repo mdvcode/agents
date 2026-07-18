@@ -1,7 +1,7 @@
 # Security
 
 ## SUMMARY
-No security findings from manual review or the repository-local scan.
+The generated PDF contains only visible CV text and link annotations. Personal data remained local throughout generation and verification.
 
 ## PROJECT_PROFILE
 agent_workspace
@@ -10,13 +10,20 @@ agent_workspace
 None.
 
 ## MEDIUM
-Project memory is private prompt context. Retrieval therefore validates project identifiers, requires a project privacy policy, resolves paths under approved roots, skips symlinks, limits source/chunk/result bytes, and never calls an external service.
+None.
 
 ## LOW
-Retrieved memory may be stale or contain instructions. The generated context and manifest explicitly classify it as non-authoritative private context; repository policy and current code evidence remain authoritative.
+- The PDF contains the user's intended public-facing contact information and profile links.
+- Link annotations open external profile and employer websites when clicked; their destinations match the visible URLs.
 
 ## SECRETS
-`make security` passed with no obvious secrets, private keys, private paths, or protected staged files.
+No secrets were introduced. No external upload, browser ATS checker, email, or publication was used.
+
+## PDF SAFETY CHECKS
+- Not encrypted.
+- No JavaScript, forms, embedded files, optional-content layers, hidden text render modes, zero-alpha text, or white-on-white text.
+- No off-page text, exact duplicate glyph overlays, tiny text, or rasterized CV content.
+- Phone and email annotations use normalized `tel:+4917693100795` and `mailto:mdv.coding@gmail.com` targets.
 
 ## RECOMMENDED_ACTION
-Keep project memory curated and private; add offline relevance benchmarks before changing ranking weights or introducing semantic embeddings.
+Use the generated PDF for applications and keep the source file private.

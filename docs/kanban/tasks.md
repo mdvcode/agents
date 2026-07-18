@@ -13,6 +13,7 @@
 - Verify that `artifacts/` contains only required current-task files plus lessons and audit log.
 
 ## Done
+- Generated and verified `Daryna_Barabanova_CV_ATS.pdf` with embedded TrueType fonts and three-parser ATS extraction checks.
 - P4.1: RAG-powered project memory retrieval.
 - P3.2: deterministic dynamic routing and bounded repair loops.
 - P3.1f: remove obsolete project coupling from the agent control plane.

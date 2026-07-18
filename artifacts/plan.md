@@ -1,64 +1,48 @@
-TASK
-- P4.1: RAG-powered project memory retrieval.
+# Goal
 
-PROJECT_PROFILE
-- Selected profile: agent_workspace.
-- Reason: the task changes the local context compiler, memory retrieval, tests, documentation, and current-task artifacts.
-- Quality commands: focused context compiler/retrieval pytest; full pytest; `make validate-artifacts`; `make check`.
-- Security commands: `make security`.
-- Frontend evidence required: no.
+## GOAL
+- Create a new ATS-safe PDF CV from the supplied document, preserving its factual content while fixing parser, page-size, contact, URL, and wording defects.
 
-CONTEXT
-- Project memory is stored as private Markdown under `docs/projects/<project>/` and global agent-system memory under `docs/memory/`, `docs/wiki/`, and `docs/graph/`.
-- Context manifests already expose `selected_context`, `retrieval_queries`, `source_file_candidates`, and `repo_intelligence`, but the compiler leaves them empty.
-- The Codex executor already injects `context_files` into role prompts under a total and per-file byte budget.
+## CONTEXT
+- Source: `/Users/user/Desktop/Daryna_B_CV_AI_Developer (2).pdf`.
+- Output: `/Users/user/agents/output/pdf/Daryna_Barabanova_CV_ATS.pdf`.
+- Branch: `feat/v2`.
+- Selected profile: `agent_workspace` for local generation and audit artifacts.
 
-FILES_TO_INSPECT
-- `scripts/context_compiler.py`
-- `scripts/adapters/codex_cli_executor.py`
-- `schemas/context_manifest.schema.json`
-- `tests/test_context_compiler.py`
-- `docs/wiki/concepts/agent-memory.md`
-- `docs/graph/files.md`
-- `docs/graph/workflows.md`
+## CONSTRAINTS
+- Use two uniform A4 pages and a single-column reading order.
+- Use embedded standard TrueType fonts and selectable text.
+- Use ASCII hyphens only; no tables, icons, sidebars, or hidden text.
+- Keep personal data local and do not publish or upload the CV.
 
-FILES_TO_CHANGE
-- `scripts/project_memory.py`
-- `scripts/context_compiler.py`
-- `tests/test_project_memory.py`
-- `tests/test_context_compiler.py`
-- `docs/wiki/concepts/agent-memory.md`
-- `docs/wiki/index.md`
-- `docs/graph/files.md`
-- `docs/graph/workflows.md`
-- `docs/kanban/tasks.md`
-- current P4.1 artifacts and audit log
+## PRIORITY
+- Primary: robust extraction of contact data, section order, and exact technical keywords.
+- Secondary: polished human-readable layout and balanced page breaks.
+- Non-goals: invent achievements, alter employment claims, or publish the file.
 
-DO_NOT_TOUCH
-- Do not use external embedding APIs or send private memory over the network.
-- Do not retrieve files outside approved private memory roots.
-- Do not change publication, auth, billing, migration, secret-management, or deployment behavior.
+## PLAN
+1. Reconstruct and lightly normalize the supplied CV content.
+2. Generate a two-page A4 PDF with ReportLab and embedded Arial fonts.
+3. Render every page and inspect spacing, clipping, hierarchy, and page balance.
+4. Compare extraction with PyPDF, PDFMiner, and pdfplumber; verify contacts and keywords.
+5. Inspect font resources, links, page boxes, hidden text states, and structural safety.
+6. Update current-task artifacts and run repository checks.
 
-ASSUMPTIONS
-- Deterministic local BM25 retrieval qualifies as the retrieval stage of RAG; the existing role model remains the generation stage.
-- Markdown heading sections are the appropriate retrieval chunks for the current memory layout.
-- `agent_workspace` uses global agent-system memory; registered target projects use only their private project memory roots.
+## DONE WHEN
+- Both pages are A4 and visually defect-free.
+- Arial is embedded as a conventional TrueType font with ToUnicode mapping.
+- All parsers return the correct email and critical keywords without internal spaces.
+- Contact data and full LinkedIn/GitHub URLs appear as visible text in reading order.
+- Required local checks pass.
 
-CHECKS_TO_RUN
-- `python3 -m py_compile scripts/project_memory.py scripts/context_compiler.py`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_project_memory.py tests/test_context_compiler.py tests/test_codex_adapter.py -q`
-- `make validate-artifacts`
-- `make security`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests`
-- `make check`
+## VERIFY
+- Commands: ReportLab generation; Poppler `pdfinfo`/`pdftoppm`; PyPDF; PDFMiner; pdfplumber; `make validate-artifacts`; `make security`; `make check`.
+- Expected evidence: two A4 pages, correct extraction, embedded font program, valid links, no hidden or off-page text.
 
-INITIAL_RISK_CLASS
-- Medium.
-- Rationale: private memory selection changes what context is disclosed to role executions, so scope and path controls are security-relevant. It does not change protected paths or publication reachability.
+## OUTPUT
+- Final PDF under `output/pdf/`.
+- Temporary renders and generator removed after verification.
+- Current-task artifacts and audit log.
 
-DONE_CRITERIA
-- Relevant project-memory sections are ranked locally and deterministically for the task goal and role.
-- Retrieval is limited to approved project/global memory roots, regular Markdown files, and configured byte/result budgets.
-- Selected chunks and provenance appear in the context manifest and a generated retrieval context file is injected into the role prompt.
-- Empty or irrelevant memory degrades safely to no retrieved context.
-- Focused tests, full tests, artifact validation, security checks, and diff hygiene pass.
+## STOP RULES
+- Stop before changing unverifiable facts or publishing the CV externally.

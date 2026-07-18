@@ -1,25 +1,22 @@
 {
   "target_repository": ".",
   "project_profile": "agent_workspace",
-  "task_id": "p3.2-deterministic-routing-repair-loops",
+  "task_id": "create-ats-safe-daryna-cv-pdf",
   "expected_remote": "git@github.com-mdvcode:mdvcode/agents.git",
   "include": [
-    ".agent-routing.yaml",
-    ".agent-workflows.yaml",
-    "schemas/agent_workflow.schema.json",
-    "schemas/workflow_route.schema.json",
-    "scripts/agent_role_runner.py",
-    "scripts/run_workflow.py",
-    "scripts/validate_artifacts.py",
-    "scripts/workflow_router.py",
-    "tests/test_agent_role_runner.py",
-    "tests/test_bounded_repair_loops.py",
-    "tests/test_full_agent_workflow.py",
-    "tests/test_run_workflow.py",
-    "tests/test_workflow_router.py",
-    "docs/agent-system.md",
-    "docs/kanban/tasks.md",
-    "artifacts"
+    "output/pdf/Daryna_Barabanova_CV_ATS.pdf",
+    "artifacts/plan.md",
+    "artifacts/risk.json",
+    "artifacts/project_profile.json",
+    "artifacts/review.md",
+    "artifacts/quality.json",
+    "artifacts/security.md",
+    "artifacts/verdict.json",
+    "artifacts/report.md",
+    "artifacts/publication.json",
+    "artifacts/change_set.json",
+    "artifacts/audit_log.jsonl",
+    "docs/kanban/tasks.md"
   ],
-  "exclude": []
+  "exclude": ["tmp/pdfs/**"]
 }

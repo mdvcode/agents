@@ -1,7 +1,7 @@
 {
-  "run_id": "local-p3.2",
-  "task_id": "p3.2-deterministic-routing-repair-loops",
-  "execution_status": "planned",
+  "run_id": "local-create-ats-cv-20260716",
+  "task_id": "create-ats-safe-daryna-cv-pdf",
+  "execution_status": "completed",
   "target_repository": ".",
   "worktree": "/Users/user/agents",
   "branch": "feat/v2",
@@ -16,9 +16,9 @@
   "pr_state": "not_created",
   "dry_run": true,
   "run_dir": "",
-  "input_fingerprint": "",
+  "input_fingerprint": "cf641c6c0201b2bf5a74211b0e9f1aabb49e55f378d8133336c7ab3f08f2ab89",
   "pr_comment_posted": false,
   "command_results": [],
-  "warnings": [],
+  "warnings": ["Local PDF creation only; no publication requested."],
   "errors": []
 }
