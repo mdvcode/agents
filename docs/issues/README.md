@@ -20,7 +20,7 @@ Example:
 2. Read `docs/projects/<project>/privacy.md`.
 3. Copy `docs/issues/_template.md` to `docs/projects/<project>/issues/issue-<number>.md`.
 4. Fill in issue URL, branch, status, risk, and initial plan.
-5. Fill the `/goal` fields or link to `artifacts/plan.md`.
+5. Fill the `/goal` fields or link privately to `.agent-runs/<run-id>/artifacts/plan.md`.
 6. During work, append timeline entries for meaningful decisions, checks, blockers, and handoffs.
 7. Update checkpoints and trace when the task moves stages.
 8. Keep `artifacts/` focused on the currently active task.

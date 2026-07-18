@@ -2,11 +2,11 @@
 
 Agents write machine-readable artifacts. Those artifacts must be valid enough for future agents and scripts to trust.
 
-## Required Artifacts
-- `artifacts/risk.json`
-- `artifacts/quality.json`
-- `artifacts/verdict.json`
-- `artifacts/audit_log.jsonl`
+## Required State
+- One `.agent-runs/<run-id>/workflow.json`.
+- Owned JSON artifacts under `.agent-runs/<run-id>/artifacts/`.
+- `metrics.json`, raw events, and structured `errors.jsonl` in the same run.
+- No mutable repository-root `artifacts/` mirror.
 
 ## Guard Rules
 - JSON artifacts must parse.
@@ -19,7 +19,7 @@ Agents write machine-readable artifacts. Those artifacts must be valid enough fo
 Run:
 
 ```sh
-make validate-artifacts
+make validate-artifacts RUN_ID=<run-id>
 ```
 
 The validator is intentionally small and standard-library only.

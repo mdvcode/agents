@@ -1,0 +1,31 @@
+{
+  "required": [
+    "status",
+    "minimum_tasks",
+    "task_count",
+    "real_executor_runs",
+    "low_medium_published",
+    "high_stopped",
+    "duplicate_publications",
+    "default_branch_mutations",
+    "secret_leaks",
+    "structured_failures",
+    "runs",
+    "blockers"
+  ],
+  "enums": {"status": ["pass", "fail"]},
+  "types": {
+    "status": "str",
+    "minimum_tasks": "int",
+    "task_count": "int",
+    "real_executor_runs": "int",
+    "low_medium_published": "int",
+    "high_stopped": "int",
+    "duplicate_publications": "list",
+    "default_branch_mutations": "list",
+    "secret_leaks": "list",
+    "structured_failures": "int",
+    "runs": "list",
+    "blockers": "list"
+  }
+}

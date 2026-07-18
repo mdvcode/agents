@@ -5,9 +5,9 @@ Build safe, reviewable improvements across supported project profiles using a po
 
 ## Agent workspace model
 - Treat this repository as the local home base for agents: prompts, skills, docs, logs, kanban boards, and audit artifacts live here.
-- New agents should start with `docs/onboarding.md`, then read `AGENTS.md`, `artifacts/lessons_learned.md`, and the current `artifacts/plan.md`.
+- New agents should start with `docs/onboarding.md`, then read `AGENTS.md`, `docs/memory/lessons_learned.md`, and the current `.agent-runs/<run-id>/artifacts/plan.md`.
 - Treat `/Users/user/agents` as a private control plane. Do not assume its memory files can be committed to any target project repository.
-- Use git as the history of agent work. Keep changes small, reviewable, and traceable through `artifacts/audit_log.jsonl`.
+- Use git as the history of agent work. Keep changes small, reviewable, and traceable through `.agent-runs/<run-id>/audit-log.jsonl`.
 - Store durable process documentation in `docs/`, not in one-off task artifacts.
 - For multiple projects, keep private project memory under `docs/projects/<project>/`.
 - Use markdown kanban boards under `docs/kanban/`:
@@ -16,8 +16,8 @@ Build safe, reviewable improvements across supported project profiles using a po
   - `docs/kanban/features.md` for feature ideas and delivery slices.
 - Keep per-issue execution history in `docs/projects/<project>/issues/issue-<number>.md`; every GitHub issue branch should have one matching issue journal.
 - Maintain global agent knowledge in `docs/wiki/`, `docs/memory/`, and `docs/graph/`; maintain project-specific private knowledge in `docs/projects/<project>/wiki/`, `docs/projects/<project>/memory/`, and `docs/projects/<project>/graph/`.
-- Use `docs/templates/goal.md` or the same structure in `artifacts/plan.md` before non-trivial implementation.
-- Validate structured artifacts with `make validate-artifacts` or `make check`.
+- Use `docs/templates/goal.md` or the same structure in the current run's `artifacts/plan.md` before non-trivial implementation.
+- Validate structured artifacts with `make validate-artifacts RUN_ID=<run-id>`; `make check` validates contracts and repository behavior.
 - The expected output of autonomous work is a local git repository state with code, docs, logs, artifacts, and a clear verdict.
 
 ## Privacy and publication rules
@@ -42,7 +42,7 @@ Build safe, reviewable improvements across supported project profiles using a po
   - `nextjs_web` for generic Next.js / React / Prisma / Sanity / Bun work.
 - Agents must not run Django/Python quality commands on `nextjs_web` tasks unless the task explicitly touches a Django project.
 - Agents must not run Bun/Next.js commands on this agent workspace unless the task explicitly targets a registered web repository.
-- The selected profile must be recorded in `artifacts/project_profile.json` and referenced in `artifacts/quality.json`, `artifacts/report.md`, and `artifacts/verdict.json`.
+- The selected profile must be recorded under `.agent-runs/<run-id>/artifacts/project_profile.json` and referenced by the run-scoped quality, report, and verdict artifacts.
 
 ## Global operating rules
 - Prefer minimal, reversible changes.
@@ -59,15 +59,15 @@ Build safe, reviewable improvements across supported project profiles using a po
 ## Required verification loop
 For every non-trivial task:
 1. inspect relevant files
-2. create or update `artifacts/plan.md`
-3. classify risk
+2. create or update `.agent-runs/<run-id>/artifacts/plan.md`
+3. classify risk in the same run directory
 4. implement the minimal patch
 5. run quality checks
 6. run security checks
 7. run tests
 8. repair failures
 9. re-run checks
-10. update artifacts
+10. update only artifacts owned by the active role
 11. update the project issue journal and private project memory/wiki/graph when durable project knowledge changed
 12. decide the next action
 
@@ -141,29 +141,30 @@ Treat changes touching any of the following as HIGH risk and protected:
 - deployment scripts that affect production directly
 
 ## Required artifacts
-- `artifacts/plan.md`
-- `artifacts/risk.json`
-- `artifacts/project_profile.json`
-- `artifacts/review.md`
-- `artifacts/quality.json`
-- `artifacts/security.md`
-- `artifacts/verdict.json`
-- `artifacts/report.md`
-- `artifacts/lessons_learned.md`
-- `artifacts/audit_log.jsonl`
+- All mutable task state lives only in `.agent-runs/<run-id>/`.
+- `workflow.json`: authoritative workflow state.
+- `context-manifests/`: compiled role context.
+- `role-requests/` and `role-results/`: role execution contracts and results.
+- `raw-events/`: raw executor events and JSONL usage evidence.
+- `artifacts/`: owned role outputs including `plan.md`, `risk.json`, `quality.json`, `security.json`, `review.json`, `verdict.json`, and `publication.json` when publication runs.
+- `metrics.json`: per-role duration and token usage.
+- `errors.jsonl`: structured terminal errors and approval stops.
+- `audit-log.jsonl`: autonomous publication actions.
+- `.agent-artifact-owners.yaml` and `.agent-role-contracts.yaml` are the ownership source of truth.
 
 ## Artifact hygiene
-- Keep `artifacts/` small and current.
+- Do not create or mutate repository-root `artifacts/`; it is not workflow state.
+- Keep each run's `artifacts/` small and current.
 - Required artifacts should describe the current task only.
-- Copy durable issue history and final summaries into `docs/projects/<project>/issues/issue-<number>.md`; do not rely on `artifacts/` as long-term issue memory.
-- Move durable project knowledge into `docs/projects/<project>/wiki/`, `docs/projects/<project>/memory/`, `docs/projects/<project>/graph/`, or `artifacts/lessons_learned.md`.
+- Copy durable issue history and final summaries into `docs/projects/<project>/issues/issue-<number>.md`; do not rely on run artifacts as long-term issue memory.
+- Move durable project knowledge into `docs/projects/<project>/wiki/`, `docs/projects/<project>/memory/`, `docs/projects/<project>/graph/`, or `docs/memory/lessons_learned.md`.
 - Move only cross-project agent-system knowledge into global `docs/wiki/`, `docs/memory/`, or `docs/graph/`.
-- Do not leave old probe scripts, large JSON dumps, or stale sweep reports in `artifacts/` after their findings have been summarized.
+- Do not leave old probe scripts, large JSON dumps, or stale sweep reports in a run after their findings have been summarized.
 - If a future task needs temporary investigation outputs, create them intentionally and remove or summarize them before completion.
 
 ## Lessons learned policy
-- Agents must read `AGENTS.md` and `artifacts/lessons_learned.md` before major conclusions.
-- Recurring mistakes must be written into `artifacts/lessons_learned.md`.
+- Agents must read `AGENTS.md` and `docs/memory/lessons_learned.md` before major conclusions.
+- Recurring mistakes must be written into `docs/memory/lessons_learned.md`.
 - Stable lessons may be summarized in Persistent repository rules.
 - Completion must be rejected if a known past mistake reappears without explanation.
 

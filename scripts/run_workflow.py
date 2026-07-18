@@ -9,6 +9,7 @@ import random
 import shlex
 import string
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -16,6 +17,12 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import yaml
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from run_state import RunLayout, find_completed_run, record_failure, task_fingerprint
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -91,8 +98,8 @@ def make_run_dir(workflow_name: str, run_id: str = "") -> Path:
     return run_dir
 
 
-def append_trace(run_dir: Path, event: dict[str, Any]) -> None:
-    with (run_dir / "workflow_trace.jsonl").open("a", encoding="utf-8") as handle:
+def append_trace(layout: RunLayout, event: dict[str, Any]) -> None:
+    with (layout.raw_events / "workflow-runner.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
@@ -138,11 +145,23 @@ def run_workflow(
     if not isinstance(workflow, dict):
         print(f"unknown workflow: {workflow_name}")
         return 2
-    run_id = run_id or make_run_id(workflow_name)
-    run_dir = make_run_dir(workflow_name, run_id)
     project_value = project or "agent_workspace"
     branch_value = branch or f"issue/{task_id}"
     repository_value = (repository or root).resolve()
+    fingerprint = task_fingerprint(
+        task_id=task_id,
+        goal=task_id,
+        repository=repository_value,
+        branch=branch_value,
+        base_branch=base_branch,
+    )
+    existing = find_completed_run(RUNS_DIR, fingerprint, exclude_run_id="")
+    if existing is not None:
+        print(str(RUNS_DIR / str(existing.get("run_id", ""))))
+        return 0
+    run_id = run_id or make_run_id(workflow_name)
+    run_dir = make_run_dir(workflow_name, run_id)
+    layout = RunLayout.create(RUNS_DIR, run_dir.name)
     max_iterations = int(workflow.get("max_iterations", 1))
     workflow_timeout_seconds = int(workflow.get("timeout_seconds", timeout_seconds))
     retry = workflow.get("retry", {})
@@ -150,11 +169,10 @@ def run_workflow(
     backoff_seconds = float(retry.get("backoff_seconds", 0)) if isinstance(retry, dict) else 0.0
     steps = workflow_steps(workflow)
     effective_adapter_command = adapter_command or str(workflow.get("adapter_command", ""))
-    artifacts_dir = run_dir / "artifacts"
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    artifacts_dir = layout.artifacts
     budgets = workflow_budgets(workflow)
     started = time.monotonic()
-    workflow_state_path = run_dir / "agent_workflow.json"
+    workflow_state_path = layout.workflow
     if not workflow_state_path.exists():
         workflow_state_path.write_text(
             json.dumps(
@@ -172,6 +190,7 @@ def run_workflow(
                     "budgets": budgets,
                     "role_count": 0,
                     "tokens_used": 0,
+                    "input_fingerprint": fingerprint,
                 },
                 indent=2,
             )
@@ -179,7 +198,7 @@ def run_workflow(
             encoding="utf-8",
         )
     append_trace(
-        run_dir,
+        layout,
         {
             "time": datetime.now(timezone.utc).isoformat(),
             "event": "workflow_started",
@@ -190,11 +209,11 @@ def run_workflow(
         },
     )
     for iteration in range(1, max_iterations + 1):
-        append_trace(run_dir, {"time": datetime.now(timezone.utc).isoformat(), "event": "iteration_started", "iteration": iteration})
+        append_trace(layout, {"time": datetime.now(timezone.utc).isoformat(), "event": "iteration_started", "iteration": iteration})
         for step in steps:
             if time.monotonic() - started > budgets["max_duration_seconds"]:
                 append_trace(
-                    run_dir,
+                    layout,
                     {
                         "time": datetime.now(timezone.utc).isoformat(),
                         "event": "workflow_awaiting_approval",
@@ -231,14 +250,14 @@ def run_workflow(
             for attempt in range(1, max_retries + 2):
                 returncode, stdout, stderr = run_command(command, root, workflow_timeout_seconds)
                 result = StepResult(name, command, attempt, returncode, stdout, stderr)
-                append_trace(run_dir, result.as_json())
+                append_trace(layout, result.as_json())
                 if returncode == 0:
                     break
                 if attempt <= max_retries:
                     time.sleep(backoff_seconds)
             if returncode != 0:
                 append_trace(
-                    run_dir,
+                    layout,
                     {
                         "time": datetime.now(timezone.utc).isoformat(),
                         "event": "workflow_failed",
@@ -246,12 +265,19 @@ def run_workflow(
                         "returncode": returncode,
                     },
                 )
+                record_failure(
+                    layout,
+                    stage="workflow-step",
+                    code="STEP_FAILED",
+                    message=f"Workflow step {name} failed.",
+                    details=[stderr or stdout or f"exit {returncode}"],
+                )
                 print(str(run_dir))
                 return returncode
             state_data = json.loads(workflow_state_path.read_text(encoding="utf-8")) if workflow_state_path.exists() else {}
             if isinstance(state_data, dict) and state_data.get("execution_status") == "awaiting_approval":
                 append_trace(
-                    run_dir,
+                    layout,
                     {
                         "time": datetime.now(timezone.utc).isoformat(),
                         "event": "workflow_awaiting_approval",
@@ -260,7 +286,7 @@ def run_workflow(
                 )
                 print(str(run_dir))
                 return 1
-    append_trace(run_dir, {"time": datetime.now(timezone.utc).isoformat(), "event": "workflow_completed"})
+    append_trace(layout, {"time": datetime.now(timezone.utc).isoformat(), "event": "workflow_completed"})
     print(str(run_dir))
     return 0
 

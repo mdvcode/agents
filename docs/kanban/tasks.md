@@ -7,12 +7,14 @@
 - Keep `.agents/prompts/` aligned with the docs/onboarding flow.
 
 ## In Progress
-- P3.1e: real Codex smoke gate is implemented; local Codex CLI repair needed before pass.
+- Step 1 evidence series: implementation and real Codex smoke are complete; collect and verify 10-20 real task runs against a disposable publication target.
 
 ## Review
-- Verify that `artifacts/` contains only required current-task files plus lessons and audit log.
+- None.
 
 ## Done
+- Step 1 implementation: authoritative run state, artifact ownership, structured errors, metrics, publication idempotency, default-branch safety, and series verifier.
+- P3.1e: real Codex preflight and smoke pass with the application-bundled CLI.
 - Generated and verified `Daryna_Barabanova_CV_ATS.pdf` with embedded TrueType fonts and three-parser ATS extraction checks.
 - P4.1: RAG-powered project memory retrieval.
 - P3.2: deterministic dynamic routing and bounded repair loops.

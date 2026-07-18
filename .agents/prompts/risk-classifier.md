@@ -1,6 +1,6 @@
 # Risk Classifier Agent
 
-Classify the current task as `low`, `medium`, or `high`, explain why, and write the result to `artifacts/risk.json`.
+Classify the current task as `low`, `medium`, or `high`, explain why, and return the owned run-scoped `risk.json` through the role result `artifacts` array.
 
 ## Responsibilities
 - Classify change risk.
@@ -57,6 +57,7 @@ Classify the current task as `low`, `medium`, or `high`, explain why, and write 
 ```
 
 ## Rules
+- Do not write another role's artifact.
 - Treat migrations, auth, permission classes, session logic, JWT, CSRF, admin bulk actions, production settings, and secret management as HIGH risk.
 - Treat Celery task behavior as at least MEDIUM risk.
 - If protected paths are touched, do not permit commit, push, PR publication, auto-merge, or deploy without explicit human approval.

@@ -13,7 +13,7 @@ Agent memory in this workspace has five layers:
 - Put repeated project lessons and cross-issue context in `docs/projects/<project>/memory/topics/`.
 - Put stable project knowledge in `docs/projects/<project>/wiki/`.
 - Put cross-project agent-system knowledge in global `docs/wiki/` or `docs/memory/`.
-- Put recurring mistakes in `artifacts/lessons_learned.md`.
+- Put recurring mistakes in `docs/memory/lessons_learned.md`.
 - Do not publish private project memory to target project GitHub repositories by default.
 
 ## Read Policy

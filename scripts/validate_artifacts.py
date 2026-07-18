@@ -19,17 +19,21 @@ from repository_registry import validate_registry_data
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ARTIFACTS = ROOT / "artifacts"
+ARTIFACTS = ROOT / ".agent-runs" / "UNSPECIFIED" / "artifacts"
 SCHEMAS = ROOT / "schemas"
 POLICY = ROOT / ".agent-policy.yaml"
 PROJECT_PROFILES = ROOT / ".agent-project-profiles.yaml"
 AGENT_WORKFLOWS = ROOT / ".agent-workflows.yaml"
 AGENT_ROUTING = ROOT / ".agent-routing.yaml"
 AGENT_REPOSITORIES = ROOT / ".agent-repositories.yaml"
+AGENT_ROLE_CONTRACTS = ROOT / ".agent-role-contracts.yaml"
+AGENT_ARTIFACT_OWNERS = ROOT / ".agent-artifact-owners.yaml"
 DEPRECATED_COMBINED_PUBLICATION_KEY = "commit" + "_push"
 JSON_ARTIFACTS = {
     "risk": (ARTIFACTS / "risk.json", SCHEMAS / "risk.schema.json"),
     "quality": (ARTIFACTS / "quality.json", SCHEMAS / "quality.schema.json"),
+    "security": (ARTIFACTS / "security.json", SCHEMAS / "security.schema.json"),
+    "review": (ARTIFACTS / "review.json", SCHEMAS / "review.schema.json"),
     "verdict": (ARTIFACTS / "verdict.json", SCHEMAS / "verdict.schema.json"),
     "project_profile": (
         ARTIFACTS / "project_profile.json",
@@ -171,18 +175,23 @@ def validate_object_enums(data: dict[str, Any], schema: dict[str, Any], label: s
 def load_and_validate_json_artifact(
     name: str, artifact_path: Path, schema_path: Path
 ) -> tuple[dict[str, Any] | None, list[str]]:
-    data = load_json(artifact_path)
+    if not artifact_path.exists():
+        return None, [f"{artifact_path.name}: missing"]
+    try:
+        data = load_json(artifact_path)
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, [f"{artifact_path.name}: invalid JSON: {exc}"]
     if not isinstance(data, dict):
         return None, [f"{name}.json: top-level value must be an object"]
     schema = load_json(schema_path)
     return data, validate_required(data, schema, f"{name}.json")
 
 
-def validate_audit_log(artifacts_dir: Path = ARTIFACTS) -> list[str]:
+def validate_audit_log(run_dir: Path) -> list[str]:
     errors: list[str] = []
-    path = artifacts_dir / "audit_log.jsonl"
+    path = run_dir / "audit-log.jsonl"
     if not path.exists():
-        return ["audit_log.jsonl: missing"]
+        return ["audit-log.jsonl: missing"]
     with path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, 1):
             stripped = line.strip()
@@ -191,11 +200,11 @@ def validate_audit_log(artifacts_dir: Path = ARTIFACTS) -> list[str]:
             try:
                 entry = json.loads(stripped)
             except json.JSONDecodeError as exc:
-                errors.append(f"audit_log.jsonl:{line_number}: invalid JSON: {exc}")
+                errors.append(f"audit-log.jsonl:{line_number}: invalid JSON: {exc}")
                 continue
             for field in ("time", "agent", "action", "verdict", "checks_passed"):
                 if field not in entry:
-                    errors.append(f"audit_log.jsonl:{line_number}: missing {field!r}")
+                    errors.append(f"audit-log.jsonl:{line_number}: missing {field!r}")
     return errors
 
 
@@ -348,8 +357,9 @@ def validate_agent_workflows_data(
     publish_pr = workflows.get("publish_pr")
     if not isinstance(publish_pr, dict):
         return errors + [f"{label}: workflows.publish_pr must be an object"]
-    if publish_pr.get("executor") != "python3 scripts/publish_pr.py":
-        errors.append(f"{label}: workflows.publish_pr.executor must be 'python3 scripts/publish_pr.py'")
+    publish_executor = publish_pr.get("executor")
+    if not isinstance(publish_executor, str) or "--run-id {run_id}" not in publish_executor or "--artifacts-dir {artifacts_dir}" not in publish_executor:
+        errors.append(f"{label}: workflows.publish_pr.executor must use the authoritative run id and artifacts directory")
     full = workflows.get("full_agent_workflow")
     if not isinstance(full, dict):
         errors.append(f"{label}: workflows.full_agent_workflow must be an object")
@@ -389,6 +399,7 @@ def validate_agent_routing_data(
         "planner",
         "risk-classifier",
         "implementation-agent",
+        "test-generator",
         "quality-runner",
         "security-agent",
         "reviewer",
@@ -425,6 +436,37 @@ def validate_agent_routing_data(
     return errors
 
 
+def validate_artifact_ownership_data(owners_doc: Any, contracts_doc: Any) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(owners_doc, dict) or owners_doc.get("version") != 1:
+        return [".agent-artifact-owners.yaml: invalid top-level contract"]
+    artifacts = owners_doc.get("artifacts")
+    roles = contracts_doc.get("roles") if isinstance(contracts_doc, dict) else None
+    if not isinstance(artifacts, dict) or not isinstance(roles, dict):
+        return ["artifact ownership and role contracts must define objects"]
+    declared: dict[str, str] = {}
+    for role, contract in roles.items():
+        if not isinstance(contract, dict):
+            continue
+        for artifact in contract.get("expected_artifacts", []):
+            if not isinstance(artifact, str):
+                errors.append(f"role {role}: expected artifact must be a string")
+                continue
+            previous = declared.get(artifact)
+            if previous is not None and previous != role:
+                errors.append(f"artifact {artifact} has multiple owners: {previous}, {role}")
+            declared[artifact] = str(role)
+    for artifact, owner in artifacts.items():
+        if declared.get(str(artifact)) != owner:
+            errors.append(
+                f"artifact owner mismatch for {artifact}: registry={owner!r}, contract={declared.get(str(artifact))!r}"
+            )
+    for artifact, owner in declared.items():
+        if artifacts.get(artifact) != owner:
+            errors.append(f"role contract artifact missing from ownership registry: {artifact}")
+    return errors
+
+
 def validate_risk_invariants(risk: dict[str, Any], label: str = "risk.json") -> list[str]:
     errors: list[str] = []
     risk_class = risk.get("risk_class")
@@ -450,59 +492,30 @@ def validate_verdict_invariants(verdict: dict[str, Any], label: str = "verdict.j
     decision = verdict.get("decision")
     execution_status = verdict.get("execution_status")
     risk_class = verdict.get("risk_class")
-    publication_result = verdict.get("publication_result")
     checks_passed = verdict.get("checks_passed")
     approval_before_publish = verdict.get("approval_required_before_publish")
     visual_evidence = verdict.get("visual_evidence")
     high_risk_triggers = verdict.get("high_risk_triggers")
     protected_paths_touched = verdict.get("protected_paths_touched")
 
-    if not isinstance(publication_result, dict):
-        return [f"{label}: publication_result must be an object"]
-    commit_created = publication_result.get("commit_created")
-    branch_pushed = publication_result.get("branch_pushed")
-    pr_created = publication_result.get("pr_created_or_updated")
-    pr_url = publication_result.get("pr_url")
-    pr_state = publication_result.get("pr_state")
     evidence_required = isinstance(visual_evidence, dict) and visual_evidence.get("required") is True
     evidence_provided = isinstance(visual_evidence, dict) and visual_evidence.get("provided") is True
 
-    if branch_pushed is True and commit_created is not True:
-        errors.append(f"{label}: branch_pushed=true requires commit_created=true")
-    if pr_created is True and branch_pushed is not True:
-        errors.append(f"{label}: pr_created_or_updated=true requires branch_pushed=true")
-    if pr_created is True and pr_state == "not_created":
-        errors.append(f"{label}: pr_created_or_updated=true cannot use pr_state=not_created")
     if risk_class == "high" and decision not in {"await_approval", "reject"}:
         errors.append(f"{label}: high risk must use await_approval or reject")
-    if risk_class == "high" and any((commit_created, branch_pushed, pr_created)):
-        errors.append(f"{label}: high risk must not create commits, push branches, or publish PRs")
     if high_risk_triggers:
         if decision not in {"await_approval", "reject"}:
             errors.append(f"{label}: high_risk_triggers require await_approval or reject")
-        if any((commit_created, branch_pushed, pr_created)):
-            errors.append(f"{label}: high_risk_triggers block publication_result actions")
-    if protected_paths_touched:
-        if any((commit_created, branch_pushed, pr_created)):
-            errors.append(f"{label}: protected_paths_touched block publication_result actions")
     if decision == "publish_pr" and risk_class == "high":
         errors.append(f"{label}: publish_pr is not allowed for high risk")
     if decision == "await_approval" and approval_before_publish is not True:
         errors.append(f"{label}: await_approval requires approval_required_before_publish=true")
-    if decision == "publish_pr" and execution_status == "completed" and pr_created is not True:
-        errors.append(f"{label}: completed publish_pr requires pr_created_or_updated=true")
-    if decision == "publish_pr" and execution_status == "completed" and not pr_url:
-        errors.append(f"{label}: completed publish_pr requires pr_url")
-    if pr_created is True and not pr_url:
-        errors.append(f"{label}: pr_created_or_updated=true requires pr_url")
-    if pr_state == "ready" and checks_passed is not True:
-        errors.append(f"{label}: pr_state=ready requires checks_passed=true")
-    if pr_state == "ready" and evidence_required and not evidence_provided:
-        errors.append(f"{label}: pr_state=ready requires required visual evidence")
-    if checks_passed is False and pr_created is True and pr_state != "draft":
-        errors.append(f"{label}: failed checks with an existing PR require pr_state=draft")
-    if evidence_required and not evidence_provided and pr_created is True and pr_state != "draft":
-        errors.append(f"{label}: missing required visual evidence with an existing PR requires pr_state=draft")
+    if decision == "publish_pr" and execution_status not in {"planned", "running"}:
+        errors.append(f"{label}: publish_pr verdict must remain a pre-publication decision")
+    if decision == "publish_pr" and checks_passed is not True:
+        errors.append(f"{label}: publish_pr requires checks_passed=true")
+    if decision == "publish_pr" and evidence_required and not evidence_provided:
+        errors.append(f"{label}: missing required visual evidence requires draft publication handling")
     return errors
 
 
@@ -522,28 +535,16 @@ def validate_cross_artifact_invariants(artifacts: dict[str, dict[str, Any]]) -> 
     publication = artifacts.get("publication")
     verdict = artifacts.get("verdict")
     if publication is not None and verdict is not None:
-        publication_result = verdict.get("publication_result")
-        if isinstance(publication_result, dict):
-            comparisons = {
-                "execution_status": (publication.get("execution_status"), verdict.get("execution_status")),
-                "commit_created": (
-                    publication.get("commit_created"),
-                    publication_result.get("commit_created"),
-                ),
-                "branch_pushed": (
-                    publication.get("branch_pushed"),
-                    publication_result.get("branch_pushed"),
-                ),
-                "pr_created_or_updated": (
-                    publication.get("pr_created_or_updated"),
-                    publication_result.get("pr_created_or_updated"),
-                ),
-                "pr_url": (publication.get("pr_url"), publication_result.get("pr_url")),
-                "pr_state": (publication.get("pr_state"), publication_result.get("pr_state")),
-            }
-            for field, (publication_value, verdict_value) in comparisons.items():
-                if publication_value != verdict_value:
-                    errors.append(f"publication/verdict mismatch for {field}")
+        if verdict.get("decision") != "publish_pr":
+            errors.append("publication exists without a publish_pr orchestrator verdict")
+        if risk_class == "high" and any(
+            publication.get(field) is True
+            for field in ("commit_created", "branch_pushed", "pr_created_or_updated")
+        ):
+            errors.append("high risk publication must not create commits, push branches, or publish PRs")
+        if publication.get("execution_status") == "completed":
+            if publication.get("pr_created_or_updated") is not True or not publication.get("pr_url"):
+                errors.append("completed publication requires a PR URL")
     change_set = artifacts.get("change_set")
     if change_set is not None:
         target_repository = change_set.get("target_repository")
@@ -597,23 +598,55 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--artifacts-dir",
         type=Path,
-        default=ARTIFACTS,
-        help="Validate task artifacts from this directory instead of root artifacts/.",
+        default=None,
+        help="Validate task artifacts from .agent-runs/<run-id>/artifacts.",
     )
+    parser.add_argument("--run-dir", type=Path, default=None)
+    parser.add_argument(
+        "--phase",
+        choices=("pre-publication", "complete"),
+        default="complete",
+    )
+    parser.add_argument("--contracts-only", action="store_true")
     return parser.parse_args()
 
 
 def main(artifacts_dir: Path | None = None) -> int:
-    artifacts_root = (artifacts_dir or parse_args().artifacts_dir).resolve()
+    args = parse_args() if artifacts_dir is None else argparse.Namespace(
+        artifacts_dir=artifacts_dir,
+        run_dir=None,
+        phase="complete",
+        contracts_only=False,
+    )
+    selected_artifacts = args.artifacts_dir or (args.run_dir / "artifacts" if args.run_dir else None)
+    artifacts_root = selected_artifacts.resolve() if selected_artifacts else None
     errors: list[str] = []
     loaded_artifacts: dict[str, dict[str, Any]] = {}
-    for name, (artifact_path, schema_path) in json_artifacts(artifacts_root).items():
-        data, artifact_errors = load_and_validate_json_artifact(name, artifact_path, schema_path)
-        errors.extend(artifact_errors)
-        if data is not None:
-            loaded_artifacts[name] = data
-
-    errors.extend(validate_audit_log(artifacts_root))
+    if not args.contracts_only:
+        if artifacts_root is None:
+            errors.append("--run-dir or --artifacts-dir is required; root artifacts/ is forbidden")
+        else:
+            required_names = {
+                "risk",
+                "quality",
+                "security",
+                "review",
+                "verdict",
+                "project_profile",
+                "change_set",
+                "publication_payload",
+            }
+            if args.phase == "complete":
+                required_names.add("publication")
+            for name, (artifact_path, schema_path) in json_artifacts(artifacts_root).items():
+                if name not in required_names:
+                    continue
+                data, artifact_errors = load_and_validate_json_artifact(name, artifact_path, schema_path)
+                errors.extend(artifact_errors)
+                if data is not None:
+                    loaded_artifacts[name] = data
+            if args.phase == "complete":
+                errors.extend(validate_audit_log(artifacts_root.parent))
     policy_doc, policy_errors = load_yaml(POLICY, ".agent-policy.yaml")
     errors.extend(policy_errors)
     if policy_doc is not None:
@@ -634,6 +667,11 @@ def main(artifacts_dir: Path | None = None) -> int:
     errors.extend(repository_errors)
     if repositories_doc is not None:
         errors.extend(validate_registry_data(repositories_doc))
+    contracts_doc, contract_errors = load_yaml(AGENT_ROLE_CONTRACTS, ".agent-role-contracts.yaml")
+    owners_doc, owner_errors = load_yaml(AGENT_ARTIFACT_OWNERS, ".agent-artifact-owners.yaml")
+    errors.extend(contract_errors + owner_errors)
+    if contracts_doc is not None and owners_doc is not None:
+        errors.extend(validate_artifact_ownership_data(owners_doc, contracts_doc))
 
     risk = loaded_artifacts.get("risk")
     verdict = loaded_artifacts.get("verdict")

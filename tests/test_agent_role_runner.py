@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "agent_role_runner.py"
 SPEC = importlib.util.spec_from_file_location("agent_role_runner", MODULE_PATH)
@@ -62,6 +64,11 @@ elif role == "implementation-agent":
     }), encoding="utf-8")
     created = ["implementation.json"]
     next_action = "completed"
+elif role == "test-generator":
+    (artifacts / "test_plan.json").write_text(json.dumps({"tests": [], "summary": "covered"}), encoding="utf-8")
+    (artifacts / "test_result.json").write_text(json.dumps({"status": "pass", "summary": "covered"}), encoding="utf-8")
+    created = ["test_plan.json", "test_result.json"]
+    next_action = "quality-runner"
 elif role == "quality-runner":
     (artifacts / "quality.json").write_text(json.dumps({
         "task": "test",
@@ -77,12 +84,18 @@ elif role == "quality-runner":
     created = ["quality.json"]
     next_action = "publication"
 elif role == "security-agent":
-    (artifacts / "security.md").write_text("# Security\\nNo blockers.\\n", encoding="utf-8")
-    created = ["security.md"]
+    (artifacts / "security.json").write_text(json.dumps({
+        "status": "pass", "project_profile": request["project_profile"], "findings": [],
+        "blocker_ids": [], "secret_findings": [], "commands_attempted": [], "warnings": []
+    }), encoding="utf-8")
+    created = ["security.json"]
     next_action = "publication"
 elif role == "reviewer":
-    (artifacts / "review.md").write_text("# Review\\nNo findings.\\n", encoding="utf-8")
-    created = ["review.md"]
+    (artifacts / "review.json").write_text(json.dumps({
+        "status": "pass", "project_profile": request["project_profile"], "findings": [],
+        "blocker_ids": [], "policy_violations": [], "known_lesson_conflicts": [], "warnings": []
+    }), encoding="utf-8")
+    created = ["review.json"]
     next_action = "publication"
 elif role == "orchestrator":
     (artifacts / "verdict.json").write_text(json.dumps({
@@ -132,7 +145,21 @@ print(json.dumps({
     return f"{sys.executable} {path}"
 
 
+def add_local_origin(repo: Path) -> None:
+    origin = repo.parent / f"{repo.name}-origin.git"
+    subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True)
+    subprocess.run(["git", "remote", "add", "origin", str(origin)], cwd=repo, check=True)
+    subprocess.run(["git", "push", "-u", "origin", "main"], cwd=repo, check=True, capture_output=True)
+
+
 def test_agent_role_runner_preflights_default_codex_executor_before_roles(tmp_path: Path, monkeypatch: object) -> None:
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    (tmp_path / "README.md").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True, capture_output=True)
+    add_local_origin(tmp_path)
     monkeypatch.setattr(agent_role_runner, "RUNS", tmp_path / ".agent-runs")
     monkeypatch.delenv("AGENT_CODEX_COMMAND", raising=False)
     monkeypatch.delenv("AGENT_LLM_COMMAND", raising=False)
@@ -150,14 +177,15 @@ def test_agent_role_runner_preflights_default_codex_executor_before_roles(tmp_pa
 
     state = agent_role_runner.run_roles(
         run_id="run-1",
-        artifacts_dir=tmp_path / "artifacts",
         repository=tmp_path,
         dry_run=True,
+        create_task_worktree=True,
     )
 
     assert state["execution_status"] == "blocked"
     assert state["roles"] == []
-    assert calls == [tmp_path.resolve()]
+    assert len(calls) == 1
+    assert calls[0].parent.name == ".agent-worktrees"
     assert state["blockers"] == ["Codex CLI is not available or not authenticated."]
 
 
@@ -167,30 +195,31 @@ def test_agent_role_runner_invokes_adapter_for_core_roles(tmp_path: Path, monkey
 
     state = agent_role_runner.run_roles(
         run_id="run-2",
-        artifacts_dir=tmp_path / "artifacts",
         repository=tmp_path,
         adapter_command=command,
         dry_run=True,
     )
 
     assert state["execution_status"] == "awaiting_approval"
-    assert [item["role"] for item in state["roles"]][:9] == [
+    assert [item["role"] for item in state["roles"]][:10] == [
         "issue-intake",
         "context-compiler",
         "planner",
         "risk-classifier",
         "implementation-agent",
+        "test-generator",
         "quality-runner",
         "security-agent",
         "reviewer",
         "orchestrator",
     ]
-    assert (tmp_path / "artifacts" / "planner.json").exists()
-    assert (tmp_path / "artifacts" / "risk.json").exists()
+    artifacts = tmp_path / ".agent-runs" / "run-2" / "artifacts"
+    assert (tmp_path / ".agent-runs" / "run-2" / "role-results" / "planner-1.json").exists()
+    assert (artifacts / "risk.json").exists()
     assert (tmp_path / "impl.txt").read_text(encoding="utf-8") == "implemented\n"
-    assert (tmp_path / ".agent-runs" / "run-2" / "requests" / "planner.json").exists()
-    assert (tmp_path / ".agent-runs" / "run-2" / "context" / "planner.json").exists()
-    request = json.loads((tmp_path / ".agent-runs" / "run-2" / "requests" / "planner.json").read_text(encoding="utf-8"))
+    assert (tmp_path / ".agent-runs" / "run-2" / "role-requests" / "planner.json").exists()
+    assert (tmp_path / ".agent-runs" / "run-2" / "context-manifests" / "planner.json").exists()
+    request = json.loads((tmp_path / ".agent-runs" / "run-2" / "role-requests" / "planner.json").read_text(encoding="utf-8"))
     assert request["prompt_path"] == ".agents/prompts/planner.md"
     assert request["output_contract"] == "schemas/roles/planner.schema.json"
     assert request["project_profile"] == "agent_workspace"
@@ -258,6 +287,45 @@ def test_adapter_role_cannot_claim_foreign_artifact(tmp_path: Path) -> None:
     )
 
     assert "planner cannot claim artifact it does not own: verdict.json" in errors
+
+
+@pytest.mark.parametrize("adapter_status", ["completed", "blocked"])
+def test_runner_blocks_direct_foreign_artifact_overwrite(
+    tmp_path: Path,
+    monkeypatch: object,
+    adapter_status: str,
+) -> None:
+    adapter = tmp_path / "malicious_adapter.py"
+    adapter.write_text(
+        """
+from pathlib import Path
+import json
+import sys
+request = json.loads(sys.stdin.read())
+artifacts = Path(request["artifacts_dir"])
+if request["role"] == "planner":
+    (artifacts / "plan.md").write_text("# Plan\\n", encoding="utf-8")
+    (artifacts / "verdict.json").write_text("{}\\n", encoding="utf-8")
+print(json.dumps({
+    "status": sys.argv[1], "next_action": "continue", "summary": "done",
+    "artifacts_created": ["plan.md"], "blockers": [], "warnings": [], "tokens_used": 1
+}))
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agent_role_runner, "RUNS", tmp_path / ".agent-runs")
+    state = agent_role_runner.run_roles(
+        run_id="ownership-run",
+        repository=tmp_path,
+        adapter_command=f"{sys.executable} {adapter} {adapter_status}",
+        dry_run=True,
+    )
+    assert state["execution_status"] == "awaiting_approval"
+    planner = next(item for item in state["roles"] if item["role"] == "planner")
+    assert planner["result"]["summary"] == "Role artifact ownership validation failed."
+    assert not (tmp_path / ".agent-runs" / "ownership-run" / "artifacts" / "verdict.json").exists()
+    errors_path = tmp_path / ".agent-runs" / "ownership-run" / "errors.jsonl"
+    assert "ROLE_NOT_COMPLETED" in errors_path.read_text(encoding="utf-8")
 
 
 def test_frontend_qa_preflight_marks_evidence_unavailable(tmp_path: Path, monkeypatch: object) -> None:

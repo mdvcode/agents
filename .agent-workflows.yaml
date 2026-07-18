@@ -14,7 +14,7 @@ workflows:
     retry:
       max_retries: 0
       backoff_seconds: 0
-    trace_store: ".agent-runs/<run-id>/workflow_trace.jsonl"
+    trace_store: ".agent-runs/<run-id>/raw-events/workflow.jsonl"
     steps:
       - name: "agent_role_chain"
         command: "python3 scripts/agent_role_runner.py --workflow full_agent_workflow --run-id {run_id} --task-id {task_id} --project {project} --repo {repository} --branch {branch} --base-branch {base_branch} --artifacts-dir {artifacts_dir} --create-worktree --adapter-command {adapter_command}"
@@ -25,7 +25,7 @@ workflows:
       max_repair_iterations: 3
       max_duration_seconds: 7200
       max_tokens: 300000
-    executor: "python3 scripts/publish_pr.py"
+    executor: "python3 scripts/publish_pr.py --run-id {run_id} --artifacts-dir {artifacts_dir}"
     max_iterations: 1
     retry:
       max_retries: 0
@@ -33,18 +33,22 @@ workflows:
     stop_conditions:
       - "step returncode is non-zero"
       - "workflow reaches max_iterations"
-    trace_store: ".agent-runs/<run-id>/workflow_trace.jsonl"
+    trace_store: ".agent-runs/<run-id>/raw-events/workflow.jsonl"
     steps:
       - name: "publish_pr"
-        command: "python3 scripts/publish_pr.py"
+        command: "python3 scripts/publish_pr.py --run-id {run_id} --artifacts-dir {artifacts_dir}"
     required_artifacts:
-      - "artifacts/risk.json"
-      - "artifacts/project_profile.json"
-      - "artifacts/quality.json"
-      - "artifacts/verdict.json"
-      - "artifacts/change_set.json"
-      - "artifacts/publication.json"
-      - "artifacts/publication_payload.json"
+      - ".agent-runs/<run-id>/artifacts/risk.json"
+      - ".agent-runs/<run-id>/artifacts/project_profile.json"
+      - ".agent-runs/<run-id>/artifacts/test_plan.json"
+      - ".agent-runs/<run-id>/artifacts/test_result.json"
+      - ".agent-runs/<run-id>/artifacts/quality.json"
+      - ".agent-runs/<run-id>/artifacts/security.json"
+      - ".agent-runs/<run-id>/artifacts/review.json"
+      - ".agent-runs/<run-id>/artifacts/verdict.json"
+      - ".agent-runs/<run-id>/artifacts/change_set.json"
+      - ".agent-runs/<run-id>/artifacts/publication.json"
+      - ".agent-runs/<run-id>/artifacts/publication_payload.json"
     preflight:
       - "make validate-artifacts"
       - "profile-aware security scan"
@@ -77,6 +81,6 @@ workflows:
       - "Stage only paths listed in artifacts/change_set.json include and not matched by exclude."
       - "Block if any pre-existing staged file is outside the selected change set."
       - "Block if git add fails or the final staged set differs from the selected change set."
-      - "Use artifacts/publication_payload.json for public PR title, body, and commit message."
+      - "Use the run-scoped publication_payload.json for public PR title, body, and commit message."
       - "Never auto-merge or deploy."
-      - "Record partial failures in artifacts/publication.json and artifacts/verdict.json."
+      - "Record publication failures only in the publication-owned run-scoped publication.json; verdict.json is immutable after the orchestrator writes it."

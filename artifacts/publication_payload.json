@@ -1,6 +1,0 @@
-{
-  "title": "Add deterministic workflow routing",
-  "body": "## Summary\n- Add policy-driven routing with authoritative gate enforcement.\n- Add bounded quality, review, and CI repair loops with repeated-failure stops.\n- Track workflow budgets and router decisions in run state and trace output.\n\n## Validation\n- make validate-artifacts\n- make security\n- focused router and workflow tests\n- full pytest\n- make check",
-  "commit_message": "Add deterministic workflow routing",
-  "base_branch": "main"
-}

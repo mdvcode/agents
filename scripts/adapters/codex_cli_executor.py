@@ -18,6 +18,8 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+if str(SCRIPT_DIR.parent) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR.parent))
 
 from codex_adapter import (  # noqa: E402
     DEFAULT_TIMEOUT_SECONDS,
@@ -29,6 +31,7 @@ from codex_adapter import (  # noqa: E402
     resolve_contract_path,
     validate_contract,
 )
+from check_codex_runtime import configured_codex_base_command  # noqa: E402
 
 
 def safe_artifact_name(value: Any) -> bool:
@@ -36,12 +39,6 @@ def safe_artifact_name(value: Any) -> bool:
         return False
     path = Path(value)
     return not path.is_absolute() and ".." not in path.parts
-
-
-def configured_codex_base_command() -> list[str]:
-    command = os.environ.get("AGENT_CODEX_CLI_COMMAND", "codex")
-    args = os.environ.get("AGENT_CODEX_CLI_ARGS", "")
-    return shlex.split(command) + shlex.split(args)
 
 
 def with_exec_subcommand(command: list[str]) -> list[str]:
@@ -453,8 +450,6 @@ def run_codex(
         "--json",
         "--sandbox",
         sandbox_for_filesystem_access(str(request.get("filesystem_access", "read_only"))),
-        "--ask-for-approval",
-        "never",
         "--output-schema",
         str(schema_path),
         "--output-last-message",

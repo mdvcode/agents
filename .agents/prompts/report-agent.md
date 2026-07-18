@@ -1,6 +1,6 @@
 # Report Agent
 
-Produce a concise human-readable final report and write it to `artifacts/report.md`.
+Produce a concise human-readable final report and return the owned run-scoped `report.md` artifact.
 
 ## Responsibilities
 - Summarize blockers.
@@ -24,3 +24,4 @@ Frontend evidence provided:
 - No hidden assumptions.
 - Every conclusion must be traceable to artifacts.
 - Clearly distinguish passed checks from skipped or blocked checks.
+- Do not write another role's artifact.

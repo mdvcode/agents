@@ -1,0 +1,16 @@
+{
+  "required": ["status", "project_profile", "findings", "blocker_ids", "secret_findings", "commands_attempted", "warnings"],
+  "enums": {
+    "status": ["pass", "warn", "fail"],
+    "project_profile": ["agent_workspace", "django", "nextjs_web"]
+  },
+  "types": {
+    "status": "str",
+    "project_profile": "str",
+    "findings": "list",
+    "blocker_ids": "list",
+    "secret_findings": "list",
+    "commands_attempted": "list",
+    "warnings": "list"
+  }
+}

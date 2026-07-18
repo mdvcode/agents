@@ -17,6 +17,7 @@ REQUIRED = [
     "planner",
     "risk-classifier",
     "implementation-agent",
+    "test-generator",
     "quality-runner",
     "security-agent",
     "reviewer",
@@ -90,6 +91,8 @@ def setup_artifacts(tmp_path: Path, risk_class: str = "low", changed_areas: list
         },
     )
     artifact(artifacts_dir / "implementation.json", {"changed_files": []})
+    artifact(artifacts_dir / "test_plan.json", {"tests": [], "summary": "covered"})
+    artifact(artifacts_dir / "test_result.json", {"status": "pass", "summary": "covered"})
     artifact(
         artifacts_dir / "quality.json",
         {
@@ -104,13 +107,35 @@ def setup_artifacts(tmp_path: Path, risk_class: str = "low", changed_areas: list
             "warnings": [],
         },
     )
-    artifact(artifacts_dir / "security.md", "No blockers.\n")
-    artifact(artifacts_dir / "review.md", "No findings.\n")
+    artifact(
+        artifacts_dir / "security.json",
+        {
+            "status": "pass",
+            "project_profile": "agent_workspace",
+            "findings": [],
+            "blocker_ids": [],
+            "secret_findings": [],
+            "commands_attempted": [],
+            "warnings": [],
+        },
+    )
+    artifact(
+        artifacts_dir / "review.json",
+        {
+            "status": "pass",
+            "project_profile": "agent_workspace",
+            "findings": [],
+            "blocker_ids": [],
+            "policy_violations": [],
+            "known_lesson_conflicts": [],
+            "warnings": [],
+        },
+    )
     artifact(
         artifacts_dir / "verdict.json",
         {
             "decision": "publish_pr",
-            "execution_status": "completed",
+            "execution_status": "planned",
             "task": "test",
             "project_profile": "agent_workspace",
             "risk_class": risk_class,
@@ -229,6 +254,18 @@ def test_quality_failure_starts_bounded_repair(tmp_path: Path) -> None:
 
 def test_review_blocker_starts_review_repair(tmp_path: Path) -> None:
     artifacts_dir = setup_artifacts(tmp_path)
+    artifact(
+        artifacts_dir / "review.json",
+        {
+            "status": "block",
+            "project_profile": "agent_workspace",
+            "findings": ["R1"],
+            "blocker_ids": ["R1"],
+            "policy_violations": [],
+            "known_lesson_conflicts": [],
+            "warnings": [],
+        },
+    )
     state = completed_state(review_status="block")
     result = route(tmp_path, state, "reviewer", {"status": "completed", "next_action": "publication", "blockers": ["R1"]})
     assert result["next_role"] == "implementation-agent"

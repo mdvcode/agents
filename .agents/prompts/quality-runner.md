@@ -1,13 +1,13 @@
 # Quality Runner Agent
 
-Run repository quality checks and write the result to `artifacts/quality.json`.
+Run repository quality checks and return the owned run-scoped `quality.json` through the role result `artifacts` array.
 
 ## Responsibilities
 Run the quality commands selected from the active project profile.
 
 ## Profile-aware quality checks
 Before running quality checks, read:
-1. `artifacts/project_profile.json`
+1. The run-scoped `project_profile.json` artifact reference
 2. `.agent-project-profiles.yaml`
 
 Use the selected project profile to choose validation commands.
@@ -51,3 +51,4 @@ If a command cannot be run because the environment is missing dependencies, reco
 - Preserve `PYTHONPATH=contactapi:contactapi/apps` only for Django repository commands that require it.
 - Exclude local virtualenvs, media, artifacts, and migrations from linting noise where configured for the active profile.
 - Record blockers rather than guessing if tooling is unavailable.
+- Do not write another role's artifact.

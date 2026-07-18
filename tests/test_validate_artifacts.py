@@ -186,49 +186,16 @@ def test_medium_with_commit_false_fails() -> None:
     assert any("commit=true" in error for error in errors)
 
 
-def test_open_pr_verdict_without_pr_url_fails_when_pr_marked_created() -> None:
+def test_publish_verdict_is_pre_publication_only() -> None:
     errors = validator.validate_verdict_invariants(
-        verdict_payload(
-            publication_result={
-                "commit_created": True,
-                "branch_pushed": True,
-                "pr_created_or_updated": True,
-                "pr_url": "",
-                "pr_state": "draft",
-            }
-        )
+        verdict_payload(decision="publish_pr", execution_status="completed")
     )
-    assert any("requires pr_url" in error for error in errors)
+    assert any("pre-publication decision" in error for error in errors)
 
 
-def test_ready_pr_with_checks_failed_fails() -> None:
-    errors = validator.validate_verdict_invariants(
-        verdict_payload(checks_passed=False, publication_result={"pr_state": "ready"})
-    )
-    assert any("pr_state=ready" in error for error in errors)
-
-
-def test_failed_checks_with_created_pr_must_be_draft() -> None:
-    errors = validator.validate_verdict_invariants(
-        verdict_payload(
-            checks_passed=False,
-            publication_result={
-                "commit_created": True,
-                "branch_pushed": True,
-                "pr_created_or_updated": True,
-                "pr_url": "https://github.com/example/repo/pull/1",
-                "pr_state": "ready",
-            },
-        )
-    )
-    assert any("require pr_state=draft" in error for error in errors)
-
-
-def test_branch_pushed_without_commit_fails() -> None:
-    errors = validator.validate_verdict_invariants(
-        verdict_payload(publication_result={"branch_pushed": True})
-    )
-    assert any("branch_pushed=true requires commit_created=true" in error for error in errors)
+def test_publish_verdict_requires_passing_checks() -> None:
+    errors = validator.validate_verdict_invariants(verdict_payload(checks_passed=False))
+    assert any("requires checks_passed=true" in error for error in errors)
 
 
 def test_await_approval_requires_publish_approval_flag() -> None:
@@ -238,54 +205,24 @@ def test_await_approval_requires_publish_approval_flag() -> None:
     assert any("await_approval requires approval_required_before_publish=true" in error for error in errors)
 
 
-def test_completed_publish_requires_pr_created_and_url() -> None:
-    errors = validator.validate_verdict_invariants(
-        verdict_payload(decision="publish_pr", execution_status="completed")
-    )
-    assert any("completed publish_pr requires pr_created_or_updated=true" in error for error in errors)
-    assert any("completed publish_pr requires pr_url" in error for error in errors)
-
-
-def test_high_risk_with_commit_created_fails() -> None:
+def test_high_risk_publish_verdict_fails() -> None:
     errors = validator.validate_verdict_invariants(
         verdict_payload(
-            decision="await_approval",
+            decision="publish_pr",
             risk_class="high",
             approval_required_before_publish=True,
-            publication_result={"commit_created": True},
         )
     )
-    assert any("high risk must not create commits" in error for error in errors)
+    assert any("high risk" in error for error in errors)
 
 
-def test_missing_visual_evidence_ready_pr_fails() -> None:
+def test_missing_visual_evidence_publish_verdict_fails() -> None:
     errors = validator.validate_verdict_invariants(
         verdict_payload(
-            publication_result={"pr_state": "ready"},
             visual_evidence={"required": True, "provided": False, "items": []},
         )
     )
-    assert any("pr_state=ready requires required visual evidence" in error for error in errors)
-
-
-def test_nested_publication_result_type_validation_fails() -> None:
-    schema = validator.load_json(Path(__file__).resolve().parents[1] / "schemas" / "verdict.schema.json")
-    errors = validator.validate_required(
-        verdict_payload(publication_result={"commit_created": "yes"}),
-        schema,
-        "verdict.json",
-    )
-    assert any("publication_result.'commit_created' must be bool" in error for error in errors)
-
-
-def test_nested_publication_result_enum_validation_fails() -> None:
-    schema = validator.load_json(Path(__file__).resolve().parents[1] / "schemas" / "verdict.schema.json")
-    errors = validator.validate_required(
-        verdict_payload(publication_result={"pr_state": "banana"}),
-        schema,
-        "verdict.json",
-    )
-    assert any("publication_result.'pr_state' has invalid value" in error for error in errors)
+    assert any("missing required visual evidence" in error for error in errors)
 
 
 def test_profile_required_commands_must_be_selected() -> None:
@@ -320,7 +257,7 @@ def test_profile_mismatch_across_artifacts_fails() -> None:
     assert any("project profile mismatch" in error for error in errors)
 
 
-def test_publication_and_verdict_mismatch_fails() -> None:
+def test_completed_publication_without_pr_url_fails() -> None:
     errors = validator.validate_cross_artifact_invariants(
         {
             "project_profile": {"project_profile": "agent_workspace"},
@@ -330,25 +267,19 @@ def test_publication_and_verdict_mismatch_fails() -> None:
                 "execution_status": "completed",
                 "commit_created": True,
                 "branch_pushed": True,
-                "pr_created_or_updated": True,
-                "pr_url": "https://github.com/example/repo/pull/1",
+                "pr_created_or_updated": False,
+                "pr_url": "",
                 "pr_state": "ready",
             },
             "verdict": {
                 "project_profile": "agent_workspace",
                 "risk_class": "medium",
                 "execution_status": "planned",
-                "publication_result": {
-                    "commit_created": False,
-                    "branch_pushed": False,
-                    "pr_created_or_updated": False,
-                    "pr_url": "",
-                    "pr_state": "not_created",
-                },
+                "decision": "publish_pr",
             },
         }
     )
-    assert any("publication/verdict mismatch for execution_status" in error for error in errors)
+    assert any("completed publication requires a PR URL" in error for error in errors)
 
 
 def test_invalid_yaml_fails(tmp_path: Path) -> None:

@@ -40,7 +40,6 @@ def test_full_workflow_uses_one_run_id_and_task_worktree(tmp_path: Path, monkeyp
 
     state = agent_role_runner.run_roles(
         run_id="run-integration",
-        artifacts_dir=tmp_path / ".agent-runs" / "run-integration" / "artifacts",
         repository=source,
         task_id="issue-123",
         branch="issue/123",
@@ -120,7 +119,10 @@ elif role == "quality-runner":
         "warnings": []
     }), encoding="utf-8")
 elif role == "security-agent":
-    (artifacts / "security.md").write_text("# Security\\nNo issues.\\n", encoding="utf-8")
+    (artifacts / "security.json").write_text(json.dumps({
+        "status": "pass", "project_profile": request["project_profile"], "findings": [],
+        "blocker_ids": [], "secret_findings": [], "commands_attempted": [], "warnings": []
+    }), encoding="utf-8")
 elif role == "frontend-qa-agent":
     (artifacts / "frontend_qa.json").write_text(json.dumps({
         "evidence_required": False,
@@ -149,7 +151,10 @@ elif role == "semantic-conflict-agent":
         "next_action": "continue"
     }), encoding="utf-8")
 elif role == "reviewer":
-    (artifacts / "review.md").write_text("# Review\\nNo findings.\\n", encoding="utf-8")
+    (artifacts / "review.json").write_text(json.dumps({
+        "status": "pass", "project_profile": request["project_profile"], "findings": [],
+        "blocker_ids": [], "policy_violations": [], "known_lesson_conflicts": [], "warnings": []
+    }), encoding="utf-8")
 elif role == "ci-repair-agent":
     (artifacts / "ci_repair.json").write_text(json.dumps({
         "repairs": [],
@@ -158,7 +163,7 @@ elif role == "ci-repair-agent":
 elif role == "orchestrator":
     (artifacts / "verdict.json").write_text(json.dumps({
         "decision": "publish_pr",
-        "execution_status": "completed",
+        "execution_status": "planned",
         "task": "test",
         "project_profile": request["project_profile"],
         "risk_class": "medium",
@@ -256,7 +261,6 @@ print(json.dumps({
 
     state = agent_role_runner.run_roles(
         run_id="run-publish",
-        artifacts_dir=tmp_path / ".agent-runs" / "run-publish" / "artifacts",
         repository=tmp_path,
         adapter_command=f"{sys.executable} {adapter}",
         dry_run=True,
@@ -322,7 +326,6 @@ print(json.dumps({
 
     state = agent_role_runner.run_roles(
         run_id="run-high",
-        artifacts_dir=tmp_path / ".agent-runs" / "run-high" / "artifacts",
         repository=tmp_path,
         adapter_command=f"{sys.executable} {adapter}",
         dry_run=True,
@@ -353,7 +356,6 @@ print(json.dumps({
 
     state = agent_role_runner.run_roles(
         run_id="run-no-plan",
-        artifacts_dir=tmp_path / ".agent-runs" / "run-no-plan" / "artifacts",
         repository=tmp_path,
         adapter_command=f"{sys.executable} {adapter}",
         dry_run=True,
@@ -407,6 +409,17 @@ def test_production_codex_executor_smoke_planner_to_reviewer(
     tmp_path: Path,
     monkeypatch: object,
 ) -> None:
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    (tmp_path / "README.md").write_text("base\n", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text(".agent-runs/\n.agent-worktrees/\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md", ".gitignore"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True, capture_output=True)
+    origin = tmp_path.parent / f"{tmp_path.name}-origin.git"
+    subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True)
+    subprocess.run(["git", "remote", "add", "origin", str(origin)], cwd=tmp_path, check=True)
+    subprocess.run(["git", "push", "-u", "origin", "main"], cwd=tmp_path, check=True, capture_output=True)
     codex_cli = tmp_path / "fake_codex_cli.py"
     codex_cli.write_text(
         """
@@ -469,6 +482,13 @@ elif role == "implementation-agent":
     })}]
     created = []
     next_action = "quality-runner"
+elif role == "test-generator":
+    result_artifacts = [
+        {"path": "test_plan.json", "content": json.dumps({"tests": [], "summary": "covered"})},
+        {"path": "test_result.json", "content": json.dumps({"status": "pass", "summary": "covered"})}
+    ]
+    created = []
+    next_action = "quality-runner"
 elif role == "quality-runner":
     result_artifacts = [{"path": "quality.json", "content": json.dumps({
         "task": "smoke",
@@ -484,7 +504,10 @@ elif role == "quality-runner":
     created = []
     next_action = "reviewer"
 elif role == "reviewer":
-    result_artifacts = [{"path": "review.md", "content": "# Review\\nNo findings.\\n"}]
+    result_artifacts = [{"path": "review.json", "content": json.dumps({
+        "status": "pass", "project_profile": request["project_profile"], "findings": [],
+        "blocker_ids": [], "policy_violations": [], "known_lesson_conflicts": [], "warnings": []
+    })}]
     created = []
     next_action = "completed"
 else:
@@ -510,23 +533,25 @@ print(json.dumps({
 
     state = agent_role_runner.run_roles(
         run_id="run-production-executor-smoke",
-        artifacts_dir=tmp_path / ".agent-runs" / "run-production-executor-smoke" / "artifacts",
         repository=tmp_path,
         adapter_command=f"{sys.executable} {executor}",
         dry_run=True,
+        create_task_worktree=True,
     )
 
     assert state["execution_status"] == "awaiting_approval"
-    assert [item["role"] for item in state["roles"]][:7] == [
+    assert [item["role"] for item in state["roles"]][:8] == [
         "issue-intake",
         "context-compiler",
         "planner",
         "risk-classifier",
         "implementation-agent",
+        "test-generator",
         "quality-runner",
         "security-agent",
     ]
-    assert (tmp_path / "impl.txt").read_text(encoding="utf-8") == "implemented\n"
+    assert (Path(state["worktree"]) / "impl.txt").read_text(encoding="utf-8") == "implemented\n"
+    assert not (tmp_path / "impl.txt").exists()
     for checkpoint in state["roles"]:
         assert isinstance(checkpoint["result"]["tokens_used"], int)
         assert isinstance(checkpoint["result"]["duration_ms"], int)

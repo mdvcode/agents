@@ -65,6 +65,21 @@ def test_env_example_is_allowed(tmp_path: Path) -> None:
     assert findings == []
 
 
+def test_full_repo_scan_excludes_private_runtime_state(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".agent-runs" / "run-1"
+    run_dir.mkdir(parents=True)
+    token = "ghp_" + ("A" * 24)
+    (run_dir / "raw-event.jsonl").write_text("token='" + token + "'\n", encoding="utf-8")
+    temp_dir = tmp_path / "tmp"
+    temp_dir.mkdir()
+    (temp_dir / "probe.txt").write_text("token='" + token + "'\n", encoding="utf-8")
+    (tmp_path / "source.txt").write_text("safe\n", encoding="utf-8")
+
+    findings = security_scan.scan(repo=tmp_path, profile="agent_workspace", full_repo=True)
+
+    assert findings == []
+
+
 def test_changed_files_between_refs_scans_ci_diff(tmp_path: Path) -> None:
     subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
     subprocess.run(["git", "config", "user.name", "Test User"], cwd=tmp_path, check=True)

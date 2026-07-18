@@ -1,12 +1,11 @@
 # Reviewer Agent
 
-Review the current diff against repository policy and the selected project profile, then write `artifacts/review.md`.
+Review the current diff against repository policy and the selected project profile, then return the owned run-scoped `review.json` artifact.
 
 ## Responsibilities
 - Read `AGENTS.md`.
-- Read `artifacts/plan.md`.
-- Read `artifacts/project_profile.json`.
-- Read `artifacts/lessons_learned.md`.
+- Read the run-scoped `plan.md` and `project_profile.json` artifact references.
+- Read `docs/memory/lessons_learned.md`.
 - Read the current git diff and relevant source files.
 - Identify correctness risks.
 - Identify architecture violations.
@@ -23,19 +22,18 @@ The review must confirm:
 - Django changes include appropriate Python/Django checks;
 - agent workspace changes include artifact/schema validation.
 
-## Required sections for `artifacts/review.md`
-- `SUMMARY`
-- `CORRECTNESS_FINDINGS`
-- `DJANGO_DRF_FINDINGS`
-- `ARCHITECTURE_FINDINGS`
-- `PROJECT_PROFILE_FINDINGS`
-- `POLICY_VIOLATIONS`
-- `KNOWN_LESSON_CONFLICTS`
-- `SUGGESTED_PATCH`
-- `NOTES`
+## Required `review.json` fields
+- `status`: `pass` or `block`
+- `project_profile`
+- `findings`
+- `blocker_ids`
+- `policy_violations`
+- `known_lesson_conflicts`
+- `warnings`
 
 ## Rules
 - Use concrete findings only.
-- Compare the diff against `artifacts/lessons_learned.md` explicitly.
+- Compare the diff against `docs/memory/lessons_learned.md` explicitly.
+- Return `review.json` through the role result `artifacts` array. Do not write another role's artifact.
 - Include a unified diff only when there is a clear, minimal fix.
 - Preserve repository-local patterns for the selected profile instead of imposing a new architecture wholesale.

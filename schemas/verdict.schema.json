@@ -11,7 +11,6 @@
     "warnings",
     "high_risk_triggers",
     "protected_paths_touched",
-    "publication_result",
     "visual_evidence",
     "approval_required_before_publish",
     "approval_required_before_merge",
@@ -37,7 +36,6 @@
     "warnings": "list",
     "high_risk_triggers": "list",
     "protected_paths_touched": "list",
-    "publication_result": "dict",
     "visual_evidence": "dict",
     "approval_required_before_publish": "bool",
     "approval_required_before_merge": "bool",
@@ -46,13 +44,6 @@
     "lessons_updated": "bool"
   },
   "object_required": {
-    "publication_result": [
-      "commit_created",
-      "branch_pushed",
-      "pr_created_or_updated",
-      "pr_url",
-      "pr_state"
-    ],
     "visual_evidence": [
       "required",
       "provided",
@@ -60,20 +51,10 @@
     ]
   },
   "object_types": {
-    "publication_result": {
-      "commit_created": "bool",
-      "branch_pushed": "bool",
-      "pr_created_or_updated": "bool",
-      "pr_url": "str",
-      "pr_state": "str"
-    },
     "visual_evidence": {
       "required": "bool",
       "provided": "bool",
       "items": "list"
     }
-  },
-  "object_enums": {
-    "publication_result.pr_state": ["ready", "draft", "not_created"]
   }
 }

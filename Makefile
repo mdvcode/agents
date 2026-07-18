@@ -1,15 +1,11 @@
-CODEX_NODE_PATH ?= $(shell if [ -x /usr/local/opt/node@22/bin/node ]; then printf /usr/local/opt/node@22/bin; elif [ -x "$$HOME/.nvm/versions/node/v20.19.1/bin/node" ]; then printf "$$HOME/.nvm/versions/node/v20.19.1/bin"; else dirname "$$(command -v node 2>/dev/null || echo /usr/bin/node)"; fi)
+CODEX_CLI ?= $(shell if [ -x /Applications/ChatGPT.app/Contents/Resources/codex ]; then printf /Applications/ChatGPT.app/Contents/Resources/codex; elif [ -x "$$HOME/Applications/ChatGPT.app/Contents/Resources/codex" ]; then printf "$$HOME/Applications/ChatGPT.app/Contents/Resources/codex"; else command -v codex 2>/dev/null || printf codex; fi)
 
-.PHONY: check security validate-artifacts codex-preflight codex-smoke publish-dry-run publish agent-status
+.PHONY: check security validate-artifacts codex-preflight codex-smoke step1-verify publish-dry-run publish agent-status
+
+RUN_ID ?=
+STEP1_MANIFEST ?=
 
 check: validate-artifacts security
-	python3 -m json.tool artifacts/risk.json >/dev/null
-	python3 -m json.tool artifacts/quality.json >/dev/null
-	python3 -m json.tool artifacts/verdict.json >/dev/null
-	python3 -m json.tool artifacts/project_profile.json >/dev/null
-	python3 -m json.tool artifacts/change_set.json >/dev/null
-	python3 -m json.tool artifacts/publication.json >/dev/null
-	python3 -m json.tool artifacts/publication_payload.json >/dev/null
 	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests
 	@if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
 		git diff HEAD --check; \
@@ -21,24 +17,33 @@ security:
 	python3 scripts/security_scan.py
 
 validate-artifacts:
-	python3 scripts/validate_artifacts.py
+	@if [ -n "$(RUN_ID)" ]; then \
+		python3 scripts/validate_artifacts.py --run-dir ".agent-runs/$(RUN_ID)"; \
+	else \
+		python3 scripts/validate_artifacts.py --contracts-only; \
+	fi
 
 codex-preflight:
-	PATH="$(CODEX_NODE_PATH):$$PATH" python3 scripts/check_codex_runtime.py --repo .
+	python3 scripts/check_codex_runtime.py --repo . --codex-command "$(CODEX_CLI)"
 
 codex-smoke:
-	PATH="$(CODEX_NODE_PATH):$$PATH" AGENT_REAL_CODEX_SMOKE=1 AGENT_CODEX_CLI_COMMAND=codex \
+	AGENT_REAL_CODEX_SMOKE=1 AGENT_CODEX_CLI_COMMAND="$(CODEX_CLI)" \
 	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_real_codex_smoke.py -q
 
+step1-verify:
+	@test -n "$(RUN_ID)" || (echo "RUN_ID is required for the evidence artifact owner" >&2; exit 2)
+	@test -n "$(STEP1_MANIFEST)" || (echo "STEP1_MANIFEST is required" >&2; exit 2)
+	python3 scripts/verify_step1_series.py --runs-dir .agent-runs --manifest "$(STEP1_MANIFEST)" \
+		--output ".agent-runs/$(RUN_ID)/artifacts/step1_evidence.json"
+
 publish-dry-run:
-	python3 scripts/publish_pr.py --dry-run
+	@test -n "$(RUN_ID)" || (echo "RUN_ID is required" >&2; exit 2)
+	python3 scripts/publish_pr.py --run-id "$(RUN_ID)" --dry-run
 
 publish:
-	python3 scripts/publish_pr.py
+	@test -n "$(RUN_ID)" || (echo "RUN_ID is required" >&2; exit 2)
+	python3 scripts/publish_pr.py --run-id "$(RUN_ID)"
 
 agent-status:
-	@echo "== git status =="
-	@git status --short
-	@echo
-	@echo "== verdict =="
-	@python3 -m json.tool artifacts/verdict.json
+	@test -n "$(RUN_ID)" || (echo "RUN_ID is required" >&2; exit 2)
+	@python3 -m json.tool ".agent-runs/$(RUN_ID)/workflow.json"

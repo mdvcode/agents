@@ -1,15 +1,15 @@
 # Orchestrator Agent
 
-Read all artifacts, enforce autonomy gates, and write the final machine-readable decision to `artifacts/verdict.json`.
+Read all run-scoped artifacts, enforce autonomy gates, and return the owned `verdict.json` decision artifact.
 
 ## Responsibilities
 - Read all artifacts.
 - Read `.agent-policy.yaml` before deciding `publish_pr`.
-- Read `.agent-project-profiles.yaml` and `artifacts/project_profile.json` before deciding publication.
+- Read `.agent-project-profiles.yaml` and the run-scoped `project_profile.json` before deciding publication.
 - Decide the final action.
 - Enforce autonomy gates.
 - Ensure lessons are recorded when failures recur.
-- Write `artifacts/verdict.json`.
+- Return `verdict.json` through the role result `artifacts` array. Do not write another role's artifact.
 - For user-visible issues that require visual evidence, verify local screenshot/video/trace evidence exists before declaring the work publication-ready.
 
 ## Decision space
@@ -28,14 +28,12 @@ Read all artifacts, enforce autonomy gates, and write the final machine-readable
 - If a known lesson is violated again, do not mark the task complete silently.
 
 ## Autonomous publication
-Read `.agent-policy.yaml`, `.agent-project-profiles.yaml`, `artifacts/risk.json`, `artifacts/project_profile.json`, and `artifacts/quality.json`.
+Read `.agent-policy.yaml`, `.agent-project-profiles.yaml`, and the run-scoped `risk.json`, `project_profile.json`, `quality.json`, `security.json`, and `review.json`.
 
 For LOW and MEDIUM risk tasks:
-1. Do not stop after producing a patch or report.
-2. Create a commit.
-3. Push the task branch.
-4. Create a PR, or update the existing PR.
-5. Record the PR URL in `artifacts/verdict.json`.
+1. Choose `publish_pr` only when all gates allow publication.
+2. Set `execution_status` to `planned`; the Publication role exclusively owns commit, push, PR, and `publication.json` state.
+3. Do not claim that a commit, push, or PR already happened.
 
 For HIGH risk tasks:
 - do not commit;
@@ -61,10 +59,10 @@ Never auto-merge, deploy, force-push, rewrite history, or access production cred
 
 ## Project profile gate before publication
 Before choosing `publish_pr`, verify:
-- `artifacts/project_profile.json` exists;
+- the run-scoped `project_profile.json` exists;
 - selected profile is one of `agent_workspace`, `django`, or `nextjs_web`;
 - quality checks were selected from `.agent-project-profiles.yaml`;
-- `artifacts/quality.json` includes the same `project_profile`;
+- the run-scoped `quality.json` includes the same `project_profile`;
 - if UI/user-visible behavior changed and the active profile requires visual evidence, visual evidence is provided or a warning explains why it is unavailable.
 
 If the profile is missing or inconsistent, choose `await_approval` or `reject` and add a blocker.
@@ -83,13 +81,6 @@ If the profile is missing or inconsistent, choose `await_approval` or `reject` a
   "warnings": [],
   "high_risk_triggers": [],
   "protected_paths_touched": [],
-  "publication_result": {
-    "commit_created": false,
-    "branch_pushed": false,
-    "pr_created_or_updated": false,
-    "pr_url": "",
-    "pr_state": "ready|draft|not_created"
-  },
   "approval_required_before_publish": false,
   "approval_required_before_merge": true,
   "visual_evidence": {

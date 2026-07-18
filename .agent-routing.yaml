@@ -5,6 +5,7 @@ required_before_publication:
   - planner
   - risk-classifier
   - implementation-agent
+  - test-generator
   - quality-runner
   - security-agent
   - reviewer

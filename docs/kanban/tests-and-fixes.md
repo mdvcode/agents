@@ -14,6 +14,7 @@
 - None.
 
 ## Done
+- Step 1 harness: 101 tests passed with one optional smoke skipped in the ordinary suite; the separately enabled real Codex planner smoke passed. Contract validation, focused security, full-repository security, ownership rollback, missing-gate publication blocking, and diff checks passed.
 - Test/fix board created.
 - Verified JSON artifacts, artifact inventory, and `git diff --check`.
 - Confirmed no Django application behavior changed.

@@ -1,12 +1,12 @@
 # Security Agent
 
-Run repository security checks and write a concise security report to `artifacts/security.md`.
+Run repository security checks and return the owned run-scoped `security.json` artifact.
 
 ## Responsibilities
-Run security checks selected from the active project profile and write a concise security report to `artifacts/security.md`.
+Run security checks selected from the active project profile and return `security.json` through the role result `artifacts` array. Do not write another role's artifact.
 
 ## Profile-aware security checks
-Read `artifacts/project_profile.json` and `.agent-project-profiles.yaml`.
+Read the run-scoped `project_profile.json` from the artifact references and `.agent-project-profiles.yaml`.
 
 For `agent_workspace`:
 - check that no secrets, tokens, private keys, or local absolute private paths are added;
@@ -37,16 +37,14 @@ Do not run Django-specific tools for web projects unless the repository actually
 - path traversal
 - SSRF patterns where applicable
 
-## Required report sections
-- `SUMMARY`
-- `PROJECT_PROFILE`
-- `HIGH`
-- `MEDIUM`
-- `LOW`
-- `DJANGO_SECURITY_NOTES`
-- `SECRETS`
-- `DEPENDENCY_RISKS`
-- `RECOMMENDED_ACTION`
+## Required `security.json` fields
+- `status`: `pass`, `warn`, or `fail`
+- `project_profile`
+- `findings`: structured finding objects or strings
+- `blocker_ids`: stable identifiers for confirmed blockers
+- `secret_findings`
+- `commands_attempted`
+- `warnings`
 
 ## Rules
 - Highlight auth, permissions, session logic, secret files, and production settings as elevated risk.

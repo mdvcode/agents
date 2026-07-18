@@ -1,0 +1,23 @@
+version: 1
+artifacts:
+  issue.json: issue-intake
+  plan.md: planner
+  project_profile.json: planner
+  risk.json: risk-classifier
+  implementation.json: implementation-agent
+  test_plan.json: test-generator
+  test_result.json: test-generator
+  quality.json: quality-runner
+  security.json: security-agent
+  frontend_qa.json: frontend-qa-agent
+  architecture_consistency.json: architecture-consistency-agent
+  semantic_conflict.json: semantic-conflict-agent
+  review.json: reviewer
+  ci_repair.json: ci-repair-agent
+  verdict.json: orchestrator
+  eval_runner.json: eval-runner
+  step1_evidence.json: eval-runner
+  report.md: report-agent
+  change_set.json: publication-prepare
+  publication_payload.json: publication-prepare
+  publication.json: publication

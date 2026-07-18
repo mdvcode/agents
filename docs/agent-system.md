@@ -3,7 +3,9 @@
 ## Current State
 - The repository has a good role split: planner, risk classifier, implementation agent, test generator, quality runner, security agent, reviewer, report agent, and orchestrator.
 - The skills are clear and useful, especially the Django, DRF, security, git, testing, and lessons policies.
-- The main weakness was workspace shape: the prompts existed, but there was no obvious front door for a new agent, no durable docs index, no kanban layer, and `artifacts/` had accumulated stale one-off investigation files.
+- Each task now has one authoritative `.agent-runs/<run-id>/` containing workflow state, context manifests, role requests/results, raw events, owned artifacts, metrics, errors, and publication audit state.
+- Repository-root `artifacts/` was removed; it is no longer a mutable compatibility path.
+- Artifact ownership is declared in `.agent-artifact-owners.yaml` and enforced after every role.
 
 ## Improvements Made
 - Added an explicit agent workspace model to `AGENTS.md`.
@@ -42,8 +44,8 @@ The role result field `next_action` is advisory. `scripts/workflow_router.py` is
 
 The routing contract is defined in `.agent-routing.yaml`; run state includes `loops`, `budgets`, `role_count`, and cumulative `tokens_used` so a workflow cannot silently exceed its execution limits.
 
-## Codex Executor Smoke Gate
-The production Codex executor remains an independent environment-dependent smoke gate:
+## Codex Executor And Step 1 Gates
+The production Codex executor has an independent environment-dependent smoke gate:
 
 ```sh
 make codex-preflight
@@ -51,3 +53,5 @@ make codex-smoke
 ```
 
 The smoke must run against a real authenticated Codex CLI. It verifies that the Planner role completes, creates `plan.md` and `project_profile.json`, preserves a clean read-only repository, and records raw JSONL plus token usage.
+
+Step 1 closes only after a selected 10-20 run manifest passes `make step1-verify`. The verifier rejects fake/external adapter provenance, missing gates, default-branch mutations, HIGH publication, missing PRs for LOW/MEDIUM, duplicate publications, secret leakage, missing token evidence, and unstructured terminal errors.

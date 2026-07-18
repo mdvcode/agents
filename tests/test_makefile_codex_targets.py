@@ -10,11 +10,11 @@ def test_makefile_exposes_real_codex_smoke_gate() -> None:
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
 
     assert "codex-preflight:" in makefile
-    assert "CODEX_NODE_PATH ?=" in makefile
+    assert "CODEX_CLI ?=" in makefile
     assert "python3 scripts/check_codex_runtime.py --repo ." in makefile
     assert "codex-smoke:" in makefile
-    assert 'PATH="$(CODEX_NODE_PATH):$$PATH"' in makefile
-    assert "AGENT_REAL_CODEX_SMOKE=1 AGENT_CODEX_CLI_COMMAND=codex" in makefile
+    assert 'AGENT_CODEX_CLI_COMMAND="$(CODEX_CLI)"' in makefile
+    assert 'AGENT_REAL_CODEX_SMOKE=1 AGENT_CODEX_CLI_COMMAND="$(CODEX_CLI)"' in makefile
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_real_codex_smoke.py -q" in makefile
 
 

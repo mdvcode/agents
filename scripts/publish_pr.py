@@ -27,10 +27,10 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from repository_registry import RepositoryRecord, find_by_remote
+from run_state import RunLayout
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ARTIFACTS = ROOT / "artifacts"
 PUBLICATION_RESULT_START = "<!-- publication-result:start -->"
 PUBLICATION_RESULT_END = "<!-- publication-result:end -->"
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
@@ -347,18 +347,77 @@ class Publisher:
         run_id: str = "",
     ) -> None:
         self.root = root.resolve()
-        self.artifacts = (artifacts_dir or self.root / "artifacts").resolve()
+        if artifacts_dir is None:
+            if not run_id:
+                raise ValueError("--run-id or --artifacts-dir is required; root artifacts/ is not runtime state")
+            artifacts_dir = self.root / ".agent-runs" / run_id / "artifacts"
+        self.artifacts = artifacts_dir.resolve()
         self.policy_path = self.root / ".agent-policy.yaml"
         self.repository_registry_path = self.root / ".agent-repositories.yaml"
         self.project_profiles_path = self.root / ".agent-project-profiles.yaml"
+        self.routing_path = self.root / ".agent-routing.yaml"
         self.publication_path = self.artifacts / "publication.json"
         self.publication_payload_path = self.artifacts / "publication_payload.json"
         self.verdict_path = self.artifacts / "verdict.json"
-        self.audit_log_path = self.artifacts / "audit_log.jsonl"
         self.runs_dir = self.root / ".agent-runs"
         self.worktrees_dir = self.root / ".agent-worktrees"
         self.runner = runner or CommandRunner()
         self.forced_run_id = run_id
+
+    def validate_workflow_gates(self, publication: PublicationResult) -> None:
+        workflow_path = self.artifacts.parent / "workflow.json"
+        if not workflow_path.exists():
+            publication.errors.append("authoritative workflow.json is missing")
+            return
+        if not self.routing_path.exists():
+            publication.errors.append(".agent-routing.yaml is missing")
+            return
+        try:
+            workflow = read_json(workflow_path)
+            routing = read_yaml(self.routing_path)
+        except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
+            publication.errors.append(f"cannot validate workflow gates: {exc}")
+            return
+        required = routing.get("required_before_publication", [])
+        if not isinstance(required, list):
+            publication.errors.append("required_before_publication must be a list")
+            return
+        completed = {
+            str(checkpoint.get("role", ""))
+            for checkpoint in workflow.get("roles", [])
+            if isinstance(checkpoint, dict)
+            and isinstance(checkpoint.get("result"), dict)
+            and checkpoint["result"].get("status") == "completed"
+        }
+        missing_roles = [str(role) for role in required if str(role) not in completed]
+        if missing_roles:
+            publication.errors.append(
+                "required workflow gates did not complete: " + ", ".join(missing_roles)
+            )
+        expected_artifacts = {
+            "issue-intake": ("issue.json",),
+            "context-compiler": (),
+            "planner": ("plan.md", "project_profile.json"),
+            "risk-classifier": ("risk.json",),
+            "implementation-agent": ("implementation.json",),
+            "test-generator": ("test_plan.json", "test_result.json"),
+            "quality-runner": ("quality.json",),
+            "security-agent": ("security.json",),
+            "reviewer": ("review.json",),
+            "orchestrator": ("verdict.json",),
+            "publication-prepare": ("change_set.json", "publication_payload.json"),
+        }
+        missing_artifacts = [
+            artifact
+            for role in required
+            for artifact in expected_artifacts.get(str(role), ())
+            if not (self.artifacts / artifact).is_file()
+            or (self.artifacts / artifact).stat().st_size == 0
+        ]
+        if missing_artifacts:
+            publication.errors.append(
+                "required workflow artifacts are missing: " + ", ".join(missing_artifacts)
+            )
 
     def run_command(self, args: Sequence[str], cwd: Path | None = None) -> CommandResult:
         return self.runner.run(args, cwd or self.root)
@@ -702,6 +761,7 @@ class Publisher:
         profile = str(project_profile.get("project_profile", ""))
         result.task_id = str(change_set.get("task_id", ""))
         result.pr_state = determine_pr_state(quality, verdict)
+        self.validate_workflow_gates(result)
         self.validate_orchestrator_decision(risk, verdict, result)
         if change_set.get("project_profile") != profile:
             result.errors.append("change_set project_profile does not match project_profile artifact")
@@ -711,8 +771,16 @@ class Publisher:
             self.validate_publication_branch(branch, base_branch, result, allowed_branch_prefixes(policy, profile))
 
         if not skip_checks:
-            validation = self.run_command(["python3", "scripts/validate_artifacts.py"], cwd=self.root)
-            append_command_result(result, "python3 scripts/validate_artifacts.py", validation, "required")
+            validation_command = [
+                "python3",
+                "scripts/validate_artifacts.py",
+                "--artifacts-dir",
+                str(self.artifacts),
+                "--phase",
+                "pre-publication",
+            ]
+            validation = self.run_command(validation_command, cwd=self.root)
+            append_command_result(result, " ".join(validation_command), validation, "required")
             if command_failed(validation):
                 result.errors.append(f"artifact validation failed: {command_output(validation)}")
 
@@ -990,62 +1058,25 @@ class Publisher:
         if not publication.task_id:
             publication.task_id = str(change_set.get("task_id", ""))
         if not publication.run_id:
-            publication.run_id = self.forced_run_id or make_run_id(publication.task_id or "task")
-        run_dir = self.runs_dir / publication.run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
-        publication.run_dir = str(run_dir.resolve())
+            publication.run_id = self.forced_run_id or self.artifacts.parent.name
+        layout = RunLayout.create(self.runs_dir, publication.run_id)
+        if layout.artifacts.resolve() != self.artifacts:
+            raise ValueError("publication artifacts must belong to the authoritative run directory")
+        publication.run_dir = str(layout.root)
         publication.target_repository = str(target_repo.resolve())
-        return run_dir
+        return layout.root
 
     def write_runtime_state(self, publication: PublicationResult) -> None:
-        if not publication.run_dir:
-            return
-        run_dir = Path(publication.run_dir)
-        write_json(run_dir / "publication.json", publication.as_json())
+        write_json(self.publication_path, publication.as_json())
 
     def write_final_runtime_artifacts(self, publication: PublicationResult, project_profile: str) -> None:
-        run_dir = Path(publication.run_dir)
-        final = publication.as_json()
-        write_json(run_dir / "publication.json", final)
-        write_json(
-            run_dir / "summary.json",
-            {
-                "execution_status": publication.execution_status,
-                "project_profile": project_profile,
-                "task_id": publication.task_id,
-                "target_repository": publication.target_repository,
-                "commit_sha": publication.commit_sha,
-                "pr_url": publication.pr_url,
-                "pr_state": publication.pr_state,
-                "warnings": publication.warnings,
-                "errors": publication.errors,
-                "pr_comment_posted": publication.pr_comment_posted,
-                "publication": final,
-            },
-        )
-        (run_dir / "publication.md").write_text(self.runtime_markdown(publication), encoding="utf-8")
+        self.write_runtime_state(publication)
 
     def update_artifacts(self, publication: PublicationResult) -> None:
         write_json(self.publication_path, publication.as_json())
-        verdict = read_json(self.verdict_path)
-        verdict["execution_status"] = publication.execution_status
-        verdict["publication_result"] = {
-            "commit_created": publication.commit_created,
-            "branch_pushed": publication.branch_pushed,
-            "pr_created_or_updated": publication.pr_created_or_updated,
-            "pr_url": publication.pr_url,
-            "pr_state": publication.pr_state,
-        }
-        verdict["warnings"] = publication.warnings
-        verdict["blockers"] = publication.errors
-        write_json(self.verdict_path, verdict)
 
     def update_report(self, publication: PublicationResult) -> None:
-        report_path = self.artifacts / "report.md"
-        if not report_path.exists():
-            return
-        text = report_path.read_text(encoding="utf-8").rstrip()
-        report_path.write_text(replace_marked_section(text, self.runtime_markdown(publication)), encoding="utf-8")
+        return
 
     def update_issue_journal(
         self,
@@ -1077,8 +1108,9 @@ class Publisher:
             "project_profile": project_profile,
             "dry_run": publication.dry_run,
         }
-        self.audit_log_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.audit_log_path.open("a", encoding="utf-8") as handle:
+        audit_log_path = Path(publication.run_dir) / "audit-log.jsonl"
+        audit_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with audit_log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     def record_publication(
@@ -1095,10 +1127,8 @@ class Publisher:
     def post_publication_comment(self, target_repo: Path, publication: PublicationResult) -> None:
         if not publication.pr_url or not publication.run_dir:
             return
-        body_path = Path(publication.run_dir) / "publication.md"
-        body_path.write_text(self.runtime_markdown(publication), encoding="utf-8")
         comment = self.run_command(
-            ["gh", "pr", "comment", publication.pr_url, "--body-file", str(body_path)],
+            ["gh", "pr", "comment", publication.pr_url, "--body", self.runtime_markdown(publication)],
             cwd=target_repo,
         )
         if command_failed(comment):
@@ -1140,7 +1170,7 @@ class Publisher:
         if not self.runs_dir.exists():
             return None
         candidates: list[tuple[float, PublicationResult]] = []
-        for path in self.runs_dir.glob("*/publication.json"):
+        for path in self.runs_dir.glob("*/artifacts/publication.json"):
             try:
                 data = read_json(path)
             except (OSError, json.JSONDecodeError, ValueError):

@@ -41,14 +41,12 @@ This repository is the local operating base for agents working across supported 
 - `make security`: lightweight repository-local scan for obvious secrets, private keys, private paths, and protected staged files.
 - `make agent-status`: print git status and current verdict.
 
-## Runtime Artifacts
-- `artifacts/plan.md`
-- `artifacts/risk.json`
-- `artifacts/project_profile.json`
-- `artifacts/review.md`
-- `artifacts/quality.json`
-- `artifacts/security.md`
-- `artifacts/verdict.json`
-- `artifacts/report.md`
-- `artifacts/lessons_learned.md`
-- `artifacts/audit_log.jsonl`
+## Runtime State
+- `.agent-runs/<run-id>/workflow.json`: authoritative workflow state.
+- `.agent-runs/<run-id>/context-manifests/`: scoped role context.
+- `.agent-runs/<run-id>/role-results/`: role checkpoints.
+- `.agent-runs/<run-id>/raw-events/`: raw executor JSONL and usage evidence.
+- `.agent-runs/<run-id>/artifacts/`: owned plan, risk, quality, security, review, verdict, and publication outputs.
+- `.agent-runs/<run-id>/metrics.json`: per-role duration and token usage.
+- `.agent-runs/<run-id>/errors.jsonl`: structured failures and approval stops.
+- Repository-root `artifacts/` is forbidden mutable state.

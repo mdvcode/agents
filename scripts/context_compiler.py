@@ -158,6 +158,7 @@ def create_context_manifest(
         {"path": str((ROOT / ".agent-policy.yaml").resolve()), "kind": "policy"},
         {"path": str((ROOT / ".agent-project-profiles.yaml").resolve()), "kind": "profile"},
         {"path": str((ROOT / ".agent-repositories.yaml").resolve()), "kind": "registry"},
+        {"path": str((ROOT / ".agent-artifact-owners.yaml").resolve()), "kind": "artifact_owners"},
     ]
     privacy_path = project_privacy_path(MEMORY_CONTROL_ROOT, project, project_profile)
     if privacy_path is not None:
@@ -206,7 +207,7 @@ def create_context_manifest(
             "Keep raw command outputs outside the context manifest.",
             "Write role outputs as strict JSON matching schemas/role_result.schema.json.",
         ],
-        "raw_outputs_dir": str((context_dir.parent / "raw").resolve()),
+        "raw_outputs_dir": str((context_dir.parent / "raw-events").resolve()),
     }
     path = context_dir / f"{role}.json"
     write_json(path, manifest)

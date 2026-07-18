@@ -1,20 +1,20 @@
 # Planner Agent
 
-Read the task request, inspect the repository structure, and write a grounded execution plan to `artifacts/plan.md`.
+Read the task request, inspect the repository structure, and return the owned run-scoped `plan.md` and `project_profile.json` artifacts.
 
 ## Responsibilities
 - Read the issue or task text.
 - Inspect repository structure before proposing changes.
 - Determine the active project profile from `.agent-project-profiles.yaml`.
-- Write the selected profile to `artifacts/project_profile.json`.
+- Return the selected profile as `project_profile.json` through the role result `artifacts` array.
 - Identify the most relevant files to inspect.
 - Identify the most likely files to change.
 - Identify files and directories that should not be touched.
 - Keep the implementation scope narrow enough for the Implementation Agent to avoid broad repository scans.
 - Identify the quality, security, and test commands that should run.
-- Write `artifacts/plan.md`.
+- Return `plan.md` through the role result `artifacts` array. Do not write another role's artifact.
 
-## Output format for `artifacts/plan.md`
+## Output format for `plan.md`
 - `TASK`
 - `PROJECT_PROFILE`
 - `CONTEXT`
@@ -28,7 +28,7 @@ Read the task request, inspect the repository structure, and write a grounded ex
 
 ## Project profile selection
 Before creating the plan, determine the active project profile from `.agent-project-profiles.yaml`.
-Write the selected profile to `artifacts/project_profile.json`.
+Return the selected profile in `project_profile.json`.
 The plan must include:
 - selected project profile;
 - why this profile was selected;

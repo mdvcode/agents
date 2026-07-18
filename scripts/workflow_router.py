@@ -432,9 +432,10 @@ def _missing_required_gates(state: dict[str, Any], artifacts_dir: Path, current_
         "planner": ("plan.md", "project_profile.json"),
         "risk-classifier": ("risk.json",),
         "implementation-agent": ("implementation.json",),
+        "test-generator": ("test_plan.json", "test_result.json"),
         "quality-runner": ("quality.json",),
-        "security-agent": ("security.md", "security.json"),
-        "reviewer": ("review.md",),
+        "security-agent": ("security.json",),
+        "reviewer": ("review.json",),
         "orchestrator": ("verdict.json",),
         "publication-prepare": ("change_set.json", "publication_payload.json"),
     }
@@ -454,13 +455,13 @@ def _invalid_required_gates(state: dict[str, Any], artifacts_dir: Path, current_
         "planner": ("project_profile.json", ROOT / "schemas" / "project_profile.schema.json"),
         "risk-classifier": ("risk.json", ROOT / "schemas" / "risk.schema.json"),
         "quality-runner": ("quality.json", ROOT / "schemas" / "quality.schema.json"),
+        "security-agent": ("security.json", ROOT / "schemas" / "security.schema.json"),
+        "reviewer": ("review.json", ROOT / "schemas" / "review.schema.json"),
         "orchestrator": ("verdict.json", ROOT / "schemas" / "verdict.schema.json"),
         "publication-prepare": ("change_set.json", ROOT / "schemas" / "change_set.schema.json"),
     }
     plain_artifacts = {
         "planner": ("plan.md",),
-        "security-agent": ("security.md",),
-        "reviewer": ("review.md",),
         "publication-prepare": ("publication_payload.json",),
     }
     invalid: list[str] = []
@@ -625,7 +626,7 @@ def decide_next_role(
     elif current_role == "risk-classifier":
         next_role, reason = "implementation-agent", "Risk is below HIGH; implementation is the next required gate."
     elif current_role == "implementation-agent":
-        next_role, reason = "quality-runner", "Implementation completed; quality checks are the next required gate."
+        next_role, reason = "test-generator", "Implementation completed; test generation is the next required gate."
     elif current_role == "test-generator":
         next_role, reason = "quality-runner", "Tests are recorded; quality checks are required."
     elif current_role == "quality-runner":

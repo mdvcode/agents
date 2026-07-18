@@ -19,7 +19,7 @@
 - For UI, routing, public CMS rendering, Studio UI, dashboard UI, or user-visible behavior, capture local-site evidence before publication.
 - Prefer screenshots for static UI states and short videos or Playwright traces for multi-step flows, modals, animations, responsive behavior, or interactions.
 - Evidence should point to local artifact paths and only safe PR-friendly screenshots when public sharing is appropriate. After publication, send the PR URL plus the local website URL where the completed issue can be checked. Do not publish screenshots containing private customer data, secrets, private URLs, internal issue notes, or any agent or control-plane references.
-- If the local app cannot run or the affected route cannot be reached, record the blocker in `artifacts/report.md`, `artifacts/quality.json`, and the project issue journal.
+- If the local app cannot run or the affected route cannot be reached, record the blocker in the current run's `report.md`, `quality.json`, `errors.jsonl`, and the project issue journal.
 
 ## Documentation Store
 - Put durable process documentation in `docs/`.
@@ -32,13 +32,13 @@
 - Put task runtime outputs in `artifacts/`.
 
 ## Logs
-- Use `artifacts/audit_log.jsonl` for append-only autonomous action history.
+- Use `.agent-runs/<run-id>/audit-log.jsonl` for append-only autonomous action history.
 - Each entry should include time, agent, action, verdict, and whether focused checks passed.
 - Keep large raw logs out of `artifacts/` unless they are necessary for current review.
 
 ## Artifact Cleanup
 - Required artifacts are the only files that should remain in `artifacts/` by default.
-- Summarize old probes and sweeps into `artifacts/report.md`, `artifacts/review.md`, or durable docs before removing raw files.
+- Summarize old probes and sweeps into the current run report/review or durable docs before removing raw files.
 - For GitHub issue work, copy the final result, checks, blockers, and PR link into the issue journal before clearing `artifacts/`.
 - Promote stable lessons to `docs/wiki/` or `docs/memory/`; do not make future agents rediscover them from raw logs.
 - Temporary scripts should be deleted once their results are captured.

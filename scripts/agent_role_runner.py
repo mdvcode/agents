@@ -23,6 +23,17 @@ from adapters.codex_adapter import CodexAdapter, contract_section, load_json, va
 from check_codex_runtime import check_codex_runtime
 from context_compiler import create_context_manifest, role_capability, role_contract
 from repository_registry import RepositoryRecord, find_by_remote
+from run_state import (
+    RunLayout,
+    file_contents_snapshot,
+    file_snapshot,
+    find_completed_run,
+    ownership_errors,
+    record_failure,
+    restore_foreign_artifacts,
+    task_fingerprint,
+    write_metrics,
+)
 from tool_preflight import role_tool_preflight
 from validate_artifacts import validate_required as validate_artifact_required
 from workflow_router import decide_next_role, load_yaml
@@ -86,8 +97,8 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def append_trace(run_dir: Path, event: dict[str, Any]) -> None:
-    with (run_dir / "workflow_trace.jsonl").open("a", encoding="utf-8") as trace:
+def append_trace(layout: RunLayout, event: dict[str, Any]) -> None:
+    with (layout.raw_events / "workflow.jsonl").open("a", encoding="utf-8") as trace:
         trace.write(json.dumps({"time": datetime.now(timezone.utc).isoformat(), **event}, ensure_ascii=False) + "\n")
 
 
@@ -180,20 +191,45 @@ def safe_artifact_name(value: Any) -> bool:
 
 def ensure_project_profile_artifact(artifacts_dir: Path, project_profile: str) -> None:
     path = artifacts_dir / "project_profile.json"
+    data: dict[str, Any] = {}
     if path.exists():
-        return
-    write_json(
-        path,
+        try:
+            data = load_json(path)
+        except (OSError, json.JSONDecodeError, ValueError):
+            data = {}
+    profiles = load_yaml(ROOT / ".agent-project-profiles.yaml").get("profiles", {})
+    profile = profiles.get(project_profile, {}) if isinstance(profiles, dict) else {}
+    quality = profile.get("quality_commands", {}) if isinstance(profile, dict) else {}
+    security = profile.get("security_commands", {}) if isinstance(profile, dict) else {}
+    required_quality = quality.get("required", []) if isinstance(quality, dict) else []
+    required_security = security.get("required", []) if isinstance(security, dict) else []
+    frontend = profile.get("frontend_evidence", {}) if isinstance(profile, dict) else {}
+    quality_selected = list(data.get("quality_commands_selected", []))
+    security_selected = list(data.get("security_commands_selected", []))
+    for command in required_quality:
+        if command not in quality_selected:
+            quality_selected.append(command)
+    for command in required_security:
+        if command not in security_selected:
+            security_selected.append(command)
+    data.update(
         {
             "project_profile": project_profile,
-            "confidence": "high",
-            "reasons": ["Selected by the workflow project profile resolver."],
-            "matched_markers": [],
-            "quality_commands_selected": [],
-            "security_commands_selected": [],
-            "frontend_evidence_required": False,
-            "warnings": [],
-        },
+            "confidence": data.get("confidence", "high"),
+            "reasons": data.get("reasons", ["Selected by the workflow project profile resolver."]),
+            "matched_markers": data.get("matched_markers", []),
+            "quality_commands_selected": quality_selected,
+            "security_commands_selected": security_selected,
+            "frontend_evidence_required": bool(
+                data.get("frontend_evidence_required", False)
+                or (isinstance(frontend, dict) and frontend.get("required") is True)
+            ),
+            "warnings": data.get("warnings", []),
+        }
+    )
+    write_json(
+        path,
+        data,
     )
 
 
@@ -369,6 +405,17 @@ def git_remote(repo: Path) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def git_ref_sha(repo: Path, ref: str) -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", ref],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
 def resolve_registry_record(repository: Path, project: str) -> tuple[RepositoryRecord | None, list[str]]:
     remote = git_remote(repository)
     if not remote and project:
@@ -535,7 +582,7 @@ def run_publication(
         "status": "completed",
         "next_action": "completed",
         "summary": "Publication executor completed.",
-        "artifacts_created": ["publication.json", "verdict.json"],
+        "artifacts_created": ["publication.json"],
         "blockers": [],
         "warnings": [],
         "tokens_used": 0,
@@ -684,16 +731,53 @@ def run_roles(
     create_task_worktree: bool = False,
 ) -> dict[str, Any]:
     run_id = run_id or make_run_id(workflow)
-    run_dir = RUNS / run_id
-    run_artifacts = (artifacts_dir or run_dir / "artifacts").resolve()
-    project_profile = project_profile_for(project)
-    context_dir = run_dir / "context"
-    requests_dir = run_dir / "requests"
-    raw_dir = run_dir / "raw"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    run_artifacts.mkdir(parents=True, exist_ok=True)
-    goal = goal or task_id
     repository = repository.resolve()
+    goal = goal or task_id
+    fingerprint = task_fingerprint(
+        task_id=task_id,
+        goal=goal,
+        repository=repository,
+        branch=branch,
+        base_branch=base_branch,
+    )
+    existing_workflow = RUNS / run_id / "workflow.json"
+    if existing_workflow.exists():
+        try:
+            existing = load_json(existing_workflow)
+        except (OSError, json.JSONDecodeError, ValueError):
+            existing = {}
+        if existing.get("execution_status") == "completed" and existing.get("input_fingerprint") == fingerprint:
+            return existing
+    duplicate = find_completed_run(RUNS, fingerprint, exclude_run_id=run_id)
+    if duplicate is not None:
+        return {**duplicate, "deduplicated": True, "duplicate_of": duplicate.get("run_id", "")}
+    layout = RunLayout.create(RUNS, run_id)
+    try:
+        layout.assert_artifacts_dir(artifacts_dir)
+    except ValueError as exc:
+        state = {
+            "run_id": run_id,
+            "workflow": workflow,
+            "task_id": task_id,
+            "execution_status": "blocked",
+            "roles": [],
+            "loops": initial_loops(),
+            "budgets": workflow_budgets(workflow),
+            "role_count": 0,
+            "tokens_used": 0,
+            "blockers": [str(exc)],
+            "input_fingerprint": fingerprint,
+        }
+        write_json(layout.workflow, state)
+        record_failure(layout, stage="initialization", code="NON_AUTHORITATIVE_STATE", message=str(exc))
+        write_metrics(layout, state)
+        return state
+    run_dir = layout.root
+    run_artifacts = layout.artifacts
+    project_profile = project_profile_for(project)
+    context_dir = layout.context
+    requests_dir = layout.requests
+    raw_dir = layout.raw_events
     adapter_command = effective_adapter_command(workflow, adapter_command)
     worktree, effective_branch, effective_base, setup_errors = prepare_worktree(
         repository,
@@ -704,6 +788,10 @@ def run_roles(
         base_branch,
         create_task_worktree,
     )
+    if uses_production_codex_executor(adapter_command) and not create_task_worktree:
+        setup_errors.append(
+            "production Codex full workflow requires --create-worktree; implementation may not run in the source repository"
+        )
     state: dict[str, Any] = {
         "run_id": run_id,
         "workflow": workflow,
@@ -723,27 +811,52 @@ def run_roles(
         "elapsed_seconds": 0,
         "role_count": 0,
         "tokens_used": 0,
+        "input_fingerprint": fingerprint,
+        "executor": {
+            "kind": "codex_cli" if uses_production_codex_executor(adapter_command) else "external_adapter",
+            "command": adapter_command,
+            "production": uses_production_codex_executor(adapter_command),
+        },
+        "base_branch_sha_before": git_ref_sha(repository, effective_base),
+        "base_branch_sha_after": "",
         "budgets": workflow_budgets(workflow),
         "loops": initial_loops(),
     }
-    write_json(run_dir / "agent_workflow.json", state)
-    append_trace(run_dir, {"event": "workflow_started", "workflow": workflow, "task_id": task_id})
+    write_json(layout.workflow, state)
+    append_trace(layout, {"event": "workflow_started", "workflow": workflow, "task_id": task_id})
+    write_metrics(layout, state)
     if setup_errors:
         state["execution_status"] = "blocked"
         state["blockers"] = setup_errors
-        write_json(run_dir / "agent_workflow.json", state)
-        append_trace(run_dir, {"event": "workflow_blocked", "blockers": setup_errors})
+        write_json(layout.workflow, state)
+        append_trace(layout, {"event": "workflow_blocked", "blockers": setup_errors})
+        record_failure(
+            layout,
+            stage="worktree",
+            code="WORKTREE_SETUP_FAILED",
+            message="Task worktree setup failed.",
+            details=setup_errors,
+        )
+        write_metrics(layout, state)
         return state
 
     if uses_production_codex_executor(adapter_command):
         runtime_preflight = check_codex_runtime(repo=worktree, sandbox="read-only", timeout_seconds=min(timeout_seconds, 60))
-        write_json(run_dir / "codex_runtime_preflight.json", runtime_preflight)
+        write_json(layout.root / "codex-runtime-preflight.json", runtime_preflight)
         if runtime_preflight.get("execution_status") != "completed":
             blockers = [str(item) for item in runtime_preflight.get("blockers", [])]
             state["execution_status"] = "blocked"
             state["blockers"] = blockers or ["Codex CLI is not available or not authenticated."]
-            write_json(run_dir / "agent_workflow.json", state)
-            append_trace(run_dir, {"event": "workflow_blocked", "blockers": state["blockers"]})
+            write_json(layout.workflow, state)
+            append_trace(layout, {"event": "workflow_blocked", "blockers": state["blockers"]})
+            record_failure(
+                layout,
+                stage="codex-preflight",
+                code="CODEX_RUNTIME_BLOCKED",
+                message="Real Codex executor preflight failed.",
+                details=state["blockers"],
+            )
+            write_metrics(layout, state)
             return state
 
     adapter = CodexAdapter(command=adapter_command, timeout_seconds=timeout_seconds, raw_output_dir=raw_dir)
@@ -757,6 +870,9 @@ def run_roles(
         guard += 1
         role_visits[role] = role_visits.get(role, 0) + 1
         role_started = time.monotonic()
+        artifact_contents_before = file_contents_snapshot(run_artifacts)
+        artifact_snapshot_before = file_snapshot(run_artifacts)
+        role_repo_snapshot_before = git_snapshot(worktree)
         if guard > len(ROLE_CHAIN) * 3 or role_visits[role] > 3:
             result = blocked_result("Workflow routing exceeded the safety limit.", ["dynamic routing loop detected"])
         elif role == "issue-intake":
@@ -861,6 +977,30 @@ def run_roles(
                     created.append(artifact)
             result["artifacts_created"] = created
         result.setdefault("duration_ms", int((time.monotonic() - role_started) * 1000))
+        contract = role_contract(role)
+        expected_artifacts = [
+            str(item)
+            for item in contract.get("expected_artifacts", [])
+            if isinstance(item, str)
+        ]
+        artifact_ownership_errors = ownership_errors(
+            role=role,
+            allowed_artifacts=expected_artifacts,
+            before=artifact_snapshot_before,
+            after=file_snapshot(run_artifacts),
+        )
+        if artifact_ownership_errors:
+            restore_foreign_artifacts(
+                directory=run_artifacts,
+                allowed_artifacts=expected_artifacts,
+                before=artifact_contents_before,
+            )
+            result = blocked_result("Role artifact ownership validation failed.", artifact_ownership_errors)
+        if role_filesystem_access(role) != "task_worktree_write" and git_snapshot(worktree) != role_repo_snapshot_before:
+            result = blocked_result(
+                "Read-only role changed repository contents.",
+                [f"{role} changed task worktree code despite {role_filesystem_access(role)} access"],
+            )
         if result.get("status") == "completed":
             artifact_errors = validate_role_artifacts(
                 role=role,
@@ -882,8 +1022,17 @@ def run_roles(
         }
         state["roles"].append(checkpoint)
         completed_roles.append(role)
-        write_json(run_artifacts / f"{role}.json", checkpoint)
-        append_trace(run_dir, {"event": "role_completed", "role": role, "result": result})
+        write_json(layout.role_results / f"{role}-{role_visits[role]}.json", checkpoint)
+        append_trace(layout, {"event": "role_completed", "role": role, "result": result})
+        if result.get("status") != "completed":
+            record_failure(
+                layout,
+                stage="role",
+                role=role,
+                code="ROLE_NOT_COMPLETED",
+                message=str(result.get("summary", "Role did not complete.")),
+                details=[str(item) for item in result.get("blockers", [])],
+            )
 
         state["role_count"] = len(state["roles"])
         state["tokens_used"] = sum(
@@ -900,9 +1049,10 @@ def run_roles(
             workflow_state=state,
         )
         state["last_route"] = route
-        write_json(run_dir / "agent_workflow.json", state)
+        write_json(layout.workflow, state)
+        write_metrics(layout, state)
         append_trace(
-            run_dir,
+            layout,
             {
                 "type": "router.decision",
                 "event": "router.decision",
@@ -929,8 +1079,15 @@ def run_roles(
                 }
                 state["roles"].append(approval_checkpoint)
                 state["role_count"] = len(state["roles"])
-                write_json(run_artifacts / "approval-gate.json", approval_checkpoint)
-                append_trace(run_dir, {"event": "workflow_awaiting_approval", "reason": route["reason"]})
+                write_json(layout.role_results / "approval-gate-1.json", approval_checkpoint)
+                append_trace(layout, {"event": "workflow_awaiting_approval", "reason": route["reason"]})
+                record_failure(
+                    layout,
+                    stage="routing",
+                    code="AWAITING_APPROVAL",
+                    message=route["reason"],
+                    details=route.get("warnings", []),
+                )
             elif route["next_role"] == "":
                 state["execution_status"] = "completed"
             else:
@@ -940,8 +1097,10 @@ def run_roles(
 
     if state["execution_status"] == "running":
         state["execution_status"] = "completed"
-    write_json(run_dir / "agent_workflow.json", state)
-    append_trace(run_dir, {"event": "workflow_finished", "execution_status": state["execution_status"]})
+    state["base_branch_sha_after"] = git_ref_sha(repository, effective_base)
+    write_json(layout.workflow, state)
+    write_metrics(layout, state)
+    append_trace(layout, {"event": "workflow_finished", "execution_status": state["execution_status"]})
     return state
 
 

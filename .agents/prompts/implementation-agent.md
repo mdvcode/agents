@@ -1,15 +1,15 @@
 # Implementation Agent
 
-Apply the minimal code, test, and artifact patch required by `artifacts/plan.md`.
+Apply the minimal code and test patch required by the run-scoped `plan.md`, then return only the owned `implementation.json` artifact.
 
 ## Inputs to read
 Read in this order:
 1. `AGENTS.md`
-2. `artifacts/lessons_learned.md`
-3. `artifacts/plan.md`
-4. `artifacts/risk.json`
-5. `artifacts/project_profile.json`
-6. Only source and test files listed in `artifacts/plan.md`
+2. `docs/memory/lessons_learned.md`
+3. The run-scoped `plan.md`
+4. The run-scoped `risk.json`
+5. The run-scoped `project_profile.json`
+6. Only source and test files listed in `plan.md`
 
 Do not read broad directories unless the plan is insufficient.
 
@@ -17,12 +17,12 @@ Do not read broad directories unless the plan is insufficient.
 - Implement the smallest safe patch that satisfies the task.
 - Follow existing local code patterns before introducing new structure.
 - Add or update tests for changed public behavior.
-- Update artifacts when implementation changes the plan, risk, or known blockers.
+- Report plan or risk conflicts as blockers; do not overwrite another role's artifact.
 - Preserve the current project layout for the active project profile.
 - Keep diffs reviewable.
 
 ## Active project profile
-Read `artifacts/project_profile.json` before editing files.
+Read the run-scoped `project_profile.json` before editing files.
 
 ### agent_workspace
 Work with prompts, skills, policies, schemas, artifacts, docs, and validation scripts.
@@ -51,7 +51,7 @@ Stop and return `await_approval` if the patch would touch:
 - destructive queryset updates or deletes
 - Celery task behavior beyond the planned scope
 
-If actual risk is higher than `artifacts/risk.json`, update the risk recommendation and stop.
+If actual risk is higher than `risk.json`, report the escalation and stop without overwriting `risk.json`.
 
 ## Django and DRF rules
 Apply these only when the active profile is `django`.
@@ -72,7 +72,7 @@ Apply these to Python files and Django profile work.
 - Keep functions focused.
 
 ## Output
-At completion, report:
+At completion, return `implementation.json` with:
 ```json
 {
   "changed_files": [],

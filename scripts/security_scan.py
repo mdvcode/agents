@@ -4,15 +4,15 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import subprocess
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PROJECT_PROFILE_ARTIFACT = ROOT / "artifacts" / "project_profile.json"
 EXCLUDED_DIRS = {
+    ".agent-runs",
+    ".agent-worktrees",
     ".git",
     ".idea",
     ".next",
@@ -25,6 +25,8 @@ EXCLUDED_DIRS = {
     "coverage",
     "playwright-report",
     "test-results",
+    "tmp",
+    "output",
 }
 SECRET_PATTERNS = [
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
@@ -51,15 +53,6 @@ TARGET_REPOSITORY_PROTECTED_PREFIXES = (
 
 
 def load_default_profile() -> str:
-    if not PROJECT_PROFILE_ARTIFACT.exists():
-        return "agent_workspace"
-    try:
-        data = json.loads(PROJECT_PROFILE_ARTIFACT.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return "agent_workspace"
-    profile = data.get("project_profile")
-    if profile in {"agent_workspace", "django", "nextjs_web"}:
-        return profile
     return "agent_workspace"
 
 
@@ -176,7 +169,7 @@ def parse_args() -> argparse.Namespace:
         "--profile",
         choices=("agent_workspace", "django", "nextjs_web"),
         default=None,
-        help="Project profile. Defaults to artifacts/project_profile.json.",
+        help="Project profile. Defaults to agent_workspace; workflow callers must pass it explicitly.",
     )
     return parser.parse_args()
 

@@ -5,6 +5,11 @@ default:
   expected_artifacts: []
   artifact_schemas: {}
 roles:
+  issue-intake:
+    prompt_path: ""
+    output_contract: schemas/role_result.schema.json
+    expected_artifacts:
+      - issue.json
   context-compiler:
     prompt_path: .agents/prompts/context-compiler.md
     output_contract: schemas/role_result.schema.json
@@ -46,7 +51,9 @@ roles:
     prompt_path: .agents/prompts/security-agent.md
     output_contract: schemas/roles/security-agent.schema.json
     expected_artifacts:
-      - security.md
+      - security.json
+    artifact_schemas:
+      security.json: schemas/security.schema.json
   frontend-qa-agent:
     prompt_path: .agents/prompts/frontend-qa-agent.md
     output_contract: schemas/roles/frontend-qa-agent.schema.json
@@ -72,7 +79,9 @@ roles:
     prompt_path: .agents/prompts/reviewer.md
     output_contract: schemas/roles/reviewer.schema.json
     expected_artifacts:
-      - review.md
+      - review.json
+    artifact_schemas:
+      review.json: schemas/review.schema.json
   ci-repair-agent:
     prompt_path: .agents/prompts/ci-repair-agent.md
     output_contract: schemas/role_result.schema.json
@@ -90,8 +99,10 @@ roles:
     output_contract: schemas/roles/eval-runner.schema.json
     expected_artifacts:
       - eval_runner.json
+      - step1_evidence.json
     artifact_schemas:
       eval_runner.json: schemas/roles/eval-runner.schema.json
+      step1_evidence.json: schemas/step1_evidence.schema.json
   report-agent:
     prompt_path: .agents/prompts/report-agent.md
     output_contract: schemas/roles/report-agent.schema.json

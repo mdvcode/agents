@@ -1,6 +1,0 @@
-{"time":"2026-07-10T13:32:46Z","agent":"codex","action":"p3.1f-start-cleanup","commit_sha":"","verdict":"planned","checks_passed":false,"project_profile":"agent_workspace"}
-{"time":"2026-07-10T13:37:40Z","agent":"codex","action":"p3.1f-remove-obsolete-project-coupling","commit_sha":"","verdict":"completed","checks_passed":true,"project_profile":"agent_workspace"}
-{"time":"2026-07-10T14:00:00Z","agent":"codex","action":"p3.2-deterministic-routing-and-bounded-repair-loops","commit_sha":"","verdict":"completed","checks_passed":true,"project_profile":"agent_workspace"}
-{"time":"2026-07-12T14:08:18Z","agent":"codex","action":"p4.1-rag-powered-project-memory-retrieval","commit_sha":"","verdict":"completed","checks_passed":true,"project_profile":"agent_workspace"}
-{"time":"2026-07-16T11:27:28Z","agent":"codex","action":"ats-audit-daryna-cv-pdf","commit_sha":"","verdict":"completed","checks_passed":true,"project_profile":"agent_workspace"}
-{"time":"2026-07-16T11:56:29Z","agent":"codex","action":"create-ats-safe-daryna-cv-pdf","commit_sha":"","verdict":"completed","checks_passed":true,"project_profile":"agent_workspace"}

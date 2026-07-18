@@ -8,7 +8,11 @@
     "loops",
     "budgets",
     "role_count",
-    "tokens_used"
+    "tokens_used",
+    "executor",
+    "input_fingerprint",
+    "base_branch_sha_before",
+    "base_branch_sha_after"
   ],
   "enums": {
     "execution_status": ["planned", "running", "completed", "blocked", "failed", "awaiting_approval"]
@@ -22,7 +26,11 @@
     "loops": "dict",
     "budgets": "dict",
     "role_count": "int",
-    "tokens_used": "int"
+    "tokens_used": "int",
+    "executor": "dict",
+    "input_fingerprint": "str",
+    "base_branch_sha_before": "str",
+    "base_branch_sha_after": "str"
   },
   "object_required": {
     "loops": ["quality_repair", "review_repair", "ci_repair"],

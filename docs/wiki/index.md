@@ -12,6 +12,7 @@ Unlike `artifacts/`, this directory is not cleared between tasks. Agents update 
 - `concepts/token-hygiene.md`: how agents avoid wasting context.
 - `entities/agent-workspace.md`: map of this local repository.
 - `decisions/2026-05-19-pdf-agent-system-upgrade.md`: decision record for the PDF-driven upgrade.
+- `decisions/2026-07-18-step1-authoritative-run-state.md`: single-run state, artifact ownership, and Step 1 acceptance contract.
 - `contradictions.md`: claims or practices that need reconciliation.
 
 ## Update Rules

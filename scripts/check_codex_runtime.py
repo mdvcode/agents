@@ -18,7 +18,13 @@ REQUIRED_EXEC_FLAGS = ("--json", "--sandbox", "--output-schema", "--output-last-
 
 
 def configured_codex_base_command(command: str = "") -> list[str]:
-    configured = command or os.environ.get("AGENT_CODEX_CLI_COMMAND", "codex")
+    configured = command or os.environ.get("AGENT_CODEX_CLI_COMMAND", "")
+    if not configured:
+        app_candidates = (
+            Path("/Applications/ChatGPT.app/Contents/Resources/codex"),
+            Path.home() / "Applications/ChatGPT.app/Contents/Resources/codex",
+        )
+        configured = next((str(path) for path in app_candidates if path.is_file()), "codex")
     args = os.environ.get("AGENT_CODEX_CLI_ARGS", "")
     return shlex.split(configured) + shlex.split(args)
 
@@ -131,7 +137,7 @@ def check_codex_runtime(
                         "summary": {"type": "string"},
                     },
                     "required": ["status", "summary"],
-                    "additionalProperties": True,
+                    "additionalProperties": False,
                 }
             ),
             encoding="utf-8",
@@ -140,8 +146,6 @@ def check_codex_runtime(
             "--json",
             "--sandbox",
             sandbox,
-            "--ask-for-approval",
-            "never",
             "--output-schema",
             str(schema),
             "--output-last-message",
@@ -156,7 +160,7 @@ def check_codex_runtime(
         except OSError as exc:
             return result("blocked", [f"Codex CLI exec probe failed: {exc}"], warnings)
         if probe.returncode != 0:
-            output_text = (probe.stderr or probe.stdout).strip()
+            output_text = "\n".join(part.strip() for part in (probe.stdout, probe.stderr) if part.strip())
             return result(
                 "blocked",
                 ["Codex CLI is not available or not authenticated.", output_text or f"exit {probe.returncode}"],

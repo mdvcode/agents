@@ -38,7 +38,7 @@ workflows:
     result = run_workflow.run_workflow("sample", root=tmp_path)
 
     assert result == 0
-    traces = list((tmp_path / ".agent-runs").glob("*/workflow_trace.jsonl"))
+    traces = list((tmp_path / ".agent-runs").glob("*/raw-events/workflow-runner.jsonl"))
     assert len(traces) == 1
     events = [json.loads(line) for line in traces[0].read_text(encoding="utf-8").splitlines()]
     assert events[-1]["event"] == "workflow_completed"
@@ -170,3 +170,42 @@ workflows:
     assert commands == [
         "python3 scripts/agent_role_runner.py --workflow sample --adapter-command custom-adapter"
     ]
+
+
+def test_workflow_runner_deduplicates_completed_task_input(tmp_path: Path, monkeypatch: object) -> None:
+    workflows_path = tmp_path / ".agent-workflows.yaml"
+    workflows_path.write_text(
+        """
+version: 1
+workflows:
+  sample:
+    steps:
+      - name: "must-not-run"
+        command: "false"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    runs = tmp_path / ".agent-runs"
+    completed = runs / "completed"
+    completed.mkdir(parents=True)
+    fingerprint = run_workflow.task_fingerprint(
+        task_id="same-task",
+        goal="same-task",
+        repository=tmp_path,
+        branch="issue/same-task",
+        base_branch="main",
+    )
+    (completed / "workflow.json").write_text(
+        json.dumps(
+            {
+                "run_id": "completed",
+                "input_fingerprint": fingerprint,
+                "execution_status": "completed",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run_workflow, "WORKFLOWS", workflows_path)
+    monkeypatch.setattr(run_workflow, "RUNS_DIR", runs)
+    assert run_workflow.run_workflow("sample", root=tmp_path, task_id="same-task") == 0
+    assert sorted(path.name for path in runs.iterdir()) == ["completed"]
