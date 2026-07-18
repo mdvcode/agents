@@ -75,6 +75,20 @@ def verdict_payload(**overrides: Any) -> dict[str, Any]:
     return data
 
 
+def test_issue_intake_contract_is_explicitly_non_llm_harness_stage() -> None:
+    contracts, errors = validator.load_yaml(
+        Path(__file__).resolve().parents[1] / ".agent-role-contracts.yaml",
+        ".agent-role-contracts.yaml",
+    )
+
+    assert errors == []
+    assert validator.validate_role_execution_contracts(contracts) == []
+    contracts["roles"]["issue-intake"]["llm_invocation"] = True
+    assert validator.validate_role_execution_contracts(contracts) == [
+        ".agent-role-contracts.yaml: issue-intake must set llm_invocation=false"
+    ]
+
+
 def policy_payload(branch_prefixes: list[str] | None = None) -> dict[str, Any]:
     allowed = branch_prefixes or ["feat/", "fix/", "issue/", "tast/"]
     publication = {
@@ -174,6 +188,21 @@ def test_repository_registry_requires_trusted_branch_prefixes() -> None:
     assert validator.validate_registry_data(registry) == []
     registry["repositories"]["nextjs_web"]["allowed_branch_prefixes"] = ["feat/", "fix/", "issue/", "legacy/"]
     assert any("allowed_branch_prefixes" in error for error in validator.validate_registry_data(registry))
+
+
+def test_repository_tool_policy_covers_role_capabilities_and_verifiers() -> None:
+    policy, policy_errors = validator.load_yaml(
+        validator.AGENT_TOOL_POLICY,
+        ".agent-tool-policy.yaml",
+    )
+    capabilities, capability_errors = validator.load_yaml(
+        validator.AGENT_ROLE_CAPABILITIES,
+        ".agent-role-capabilities.yaml",
+    )
+
+    assert policy_errors + capability_errors == []
+    assert validator.validate_tool_policy_data(policy, capabilities) == []
+    assert validator.validate_verifier_contracts() == []
 
 
 def test_high_with_open_pr_true_fails() -> None:

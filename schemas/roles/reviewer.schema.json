@@ -3,6 +3,12 @@
     "required": ["status", "next_action", "summary", "artifacts_created", "blockers", "warnings", "tokens_used"],
     "enums": {"status": ["completed", "blocked", "failed", "awaiting_approval"]},
     "types": {
+      "verdict": "str",
+      "expected": "list",
+      "observed": "list",
+      "evidence": "list",
+      "blockers": "list",
+      "repair_required": "bool",
       "status": "str",
       "next_action": "str",
       "summary": "str",
@@ -14,8 +20,9 @@
     }
   },
   "artifact": {
-    "required": ["status", "project_profile", "findings", "blocker_ids", "policy_violations", "known_lesson_conflicts", "warnings"],
+    "required": ["verdict", "expected", "observed", "evidence", "blockers", "repair_required", "status", "project_profile", "findings", "blocker_ids", "policy_violations", "known_lesson_conflicts", "warnings"],
     "enums": {
+      "verdict": ["works", "broken", "unavailable"],
       "status": ["pass", "block"],
       "project_profile": ["agent_workspace", "django", "nextjs_web"]
     },

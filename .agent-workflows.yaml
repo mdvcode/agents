@@ -1,10 +1,10 @@
 version: 1
 workflows:
   full_agent_workflow:
-    description: "Run the full agent-role chain with one run id, task worktree, scoped context manifests, strict role results, and safe publication routing."
+    description: "Run deterministic harness stages and the agent-role chain with one run id, task worktree, scoped context manifests, strict role results, and safe publication routing."
     budgets:
       max_roles: 40
-      max_repair_iterations: 3
+      max_repair_iterations: 12
       max_duration_seconds: 7200
       max_tokens: 300000
     adapter_command: "python3 scripts/adapters/codex_cli_executor.py"
@@ -22,7 +22,7 @@ workflows:
     description: "Validate, stage an allowlisted change set, commit, push, and create or update a PR when policy gates allow it."
     budgets:
       max_roles: 40
-      max_repair_iterations: 3
+      max_repair_iterations: 12
       max_duration_seconds: 7200
       max_tokens: 300000
     executor: "python3 scripts/publish_pr.py --run-id {run_id} --artifacts-dir {artifacts_dir}"
@@ -77,6 +77,8 @@ workflows:
           - "invalid artifacts"
           - "destructive or policy-denied action"
     mutation_rules:
+      - "Commit, push, and create or update the PR from the exact task worktree and branch recorded in workflow.json."
+      - "Never create a second publication-only worktree or copy changes between unrelated checkouts."
       - "Never use git add -A."
       - "Stage only paths listed in artifacts/change_set.json include and not matched by exclude."
       - "Block if any pre-existing staged file is outside the selected change set."

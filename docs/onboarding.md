@@ -45,6 +45,12 @@ make codex-smoke
 
 After smoke, Step 1 acceptance requires `make step1-verify RUN_ID=<evidence-run-id> STEP1_MANIFEST=<run-id-list-file>` against 10-20 real task runs.
 
+## Concurrent Workflow Gate
+
+Before starting workers, validate `.agent-routing.yaml`, `.agent-tool-policy.yaml`, and role contracts with `make validate-artifacts`. Enqueue idempotent task keys with `scripts/task_queue.py`, run 2–3 workers with `make queue-worker`, and inspect only exceptions with `make list-exceptions` or `scripts/list_runs.py` filters.
+
+Step 2 acceptance requires `make step2-verify RUN_ID=<evidence-run-id> QUEUE_DB=<queue.db>`. The evidence must come from real Codex runs and include concurrent workers, isolated worktrees, governed tools, independent verification, a PR, and a human exception.
+
 ## Handoff Rules
 - If implementation is incomplete, leave a concrete blocker in the current run's `artifacts/report.md` and `errors.jsonl`.
 - If checks fail because of the repository baseline, separate baseline failures from task-specific failures.

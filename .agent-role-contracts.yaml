@@ -4,15 +4,22 @@ default:
   output_contract: schemas/role_result.schema.json
   expected_artifacts: []
   artifact_schemas: {}
+  owned_artifact_patterns: []
+  execution_kind: llm_role
+  llm_invocation: true
 roles:
   issue-intake:
     prompt_path: ""
     output_contract: schemas/role_result.schema.json
+    execution_kind: harness_stage
+    llm_invocation: false
     expected_artifacts:
       - issue.json
   context-compiler:
     prompt_path: .agents/prompts/context-compiler.md
     output_contract: schemas/role_result.schema.json
+    execution_kind: harness_stage
+    llm_invocation: false
     expected_artifacts: []
   planner:
     prompt_path: .agents/prompts/planner.md
@@ -61,6 +68,8 @@ roles:
       - frontend_qa.json
     artifact_schemas:
       frontend_qa.json: schemas/roles/frontend-qa-agent.schema.json
+    owned_artifact_patterns:
+      - frontend-evidence/**
   architecture-consistency-agent:
     prompt_path: .agents/prompts/architecture-consistency-agent.md
     output_contract: schemas/roles/architecture-consistency.schema.json
@@ -100,9 +109,11 @@ roles:
     expected_artifacts:
       - eval_runner.json
       - step1_evidence.json
+      - step2_evidence.json
     artifact_schemas:
       eval_runner.json: schemas/roles/eval-runner.schema.json
       step1_evidence.json: schemas/step1_evidence.schema.json
+      step2_evidence.json: schemas/step2_evidence.schema.json
   report-agent:
     prompt_path: .agents/prompts/report-agent.md
     output_contract: schemas/roles/report-agent.schema.json
@@ -111,6 +122,8 @@ roles:
   publication-prepare:
     prompt_path: ""
     output_contract: schemas/role_result.schema.json
+    execution_kind: harness_stage
+    llm_invocation: false
     expected_artifacts:
       - change_set.json
       - publication_payload.json
@@ -120,6 +133,8 @@ roles:
   publication:
     prompt_path: ""
     output_contract: schemas/role_result.schema.json
+    execution_kind: tool_stage
+    llm_invocation: false
     expected_artifacts:
       - publication.json
     artifact_schemas:

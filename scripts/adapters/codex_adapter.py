@@ -78,12 +78,25 @@ def validate_json_schema_object(data: dict[str, Any], schema: dict[str, Any], la
     for field, spec in properties.items():
         if field not in data or not isinstance(spec, dict):
             continue
-        type_name = spec.get("type")
-        expected = type_map.get(type_name)
-        if expected is not None and not isinstance(data[field], expected):
+        type_value = spec.get("type")
+        type_names = type_value if isinstance(type_value, list) else [type_value]
+        expected_types: tuple[type, ...] = ()
+        for type_name in type_names:
+            if type_name == "null":
+                expected_types += (type(None),)
+                continue
+            mapped = type_map.get(type_name) if isinstance(type_name, str) else None
+            if isinstance(mapped, tuple):
+                expected_types += mapped
+            elif isinstance(mapped, type):
+                expected_types += (mapped,)
+        if expected_types and not isinstance(data[field], expected_types):
             errors.append(
-                f"{label}: field {field!r} must be {type_name}, got {type(data[field]).__name__}"
+                f"{label}: field {field!r} must be {type_value}, got {type(data[field]).__name__}"
             )
+            continue
+        if isinstance(data[field], dict) and "object" in type_names:
+            errors.extend(validate_json_schema_object(data[field], spec, f"{label}.{field}"))
         allowed = spec.get("enum")
         if isinstance(allowed, list) and data[field] not in allowed:
             errors.append(f"{label}: field {field!r} has invalid value {data[field]!r}")

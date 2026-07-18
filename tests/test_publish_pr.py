@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -223,6 +224,7 @@ def init_repo(tmp_path: Path) -> tuple[Path, Path, str]:
     git(repo, "branch", "-M", "main")
     git(repo, "push", "-u", "origin", "main")
     main_sha = git(repo, "rev-parse", "main")
+    git(repo, "checkout", "-b", "feat/step1-task")
     (repo / "allowed.txt").write_text("new\n", encoding="utf-8")
     return remote, repo, main_sha
 
@@ -258,8 +260,9 @@ exit 1
     monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ["PATH"])
 
 
-def prepare_root(root: Path, remote: Path) -> Path:
+def prepare_root(root: Path, remote: Path, task_worktree: Path) -> Path:
     artifacts = run_artifacts(root)
+    shutil.copy2(Path(__file__).resolve().parents[1] / ".agent-tool-policy.yaml", root / ".agent-tool-policy.yaml")
     scripts = root / "scripts"
     scripts.mkdir(parents=True)
     (scripts / "validate_artifacts.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
@@ -323,7 +326,14 @@ repositories:
     write_json(
         artifacts / "security.json",
         {
+            "verdict": "works",
+            "expected": [],
+            "observed": [],
+            "evidence": [],
+            "blockers": [],
+            "repair_required": False,
             "status": "pass",
+            "highest_severity": "none",
             "project_profile": "agent_workspace",
             "findings": [],
             "blocker_ids": [],
@@ -335,6 +345,12 @@ repositories:
     write_json(
         artifacts / "review.json",
         {
+            "verdict": "works",
+            "expected": [],
+            "observed": [],
+            "evidence": [],
+            "blockers": [],
+            "repair_required": False,
             "status": "pass",
             "project_profile": "agent_workspace",
             "findings": [],
@@ -383,6 +399,8 @@ repositories:
         {
             "run_id": "run-test",
             "execution_status": "running",
+            "worktree": str(task_worktree.resolve()),
+            "branch": "feat/step1-task",
             "roles": [
                 {"role": role, "result": {"status": "completed"}}
                 for role in required_roles
@@ -420,7 +438,7 @@ def test_end_to_end_publication_is_idempotent_and_never_commits_main(
     remote, repo, main_sha = init_repo(tmp_path)
     install_fake_gh(tmp_path, monkeypatch)
     root = tmp_path / "control"
-    artifacts = prepare_root(root, remote)
+    artifacts = prepare_root(root, remote, repo)
     publisher = publisher_for(root)
 
     first = publisher.publish(repo_override=repo)
@@ -428,16 +446,18 @@ def test_end_to_end_publication_is_idempotent_and_never_commits_main(
     second = publisher_for(root).publish(repo_override=repo)
 
     assert first.execution_status == "completed"
+    assert first.worktree == str(repo.resolve())
     assert first.pr_created_or_updated is True
     assert first.pr_url == "https://example.test/pr/1"
     assert git(repo, "rev-parse", "main") == main_sha
     assert git(repo, "rev-parse", "origin/main") == main_sha
-    assert second.execution_status == "completed"
+    assert second.execution_status == "completed", second.errors
     assert "publication already completed; no-op" in second.warnings
     assert (artifacts / "verdict.json").read_bytes() == verdict_after_first
     assert (artifacts / "publication.json").exists()
     assert not (root / "artifacts").exists()
     assert not (artifacts.parent / "publication.json").exists()
+    assert not (root / ".agent-worktrees").exists()
     assert (artifacts.parent / "audit-log.jsonl").exists()
 
 
@@ -447,3 +467,27 @@ def test_default_and_protected_branch_names_are_blocked(tmp_path: Path) -> None:
         "main", "main", publication, ["feat/", "issue/"]
     )
     assert any("protected branch" in error for error in publication.errors)
+
+
+def test_publication_rejects_a_worktree_unrelated_to_workflow_state(tmp_path: Path) -> None:
+    expected = tmp_path / "expected"
+    unrelated = tmp_path / "unrelated"
+    for repo in (expected, unrelated):
+        repo.mkdir()
+        git(repo, "init")
+        git(repo, "config", "user.name", "Test")
+        git(repo, "config", "user.email", "test@example.com")
+        (repo / "file.txt").write_text("x\n", encoding="utf-8")
+        git(repo, "add", "file.txt")
+        git(repo, "commit", "-m", "initial")
+        git(repo, "checkout", "-b", "feat/task")
+    publisher = publisher_for(tmp_path)
+    write_json(
+        publisher.artifacts.parent / "workflow.json",
+        {"worktree": str(expected), "branch": "feat/task", "roles": []},
+    )
+    publication = publish_pr.PublicationResult(branch="feat/task")
+
+    publisher.authoritative_task_worktree(unrelated, publication)
+
+    assert any("original task worktree" in error for error in publication.errors)

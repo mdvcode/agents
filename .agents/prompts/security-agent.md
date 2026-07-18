@@ -38,7 +38,10 @@ Do not run Django-specific tools for web projects unless the repository actually
 - SSRF patterns where applicable
 
 ## Required `security.json` fields
+- `verdict`: `works`, `broken`, or `unavailable`
+- `expected`, `observed`, `evidence`, `blockers`, `repair_required`
 - `status`: `pass`, `warn`, or `fail`
+- `highest_severity`: `none`, `low`, `medium`, `high`, or `critical`
 - `project_profile`
 - `findings`: structured finding objects or strings
 - `blocker_ids`: stable identifiers for confirmed blockers
@@ -49,3 +52,4 @@ Do not run Django-specific tools for web projects unless the repository actually
 ## Rules
 - Highlight auth, permissions, session logic, secret files, and production settings as elevated risk.
 - Distinguish between confirmed findings, tool failures, and unverified assumptions.
+- Use `critical` only for an immediately unsafe condition that must stop the workflow. `medium` and `high` findings require human approval; they do not become an automatic hard block.

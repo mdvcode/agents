@@ -129,3 +129,9 @@ profiles:
         - "notes"
       allow_pr_if_evidence_unavailable: true
       unavailable_evidence_requires_warning: true
+      dev_command: "bun run dev"
+      local_url: "http://127.0.0.1:3000"
+      network_scope:
+        - localhost
+        - 127.0.0.1
+        - "::1"

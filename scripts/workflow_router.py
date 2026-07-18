@@ -22,16 +22,18 @@ ROLE_CONTRACTS_CONFIG = ROOT / ".agent-role-contracts.yaml"
 REPOSITORIES_CONFIG = ROOT / ".agent-repositories.yaml"
 DEFAULT_BUDGETS = {
     "max_roles": 40,
-    "max_repair_iterations": 3,
+    "max_repair_iterations": 12,
     "max_duration_seconds": 7200,
     "max_tokens": 300000,
 }
 LOOP_DEFAULTS = {
-    "quality_repair": {"from": "quality-runner", "to": "implementation-agent", "max_iterations": 3},
-    "review_repair": {"from": "reviewer", "to": "implementation-agent", "max_iterations": 3},
-    "ci_repair": {"from": "ci-repair-agent", "to": "quality-runner", "max_iterations": 3},
+    "quality_repair": {"from": "quality-runner", "to": "implementation-agent", "max_iterations": 3, "max_tokens": 60000, "max_duration_seconds": 1800},
+    "review_repair": {"from": "reviewer", "to": "implementation-agent", "max_iterations": 3, "max_tokens": 60000, "max_duration_seconds": 1800},
+    "ci_repair": {"from": "ci-repair-agent", "to": "quality-runner", "max_iterations": 3, "max_tokens": 60000, "max_duration_seconds": 1800},
+    "frontend_verification_repair": {"from": "frontend-qa-agent", "to": "implementation-agent", "max_iterations": 3, "max_tokens": 60000, "max_duration_seconds": 1800},
 }
 UI_AREAS = {"ui", "routing", "public_rendering", "dashboard_ui", "user_visible_behavior"}
+SECURITY_SEVERITY_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 CODE_EXTENSIONS = {
     ".c",
     ".cpp",
@@ -71,7 +73,7 @@ def load_json(path: Path) -> Any:
 def load_workflow_state(run_dir: Path, workflow_state: dict[str, Any] | None) -> dict[str, Any]:
     if workflow_state is not None:
         return workflow_state
-    data = load_json(run_dir / "agent_workflow.json")
+    data = load_json(run_dir / "workflow.json")
     return data if isinstance(data, dict) else {}
 
 
@@ -189,14 +191,52 @@ def _blocker_values(value: Any) -> list[str]:
     return _list_values(value)
 
 
-def security_blockers(state: dict[str, Any], artifacts_dir: Path) -> list[str]:
+def security_severity(state: dict[str, Any], artifacts_dir: Path) -> str:
+    values: list[str] = []
     if state.get("security_blockers_present") is True:
-        return ["security_blockers_present"]
+        values.append("critical")
+    explicit = state.get("security_highest_severity")
+    if isinstance(explicit, str):
+        values.append(explicit.lower())
+    security_json = _artifact(artifacts_dir, "security.json")
+    if isinstance(security_json, dict):
+        highest = security_json.get("highest_severity")
+        if isinstance(highest, str):
+            values.append(highest.lower())
+        findings = security_json.get("findings", [])
+        if isinstance(findings, list):
+            values.extend(
+                str(finding.get("severity", "")).lower()
+                for finding in findings
+                if isinstance(finding, dict)
+            )
+    recognized = [value for value in values if value in SECURITY_SEVERITY_RANK]
+    if recognized:
+        return max(recognized, key=SECURITY_SEVERITY_RANK.__getitem__)
+    if isinstance(security_json, dict) and (
+        security_json.get("status") in {"fail", "blocked"}
+        or security_json.get("verdict") == "broken"
+    ):
+        return "critical"
+    return "none"
+
+
+def security_blockers(state: dict[str, Any], artifacts_dir: Path) -> list[str]:
+    severity = security_severity(state, artifacts_dir)
     security_json = _artifact(artifacts_dir, "security.json")
     if isinstance(security_json, dict):
         blockers = _blocker_values(security_json)
-        if blockers or security_json.get("status") in {"fail", "blocked"}:
+        severity_requires_stop = (
+            SECURITY_SEVERITY_RANK[severity] >= SECURITY_SEVERITY_RANK["medium"]
+        )
+        artifact_failed = (
+            security_json.get("status") in {"fail", "blocked"}
+            or security_json.get("verdict") == "broken"
+        )
+        if blockers or severity_requires_stop or artifact_failed:
             return blockers or ["security artifact is blocked"]
+    if state.get("security_blockers_present") is True:
+        return ["security_blockers_present"]
     for entry in _role_entries(state):
         if entry.get("role") != "security-agent":
             continue
@@ -234,9 +274,10 @@ def quality_status(state: dict[str, Any], artifacts_dir: Path) -> str:
 def review_status(state: dict[str, Any], artifacts_dir: Path) -> str:
     review = _artifact(artifacts_dir, "review.json")
     if isinstance(review, dict):
-        value = review.get("status") or review.get("review_status") or review.get("decision")
+        value = review.get("verdict") or review.get("status") or review.get("review_status") or review.get("decision")
         if isinstance(value, str):
-            return value.lower()
+            normalized = value.lower()
+            return "block" if normalized == "broken" else normalized
         if _blocker_values(review):
             return "block"
     if isinstance(state.get("review_status"), str):
@@ -256,6 +297,21 @@ def ci_status(state: dict[str, Any], artifacts_dir: Path) -> str:
                 return value.lower()
             if source.get("ci_failed") is True:
                 return "fail"
+    return ""
+
+
+def verifier_verdict(artifacts_dir: Path, artifact_name: str) -> str:
+    artifact = _artifact(artifacts_dir, artifact_name)
+    if not isinstance(artifact, dict):
+        return ""
+    verdict = artifact.get("verdict")
+    if isinstance(verdict, str):
+        return verdict.lower()
+    if artifact_name == "frontend_qa.json":
+        if artifact.get("evidence_collected") is True:
+            return "works"
+        if artifact.get("evidence_required") is True:
+            return "unavailable"
     return ""
 
 
@@ -317,7 +373,6 @@ def failure_fingerprint(
         "review_blocker_ids": _blocker_values(review) or _blocker_values(_role_result(state, "reviewer")),
         "security_blocker_ids": _blocker_values(security) or security_blockers(state, artifacts_dir),
         "changed_files": changed_files(state, artifacts_dir),
-        "diff_hash": diff_hash(state, artifacts_dir),
     }
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -328,6 +383,7 @@ def _loop_config(name: str, routing: dict[str, Any]) -> dict[str, Any]:
         "quality_repair": "quality_failed",
         "review_repair": "review_blocked",
         "ci_repair": "ci_failed",
+        "frontend_verification_repair": "frontend_verification_failed",
     }[name]
     configured = routing.get("routing", {}).get(routing_key, {}) if isinstance(routing.get("routing"), dict) else {}
     loop = configured.get("loop", {}) if isinstance(configured, dict) else {}
@@ -337,6 +393,8 @@ def _loop_config(name: str, routing: dict[str, Any]) -> dict[str, Any]:
         "from": str(loop.get("from", default["from"])),
         "to": str(loop.get("to", default["to"])),
         "max_iterations": int(loop.get("max_iterations", default["max_iterations"])),
+        "max_tokens": int(loop.get("max_tokens", default["max_tokens"])),
+        "max_duration_seconds": int(loop.get("max_duration_seconds", default["max_duration_seconds"])),
     }
 
 
@@ -419,26 +477,31 @@ def _approval(reason: str, warnings: list[str] | None = None) -> dict[str, Any]:
     return _route("approval-gate", reason, stop=True, warnings=warnings)
 
 
-def _missing_required_gates(state: dict[str, Any], artifacts_dir: Path, current_role: str) -> list[str]:
+def _blocked(reason: str, warnings: list[str] | None = None) -> dict[str, Any]:
+    return _route("blocked", reason, stop=True, warnings=warnings)
+
+
+def required_gate_roles(state: dict[str, Any], artifacts_dir: Path) -> list[str]:
     routing = load_yaml(ROUTING_CONFIG)
-    required = routing.get("required_before_publication", [])
-    if not isinstance(required, list):
-        required = []
+    configured = routing.get("required_before_publication", [])
+    required = [str(role) for role in configured if isinstance(role, str)] if isinstance(configured, list) else []
+    optional: list[str] = []
+    if ui_changed(state, artifacts_dir):
+        optional.append("frontend-qa-agent")
+    if code_changed(state, artifacts_dir):
+        optional.extend(["architecture-consistency-agent", "semantic-conflict-agent"])
+    insert_at = required.index("reviewer") if "reviewer" in required else len(required)
+    for role in optional:
+        if role not in required:
+            required.insert(insert_at, role)
+            insert_at += 1
+    return required
+
+
+def _missing_required_gates(state: dict[str, Any], artifacts_dir: Path, current_role: str) -> list[str]:
+    required = required_gate_roles(state, artifacts_dir)
     completed = completed_roles(state)
     missing: list[str] = []
-    artifact_map = {
-        "issue-intake": ("issue.json",),
-        "context-compiler": (),
-        "planner": ("plan.md", "project_profile.json"),
-        "risk-classifier": ("risk.json",),
-        "implementation-agent": ("implementation.json",),
-        "test-generator": ("test_plan.json", "test_result.json"),
-        "quality-runner": ("quality.json",),
-        "security-agent": ("security.json",),
-        "reviewer": ("review.json",),
-        "orchestrator": ("verdict.json",),
-        "publication-prepare": ("change_set.json", "publication_payload.json"),
-    }
     for role in required:
         if role == "publication-prepare" and current_role != "publication-prepare":
             continue
@@ -456,19 +519,22 @@ def _invalid_required_gates(state: dict[str, Any], artifacts_dir: Path, current_
         "risk-classifier": ("risk.json", ROOT / "schemas" / "risk.schema.json"),
         "quality-runner": ("quality.json", ROOT / "schemas" / "quality.schema.json"),
         "security-agent": ("security.json", ROOT / "schemas" / "security.schema.json"),
+        "frontend-qa-agent": ("frontend_qa.json", ROOT / "schemas" / "roles" / "frontend-qa-agent.schema.json"),
+        "architecture-consistency-agent": ("architecture_consistency.json", ROOT / "schemas" / "roles" / "architecture-consistency.schema.json"),
+        "semantic-conflict-agent": ("semantic_conflict.json", ROOT / "schemas" / "roles" / "semantic-conflict.schema.json"),
         "reviewer": ("review.json", ROOT / "schemas" / "review.schema.json"),
         "orchestrator": ("verdict.json", ROOT / "schemas" / "verdict.schema.json"),
         "publication-prepare": ("change_set.json", ROOT / "schemas" / "change_set.schema.json"),
     }
     plain_artifacts = {
+        "issue-intake": ("issue.json",),
         "planner": ("plan.md",),
+        "implementation-agent": ("implementation.json",),
+        "test-generator": ("test_plan.json", "test_result.json"),
         "publication-prepare": ("publication_payload.json",),
     }
     invalid: list[str] = []
-    routing = load_yaml(ROUTING_CONFIG)
-    required = routing.get("required_before_publication", [])
-    if not isinstance(required, list):
-        return invalid
+    required = required_gate_roles(state, artifacts_dir)
     from adapters.codex_adapter import contract_section
     from validate_artifacts import validate_required
 
@@ -490,6 +556,15 @@ def _invalid_required_gates(state: dict[str, Any], artifacts_dir: Path, current_
             else:
                 errors = validate_required(value, contract_section(schema, "artifact"), artifact_name)
                 if errors:
+                    invalid.append(role_name)
+                if role_name in {
+                    "security-agent",
+                    "architecture-consistency-agent",
+                    "semantic-conflict-agent",
+                    "reviewer",
+                } and value.get("verdict") != "works":
+                    invalid.append(role_name)
+                if role_name == "frontend-qa-agent" and value.get("verdict") not in {"works", "unavailable"}:
                     invalid.append(role_name)
         for artifact_name in plain_artifacts.get(role_name, ()):
             path = artifacts_dir / artifact_name
@@ -515,6 +590,12 @@ def _repair_route(
     iteration = int(previous.get("iterations", 0)) + 1
     fingerprint = failure_fingerprint(role_result=role_result, state=state, artifacts_dir=artifacts_dir)
     current_diff = diff_hash(state, artifacts_dir)
+    total_tokens = int(state.get("tokens_used", 0) or 0)
+    elapsed = _elapsed_seconds(state)
+    tokens_at_start = int(previous.get("tokens_at_start", total_tokens) or 0)
+    elapsed_at_start = float(previous.get("elapsed_at_start", elapsed) or 0)
+    loop_tokens = max(0, total_tokens - tokens_at_start)
+    loop_elapsed = max(0, int(elapsed - elapsed_at_start))
     progress = not (
         previous.get("last_failure_fingerprint") == fingerprint
         and previous.get("last_diff_fingerprint") == current_diff
@@ -524,7 +605,10 @@ def _repair_route(
         "iteration": iteration,
         "max_iterations": config["max_iterations"],
         "failure_fingerprint": fingerprint,
+        "diff_fingerprint": current_diff,
         "progress_detected": progress,
+        "tokens_used": loop_tokens,
+        "elapsed_seconds": loop_elapsed,
     }
     loops[name] = {
         "iterations": iteration,
@@ -532,11 +616,24 @@ def _repair_route(
         "last_failure_fingerprint": fingerprint,
         "last_diff_fingerprint": current_diff,
         "progress_detected": progress,
+        "tokens_at_start": tokens_at_start,
+        "elapsed_at_start": elapsed_at_start,
+        "tokens_used": loop_tokens,
+        "elapsed_seconds": loop_elapsed,
     }
-    if iteration >= config["max_iterations"] or not progress:
+    exhausted = (
+        iteration >= config["max_iterations"]
+        or loop_tokens >= config["max_tokens"]
+        or loop_elapsed >= config["max_duration_seconds"]
+    )
+    if exhausted or not progress:
         return _approval(
-            f"{config['name']} stopped after a repeated failure without sufficient progress.",
-            [f"{config['name']} iteration {iteration} of {config['max_iterations']}"],
+            f"{config['name']} stopped after a repeated failure or loop budget exhaustion.",
+            [
+                f"{config['name']} iteration {iteration} of {config['max_iterations']}",
+                f"tokens {loop_tokens} of {config['max_tokens']}",
+                f"seconds {loop_elapsed} of {config['max_duration_seconds']}",
+            ],
         ) | {"loop": loop}
     return _route(
         config["to"],
@@ -569,14 +666,21 @@ def decide_next_role(
     if advisory and advisory not in {"continue", current_role}:
         warnings.append(f"Ignored advisory next_action={advisory!r}; deterministic routing is authoritative.")
 
+    security = security_blockers(state, artifacts_dir)
+    severity = security_severity(state, artifacts_dir)
+    if security and severity == "critical":
+        return _blocked("A CRITICAL security finding blocks the workflow.", warnings + security)
+
     risk = _artifact(artifacts_dir, "risk.json")
     risk_class = risk.get("risk_class") if isinstance(risk, dict) else state.get("risk_class")
     if risk_class == "high":
         return _approval("Risk class is HIGH. Publication is not allowed without human approval.", warnings)
 
-    security = security_blockers(state, artifacts_dir)
     if security:
-        return _approval("Security blockers are present. Publication is stopped pending human approval.", warnings + security)
+        return _approval(
+            f"A {severity.upper()} security finding requires human approval.",
+            warnings + security,
+        )
 
     budget_blockers = _budget_blockers(state, workflows)
     if budget_blockers:
@@ -603,6 +707,43 @@ def decide_next_role(
             if after_loop_budget:
                 return _approval("Workflow repair budget exceeded; execution is awaiting approval.", after_loop_budget) | {"loop": route.get("loop")}
         return route
+    if current_role == "frontend-qa-agent":
+        frontend_verdict = verifier_verdict(artifacts_dir, "frontend_qa.json")
+        if frontend_verdict == "broken":
+            route = _repair_route(
+                "frontend_verification_repair",
+                state=state,
+                role_result=result,
+                artifacts_dir=artifacts_dir,
+                routing=routing,
+            )
+            if not route["stop"]:
+                after_loop_budget = _budget_blockers(state, workflows)
+                if after_loop_budget:
+                    return _approval(
+                        "Frontend repair budget exceeded; execution is awaiting approval.",
+                        after_loop_budget,
+                    ) | {"loop": route.get("loop")}
+            return route
+        if frontend_verdict == "unavailable":
+            warnings.append("Frontend verification is unavailable; any publication must remain draft.")
+    if current_role in {"architecture-consistency-agent", "semantic-conflict-agent"}:
+        artifact_name = (
+            "architecture_consistency.json"
+            if current_role == "architecture-consistency-agent"
+            else "semantic_conflict.json"
+        )
+        verification = verifier_verdict(artifacts_dir, artifact_name)
+        if verification == "broken":
+            return _repair_route(
+                "review_repair",
+                state=state,
+                role_result=result,
+                artifacts_dir=artifacts_dir,
+                routing=routing,
+            )
+        if verification == "unavailable":
+            return _approval(f"{current_role} is unavailable; independent code verification is required.", warnings)
     if current_role == "ci-repair-agent":
         return _route("quality-runner", "CI repair completed; quality must be re-run.", warnings=warnings)
 
@@ -672,7 +813,9 @@ def decide_next_role(
             return _approval("Publication requires LOW or MEDIUM risk.", warnings)
         visual_required = ui
         visual = _artifact(artifacts_dir, "frontend_qa.json")
-        visual_present = isinstance(visual, dict) and visual.get("evidence_collected") is True
+        visual_present = isinstance(visual, dict) and (
+            visual.get("verdict") == "works" or visual.get("evidence_collected") is True
+        )
         if visual_required and not visual_present:
             warnings.append("Frontend evidence is missing; publication may proceed only as a draft.")
         next_role, reason = "publication", "LOW/MEDIUM risk and all required gates passed."
@@ -693,6 +836,7 @@ __all__ = [
     "diff_hash",
     "failure_fingerprint",
     "load_yaml",
+    "required_gate_roles",
     "security_blockers",
     "ui_changed",
     "workflow_blockers",

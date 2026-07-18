@@ -33,7 +33,7 @@
     "base_branch_sha_after": "str"
   },
   "object_required": {
-    "loops": ["quality_repair", "review_repair", "ci_repair"],
+    "loops": ["quality_repair", "review_repair", "ci_repair", "frontend_verification_repair"],
     "budgets": ["max_roles", "max_repair_iterations", "max_duration_seconds", "max_tokens"]
   },
   "additionalProperties": false

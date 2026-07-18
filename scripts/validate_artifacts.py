@@ -28,6 +28,8 @@ AGENT_ROUTING = ROOT / ".agent-routing.yaml"
 AGENT_REPOSITORIES = ROOT / ".agent-repositories.yaml"
 AGENT_ROLE_CONTRACTS = ROOT / ".agent-role-contracts.yaml"
 AGENT_ARTIFACT_OWNERS = ROOT / ".agent-artifact-owners.yaml"
+AGENT_ROLE_CAPABILITIES = ROOT / ".agent-role-capabilities.yaml"
+AGENT_TOOL_POLICY = ROOT / ".agent-tool-policy.yaml"
 DEPRECATED_COMBINED_PUBLICATION_KEY = "commit" + "_push"
 JSON_ARTIFACTS = {
     "risk": (ARTIFACTS / "risk.json", SCHEMAS / "risk.schema.json"),
@@ -314,6 +316,96 @@ def validate_policy_file(path: Path = POLICY) -> list[str]:
     return validate_policy_data(policy)
 
 
+def validate_tool_policy_data(policy: Any, capabilities: Any) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(policy, dict) or policy.get("version") != 1:
+        return [".agent-tool-policy.yaml: version must be 1"]
+    tools = policy.get("tools")
+    if not isinstance(tools, dict) or not tools:
+        return [".agent-tool-policy.yaml: tools must be a non-empty object"]
+    for name, rule in tools.items():
+        if not isinstance(rule, dict):
+            errors.append(f".agent-tool-policy.yaml: tool {name!r} must be an object")
+            continue
+        for field in ("roles", "allowed", "side_effects", "timeout_seconds"):
+            if field not in rule:
+                errors.append(f".agent-tool-policy.yaml: tool {name!r} missing {field!r}")
+        if not isinstance(rule.get("timeout_seconds"), int) or int(rule.get("timeout_seconds", 0)) <= 0:
+            errors.append(f".agent-tool-policy.yaml: tool {name!r} timeout_seconds must be positive")
+    github = tools.get("github", {})
+    if isinstance(github, dict):
+        forbidden = github.get("forbidden", [])
+        for action in ("merge", "force_push"):
+            if action not in forbidden:
+                errors.append(f".agent-tool-policy.yaml: github must forbid {action}")
+    playwright = tools.get("playwright", {})
+    if isinstance(playwright, dict):
+        domains = playwright.get("network_domains", [])
+        if sorted(domains) != sorted(["localhost", "127.0.0.1", "::1"]):
+            errors.append(".agent-tool-policy.yaml: playwright network scope must be loopback-only")
+    shell = tools.get("shell", {})
+    if isinstance(shell, dict):
+        if shell.get("command_source") != "project_profile":
+            errors.append(".agent-tool-policy.yaml: shell command_source must be project_profile")
+        if "arbitrary_network" not in shell.get("forbidden", []):
+            errors.append(".agent-tool-policy.yaml: shell must forbid arbitrary_network")
+    roles = capabilities.get("roles", {}) if isinstance(capabilities, dict) else {}
+    if not isinstance(roles, dict):
+        return errors + [".agent-role-capabilities.yaml: roles must be an object"]
+    for role, capability in roles.items():
+        if not isinstance(capability, dict):
+            continue
+        for tool in capability.get("tools", []):
+            rule = tools.get(tool)
+            if not isinstance(rule, dict):
+                errors.append(f".agent-role-capabilities.yaml: {role} uses undeclared tool {tool}")
+            elif role not in rule.get("roles", []):
+                errors.append(f".agent-tool-policy.yaml: {role} is missing from roles for {tool}")
+    return errors
+
+
+def validate_verifier_contracts() -> list[str]:
+    common = load_json(SCHEMAS / "verifier_artifact.schema.json")
+    required = set(common.get("required", [])) if isinstance(common, dict) else set()
+    role_schemas = {
+        "security-agent": SCHEMAS / "roles" / "security-agent.schema.json",
+        "frontend-qa-agent": SCHEMAS / "roles" / "frontend-qa-agent.schema.json",
+        "architecture-consistency-agent": SCHEMAS / "roles" / "architecture-consistency.schema.json",
+        "semantic-conflict-agent": SCHEMAS / "roles" / "semantic-conflict.schema.json",
+        "reviewer": SCHEMAS / "roles" / "reviewer.schema.json",
+    }
+    errors: list[str] = []
+    for role, path in role_schemas.items():
+        schema = load_json(path)
+        artifact = schema.get("artifact", {}) if isinstance(schema, dict) else {}
+        missing = required - set(artifact.get("required", [])) if isinstance(artifact, dict) else required
+        if missing:
+            errors.append(f"{role}: verifier artifact contract missing {sorted(missing)}")
+        enums = artifact.get("enums", {}) if isinstance(artifact, dict) else {}
+        if enums.get("verdict") != ["works", "broken", "unavailable"]:
+            errors.append(f"{role}: verifier verdict enum is not authoritative")
+    return errors
+
+
+def validate_role_execution_contracts(contracts_doc: Any) -> list[str]:
+    if not isinstance(contracts_doc, dict):
+        return [".agent-role-contracts.yaml: top-level value must be an object"]
+    roles = contracts_doc.get("roles", {})
+    if not isinstance(roles, dict):
+        return [".agent-role-contracts.yaml: roles must be an object"]
+    issue_intake = roles.get("issue-intake", {})
+    if not isinstance(issue_intake, dict):
+        return [".agent-role-contracts.yaml: issue-intake must be an object"]
+    errors: list[str] = []
+    if issue_intake.get("execution_kind") != "harness_stage":
+        errors.append(".agent-role-contracts.yaml: issue-intake must be a harness_stage")
+    if issue_intake.get("llm_invocation") is not False:
+        errors.append(".agent-role-contracts.yaml: issue-intake must set llm_invocation=false")
+    if issue_intake.get("prompt_path") not in {"", None}:
+        errors.append(".agent-role-contracts.yaml: issue-intake harness stage must not have an LLM prompt")
+    return errors
+
+
 def validate_project_profiles_data(
     profiles_doc: Any, label: str = ".agent-project-profiles.yaml"
 ) -> list[str]:
@@ -333,6 +425,17 @@ def validate_project_profiles_data(
         for field in ("quality_commands", "security_commands", "test_strategy", "frontend_evidence"):
             if field not in value:
                 errors.append(f"{label}: profiles.{profile} missing {field!r}")
+    web = profiles.get("nextjs_web", {})
+    frontend = web.get("frontend_evidence", {}) if isinstance(web, dict) else {}
+    if not isinstance(frontend, dict):
+        errors.append(f"{label}: profiles.nextjs_web.frontend_evidence must be an object")
+    else:
+        if not isinstance(frontend.get("dev_command"), str) or not frontend.get("dev_command"):
+            errors.append(f"{label}: nextjs_web frontend dev_command is required")
+        if str(frontend.get("local_url", "")) != "http://127.0.0.1:3000":
+            errors.append(f"{label}: nextjs_web frontend local_url must use loopback")
+        if sorted(frontend.get("network_scope", [])) != sorted(["localhost", "127.0.0.1", "::1"]):
+            errors.append(f"{label}: nextjs_web frontend network_scope must be loopback-only")
     return errors
 
 
@@ -420,9 +523,29 @@ def validate_agent_routing_data(
     if not isinstance(routing, dict):
         errors.append(f"{label}: routing must be an object")
     else:
-        for name in ("high_risk", "security_blocked", "quality_failed", "review_blocked", "ci_failed"):
+        for name in (
+            "high_risk",
+            "security_critical",
+            "security_review_required",
+            "quality_failed",
+            "review_blocked",
+            "ci_failed",
+            "frontend_verification_failed",
+        ):
             if not isinstance(routing.get(name), dict):
                 errors.append(f"{label}: routing.{name} must be an object")
+        critical = routing.get("security_critical", {})
+        if not isinstance(critical, dict) or critical.get("next") != "blocked":
+            errors.append(f"{label}: routing.security_critical.next must be blocked")
+        review_required = routing.get("security_review_required", {})
+        if not isinstance(review_required, dict) or review_required.get("next") != "approval-gate":
+            errors.append(f"{label}: routing.security_review_required.next must be approval-gate")
+        for name in ("quality_failed", "review_blocked", "ci_failed", "frontend_verification_failed"):
+            entry = routing.get(name, {})
+            loop = entry.get("loop", {}) if isinstance(entry, dict) else {}
+            for field in ("max_iterations", "max_tokens", "max_duration_seconds"):
+                if not isinstance(loop.get(field), int) or int(loop.get(field, 0)) <= 0:
+                    errors.append(f"{label}: routing.{name}.loop.{field} must be positive")
     schema_path = ROOT / "schemas" / "workflow_route.schema.json"
     workflow_state_schema = ROOT / "schemas" / "agent_workflow.schema.json"
     for path in (schema_path, workflow_state_schema):
@@ -441,6 +564,7 @@ def validate_artifact_ownership_data(owners_doc: Any, contracts_doc: Any) -> lis
     if not isinstance(owners_doc, dict) or owners_doc.get("version") != 1:
         return [".agent-artifact-owners.yaml: invalid top-level contract"]
     artifacts = owners_doc.get("artifacts")
+    patterns = owners_doc.get("patterns", {})
     roles = contracts_doc.get("roles") if isinstance(contracts_doc, dict) else None
     if not isinstance(artifacts, dict) or not isinstance(roles, dict):
         return ["artifact ownership and role contracts must define objects"]
@@ -464,6 +588,22 @@ def validate_artifact_ownership_data(owners_doc: Any, contracts_doc: Any) -> lis
     for artifact, owner in declared.items():
         if artifacts.get(artifact) != owner:
             errors.append(f"role contract artifact missing from ownership registry: {artifact}")
+    if not isinstance(patterns, dict):
+        errors.append(".agent-artifact-owners.yaml: patterns must be an object")
+        patterns = {}
+    declared_patterns: dict[str, str] = {}
+    for role, contract in roles.items():
+        if not isinstance(contract, dict):
+            continue
+        for pattern in contract.get("owned_artifact_patterns", []):
+            if not isinstance(pattern, str) or Path(pattern).is_absolute() or ".." in Path(pattern).parts:
+                errors.append(f"role {role}: unsafe owned artifact pattern {pattern!r}")
+                continue
+            declared_patterns[pattern] = str(role)
+    if patterns != declared_patterns:
+        errors.append(
+            f"artifact pattern ownership mismatch: registry={patterns!r}, contract={declared_patterns!r}"
+        )
     return errors
 
 
@@ -672,6 +812,16 @@ def main(artifacts_dir: Path | None = None) -> int:
     errors.extend(contract_errors + owner_errors)
     if contracts_doc is not None and owners_doc is not None:
         errors.extend(validate_artifact_ownership_data(owners_doc, contracts_doc))
+        errors.extend(validate_role_execution_contracts(contracts_doc))
+    tool_policy_doc, tool_policy_errors = load_yaml(AGENT_TOOL_POLICY, ".agent-tool-policy.yaml")
+    capabilities_doc, capability_errors = load_yaml(
+        AGENT_ROLE_CAPABILITIES,
+        ".agent-role-capabilities.yaml",
+    )
+    errors.extend(tool_policy_errors + capability_errors)
+    if tool_policy_doc is not None and capabilities_doc is not None:
+        errors.extend(validate_tool_policy_data(tool_policy_doc, capabilities_doc))
+    errors.extend(validate_verifier_contracts())
 
     risk = loaded_artifacts.get("risk")
     verdict = loaded_artifacts.get("verdict")

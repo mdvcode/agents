@@ -9,6 +9,18 @@ User gives a registered project issue -> public-safe branch name -> private issu
 ## Artifact Flow
 Within one `.agent-runs/<run-id>/`: `plan.md` -> `risk.json` -> implementation -> tests -> `quality.json` -> `security.json` -> `review.json` -> `verdict.json` -> `change_set.json` + `publication_payload.json` -> `publication.json` -> `audit-log.jsonl`.
 
+## Concurrent Task Flow
+
+Task enqueue -> SQLite lease -> worker heartbeat -> Task Intake creates worktree -> authoritative router -> implementation and bounded repair loops -> independent verification plane -> publication from the same worktree or compact exception -> terminal queue status.
+
+The queue coordinates tasks; it never replaces `.agent-runs/<run-id>/` as the authoritative state of a task.
+
+## Deterministic Gate Flow
+
+HIGH risk -> approval; CRITICAL security -> blocked; MEDIUM/HIGH security -> approval; UI changed -> frontend verifier; quality/review/CI/frontend broken -> bounded repair; repeated failure plus unchanged diff -> approval; all required gates valid -> publication. Model `next_action` is advisory throughout.
+
+Issue Intake is a deterministic harness stage (`llm_invocation=false`), not an LLM role. It records task/worktree identity before any model-backed role runs.
+
 ## Knowledge Flow
 Raw source -> project issue journal -> project topic memory -> project wiki page -> future task context.
 

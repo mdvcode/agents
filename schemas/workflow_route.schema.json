@@ -28,8 +28,17 @@
         "failure_fingerprint": {
           "type": "string"
         },
+        "diff_fingerprint": {
+          "type": "string"
+        },
         "progress_detected": {
           "type": "boolean"
+        },
+        "tokens_used": {
+          "type": "integer"
+        },
+        "elapsed_seconds": {
+          "type": "integer"
         }
       },
       "required": [
@@ -37,7 +46,10 @@
         "iteration",
         "max_iterations",
         "failure_fingerprint",
-        "progress_detected"
+        "diff_fingerprint",
+        "progress_detected",
+        "tokens_used",
+        "elapsed_seconds"
       ],
       "additionalProperties": false
     },

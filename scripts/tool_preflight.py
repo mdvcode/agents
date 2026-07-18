@@ -14,6 +14,8 @@ from typing import Any, Sequence
 
 import yaml
 
+from tool_governance import CAPABILITY_ACTIONS, POLICY_PATH, audit_tool_call, authorize_tool_call
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT_PROFILES = ROOT / ".agent-project-profiles.yaml"
@@ -34,8 +36,10 @@ def executable_available(name: str) -> bool:
     return bool(name) and shutil.which(name) is not None
 
 
-def playwright_available() -> bool:
+def playwright_available(repository: Path | None = None) -> bool:
     if shutil.which("playwright"):
+        return True
+    if repository is not None and (repository / "node_modules" / ".bin" / "playwright").is_file():
         return True
     completed = subprocess.run(
         [sys.executable, "-c", "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('playwright') else 1)"],
@@ -60,11 +64,27 @@ def role_tool_preflight(
     allowed_tools: Sequence[str],
     project_profile: str,
     dry_run: bool = False,
+    run_dir: Path | None = None,
+    policy_path: Path = POLICY_PATH,
+    repository: Path | None = None,
 ) -> dict[str, Any]:
     blockers: list[str] = []
     warnings: list[str] = []
     status = "completed"
     tools = set(allowed_tools)
+
+    for tool in sorted(tools):
+        action = CAPABILITY_ACTIONS.get(tool, "use")
+        decision = authorize_tool_call(
+            role=role,
+            tool=tool,
+            action=action,
+            policy_path=policy_path,
+        )
+        if run_dir is not None:
+            audit_tool_call(run_dir, decision, phase="role-preflight")
+        if not decision.allowed:
+            blockers.append(f"tool policy denied {tool}/{action}: {decision.reason}")
 
     if "repository_search" in tools and not executable_available("rg"):
         warnings.append("repository_search requested but rg is unavailable; fallback search may be slower.")
@@ -78,7 +98,7 @@ def role_tool_preflight(
     if role == "frontend-qa-agent" and ({"browser", "playwright"} & tools):
         if os.environ.get("AGENT_BROWSER_AVAILABLE") != "1":
             warnings.append("browser capability is unavailable in this runtime.")
-        if "playwright" in tools and not playwright_available():
+        if "playwright" in tools and not playwright_available(repository):
             warnings.append("playwright capability is unavailable in this runtime.")
         if warnings:
             status = "unavailable"

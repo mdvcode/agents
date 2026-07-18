@@ -32,7 +32,7 @@
 - If many GitHub issues are active at once, keep one branch and one `docs/issues/issue-<number>.md` journal per issue.
 
 ## Agent Flow
-1. Issue Intake and Context Compiler establish the scoped run state.
+1. Deterministic Issue Intake and Context Compiler harness stages establish the scoped run state. Issue Intake has no LLM invocation.
 2. Planner writes scope and checks; Risk Classifier sets autonomy gates.
 3. Implementation Agent patches narrowly.
 4. Quality Runner and Security Agent provide required quality and security gates.
@@ -40,9 +40,22 @@
 6. Reviewer compares the diff against policy and lessons.
 7. Orchestrator writes the final verdict; Publication Prepare can run only after required gates pass.
 
-The role result field `next_action` is advisory. `scripts/workflow_router.py` is authoritative and derives the next role from policy, risk, artifacts, changed files, workflow state, budgets, and loop counters. Quality, review, and CI repairs use bounded loops and stop at `approval-gate` when the same failure repeats without progress. Each decision is recorded as a `router.decision` event in the run's `workflow_trace.jsonl`.
+The role result field `next_action` is advisory. `scripts/workflow_router.py` is authoritative and derives the next role from policy, risk, artifacts, changed files, workflow state, budgets, and loop counters. Quality, review, CI, and frontend verification repairs use bounded loops with independent iteration, token, and time budgets. Failure and diff fingerprints prove progress; repeated failure without a changed diff stops at `approval-gate`. Each decision is schema-validated and recorded as a `router.decision` event in the run's `workflow_trace.jsonl`.
 
 The routing contract is defined in `.agent-routing.yaml`; run state includes `loops`, `budgets`, `role_count`, and cumulative `tokens_used` so a workflow cannot silently exceed its execution limits.
+
+Security routing is severity-aware. A `critical` finding returns a hard `blocked` terminal state and a structured `ROUTER_BLOCKED` error. `medium` and `high` findings route to human approval. `none` and `low` do not create a security stop when the verifier contract is otherwise valid.
+
+## Concurrent Execution And Verification
+
+- Security, code review, architecture consistency, semantic conflict, and frontend/user-flow checks are separate read-only verifiers with one shared verdict contract.
+- UI verification may report `works` only with a real loopback development server, Playwright interaction evidence, screenshots, and console/network observations. `unavailable` keeps publication in draft when evidence is required; `broken` enters the bounded frontend repair loop.
+- Task Intake creates the worktree before implementation. Publication validates and reuses the worktree and branch recorded in `workflow.json`; it does not copy changes into a publication-only checkout.
+- `scripts/task_queue.py` provides an idempotent SQLite queue with atomic leases, heartbeats, retries, and dead letters. `scripts/worker_pool.py` runs three workers by default.
+- `.agent-queue/tasks.db` contains only scheduling state. Task workflow state remains authoritative under `.agent-runs/<run-id>/`.
+- `scripts/list_runs.py` exposes human exceptions without transcripts. `.agent-tool-policy.yaml` governs tool roles/actions/domains/credentials/timeouts and writes sanitized decisions to each run's tool-call audit.
+
+Step 2 production acceptance is evidence-gated by `make step2-verify`. It requires real concurrent Codex runs, isolated worktrees, independent gates, governed tool traces, at least one PR, and at least one human exception; fixture-only concurrency is not sufficient.
 
 ## Codex Executor And Step 1 Gates
 The production Codex executor has an independent environment-dependent smoke gate:

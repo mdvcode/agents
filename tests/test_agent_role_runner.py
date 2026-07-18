@@ -85,13 +85,17 @@ elif role == "quality-runner":
     next_action = "publication"
 elif role == "security-agent":
     (artifacts / "security.json").write_text(json.dumps({
-        "status": "pass", "project_profile": request["project_profile"], "findings": [],
+        "verdict": "works", "expected": [], "observed": [], "evidence": [],
+        "blockers": [], "repair_required": False,
+        "status": "pass", "highest_severity": "none", "project_profile": request["project_profile"], "findings": [],
         "blocker_ids": [], "secret_findings": [], "commands_attempted": [], "warnings": []
     }), encoding="utf-8")
     created = ["security.json"]
     next_action = "publication"
 elif role == "reviewer":
     (artifacts / "review.json").write_text(json.dumps({
+        "verdict": "works", "expected": [], "observed": [], "evidence": [],
+        "blockers": [], "repair_required": False,
         "status": "pass", "project_profile": request["project_profile"], "findings": [],
         "blocker_ids": [], "policy_violations": [], "known_lesson_conflicts": [], "warnings": []
     }), encoding="utf-8")
@@ -346,3 +350,101 @@ def test_frontend_qa_preflight_marks_evidence_unavailable(tmp_path: Path, monkey
     assert artifact["evidence_required"] is True
     assert artifact["evidence_collected"] is False
     assert artifact["blockers"]
+
+
+def test_frontend_verifier_works_requires_real_run_scoped_evidence(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    screenshot = artifacts / "frontend-evidence" / "flow.png"
+    screenshot.parent.mkdir(parents=True)
+    screenshot.write_bytes(b"png")
+    payload = {
+        "verdict": "works",
+        "expected": ["save succeeds"],
+        "observed": ["save succeeded"],
+        "evidence": ["interaction: click save and observe confirmation"],
+        "blockers": [],
+        "repair_required": False,
+        "evidence_required": True,
+        "evidence_collected": True,
+        "screenshots": ["frontend-evidence/flow.png"],
+        "console_errors": [],
+        "network_errors": [],
+        "local_url": "http://127.0.0.1:3000/settings",
+        "dev_server": {"command": "bun dev", "status": "running"},
+        "next_action": "continue",
+    }
+    (artifacts / "frontend_qa.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    errors = agent_role_runner.validate_verifier_artifact("frontend-qa-agent", artifacts)
+
+    assert errors == []
+    payload["local_url"] = "https://example.com/settings"
+    payload["screenshots"] = []
+    (artifacts / "frontend_qa.json").write_text(json.dumps(payload), encoding="utf-8")
+    errors = agent_role_runner.validate_verifier_artifact("frontend-qa-agent", artifacts)
+    assert any("loopback" in error for error in errors)
+    assert any("screenshot" in error for error in errors)
+
+
+def test_security_verifier_rejects_inconsistent_severity(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    payload = {
+        "verdict": "works",
+        "highest_severity": "critical",
+        "blockers": [],
+        "repair_required": False,
+    }
+    (artifacts / "security.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    errors = agent_role_runner.validate_verifier_artifact("security-agent", artifacts)
+
+    assert errors == ["security.json: works permits only none or low highest_severity"]
+
+
+def test_issue_intake_checkpoint_is_a_non_llm_harness_stage(tmp_path: Path, monkeypatch: object) -> None:
+    monkeypatch.setattr(agent_role_runner, "RUNS", tmp_path / ".agent-runs")
+    command = fake_adapter_script(tmp_path / "fake_adapter.py")
+    state = agent_role_runner.run_roles(
+        run_id="issue-intake-kind",
+        repository=tmp_path,
+        adapter_command=command,
+        dry_run=True,
+    )
+
+    checkpoint = state["roles"][0]
+    assert checkpoint["role"] == "issue-intake"
+    assert checkpoint["execution_kind"] == "harness_stage"
+    assert checkpoint["llm_invoked"] is False
+    assert not (tmp_path / ".agent-runs" / "issue-intake-kind" / "role-requests" / "issue-intake.json").exists()
+
+
+def test_hard_router_stop_is_recorded_as_structured_blocker(tmp_path: Path, monkeypatch: object) -> None:
+    monkeypatch.setattr(agent_role_runner, "RUNS", tmp_path / ".agent-runs")
+    monkeypatch.setattr(
+        agent_role_runner,
+        "decide_next_role",
+        lambda **_kwargs: {
+            "next_role": "blocked",
+            "reason": "A CRITICAL security finding blocks the workflow.",
+            "stop": True,
+            "publication_allowed": False,
+            "loop": None,
+            "warnings": ["SEC-CRITICAL"],
+        },
+    )
+
+    state = agent_role_runner.run_roles(
+        run_id="critical-security-stop",
+        repository=tmp_path,
+        adapter_command=fake_adapter_script(tmp_path / "fake_adapter.py"),
+        dry_run=True,
+    )
+
+    assert state["execution_status"] == "blocked"
+    assert state["blockers"] == [
+        "A CRITICAL security finding blocks the workflow.",
+        "SEC-CRITICAL",
+    ]
+    errors = (tmp_path / ".agent-runs" / "critical-security-stop" / "errors.jsonl").read_text(encoding="utf-8")
+    assert "ROUTER_BLOCKED" in errors

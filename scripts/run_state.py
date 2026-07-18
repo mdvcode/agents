@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import fnmatch
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -117,10 +118,11 @@ def ownership_errors(
     before: dict[str, str],
     after: dict[str, str],
 ) -> list[str]:
-    allowed = set(allowed_artifacts)
+    allowed = tuple(allowed_artifacts)
     return [
         f"{role} modified artifact owned by another role: {path}"
-        for path in sorted(changed_snapshot_paths(before, after) - allowed)
+        for path in sorted(changed_snapshot_paths(before, after))
+        if not any(path == pattern or fnmatch.fnmatch(path, pattern) for pattern in allowed)
     ]
 
 
@@ -133,7 +135,12 @@ def restore_foreign_artifacts(
     """Restore or remove every changed artifact not owned by the active role."""
     before_hashes = {path: hashlib.sha256(content).hexdigest() for path, content in before.items()}
     after_hashes = file_snapshot(directory)
-    foreign = changed_snapshot_paths(before_hashes, after_hashes) - set(allowed_artifacts)
+    allowed = tuple(allowed_artifacts)
+    foreign = {
+        path
+        for path in changed_snapshot_paths(before_hashes, after_hashes)
+        if not any(path == pattern or fnmatch.fnmatch(path, pattern) for pattern in allowed)
+    }
     for relative in foreign:
         path = directory / relative
         if relative in before:

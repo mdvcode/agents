@@ -16,12 +16,19 @@
     }
   },
   "artifact": {
-    "required": ["conflicts", "risk_level", "required_resolution", "next_action"],
+    "required": ["verdict", "expected", "observed", "evidence", "blockers", "repair_required", "conflicts", "risk_level", "required_resolution", "next_action"],
     "types": {
+      "verdict": "str",
+      "expected": "list",
+      "observed": "list",
+      "evidence": "list",
+      "blockers": "list",
+      "repair_required": "bool",
       "conflicts": "list",
       "risk_level": "str",
       "required_resolution": "list",
       "next_action": "str"
-    }
+    },
+    "enums": {"verdict": ["works", "broken", "unavailable"]}
   }
 }

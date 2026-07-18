@@ -17,6 +17,11 @@
   },
   "artifact": {
     "required": [
+      "verdict",
+      "expected",
+      "observed",
+      "evidence",
+      "repair_required",
       "evidence_required",
       "evidence_collected",
       "screenshots",
@@ -28,6 +33,11 @@
       "next_action"
     ],
     "types": {
+      "verdict": "str",
+      "expected": "list",
+      "observed": "list",
+      "evidence": "list",
+      "repair_required": "bool",
       "evidence_required": "bool",
       "evidence_collected": "bool",
       "screenshots": "list",
@@ -37,6 +47,7 @@
       "local_url": "str",
       "dev_server": "dict",
       "next_action": "str"
-    }
+    },
+    "enums": {"verdict": ["works", "broken", "unavailable"]}
   }
 }

@@ -16,13 +16,20 @@
     }
   },
   "artifact": {
-    "required": ["consistency_status", "findings", "protected_boundaries", "recommended_repairs", "next_action"],
+    "required": ["verdict", "expected", "observed", "evidence", "blockers", "repair_required", "consistency_status", "findings", "protected_boundaries", "recommended_repairs", "next_action"],
     "types": {
+      "verdict": "str",
+      "expected": "list",
+      "observed": "list",
+      "evidence": "list",
+      "blockers": "list",
+      "repair_required": "bool",
       "consistency_status": "str",
       "findings": "list",
       "protected_boundaries": "list",
       "recommended_repairs": "list",
       "next_action": "str"
-    }
+    },
+    "enums": {"verdict": ["works", "broken", "unavailable"]}
   }
 }

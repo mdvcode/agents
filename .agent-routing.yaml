@@ -35,9 +35,16 @@ routing:
       risk_class: high
     next: approval-gate
     stop_publication: true
-  security_blocked:
+  security_critical:
     when:
-      security_blockers_present: true
+      highest_severity: critical
+    next: blocked
+    stop_publication: true
+  security_review_required:
+    when:
+      highest_severity_any:
+        - medium
+        - high
     next: approval-gate
     stop_publication: true
   quality_failed:
@@ -49,6 +56,8 @@ routing:
       from: quality-runner
       to: implementation-agent
       max_iterations: 3
+      max_tokens: 60000
+      max_duration_seconds: 1800
   review_blocked:
     when:
       review_status:
@@ -58,6 +67,8 @@ routing:
       from: reviewer
       to: implementation-agent
       max_iterations: 3
+      max_tokens: 60000
+      max_duration_seconds: 1800
   ci_failed:
     when:
       ci_status:
@@ -67,6 +78,18 @@ routing:
       from: ci-repair-agent
       to: quality-runner
       max_iterations: 3
+      max_tokens: 60000
+      max_duration_seconds: 1800
+  frontend_verification_failed:
+    when:
+      frontend_verdict: broken
+    loop:
+      name: frontend_verification_repair
+      from: frontend-qa-agent
+      to: implementation-agent
+      max_iterations: 3
+      max_tokens: 60000
+      max_duration_seconds: 1800
 publication:
   allowed:
     when:

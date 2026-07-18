@@ -68,6 +68,9 @@ def role_contract(role: str) -> dict[str, Any]:
         contract.update(roles[role])
     contract.setdefault("expected_artifacts", [])
     contract.setdefault("artifact_schemas", {})
+    contract.setdefault("owned_artifact_patterns", [])
+    contract.setdefault("execution_kind", "llm_role")
+    contract.setdefault("llm_invocation", True)
     return contract
 
 
@@ -159,6 +162,7 @@ def create_context_manifest(
         {"path": str((ROOT / ".agent-project-profiles.yaml").resolve()), "kind": "profile"},
         {"path": str((ROOT / ".agent-repositories.yaml").resolve()), "kind": "registry"},
         {"path": str((ROOT / ".agent-artifact-owners.yaml").resolve()), "kind": "artifact_owners"},
+        {"path": str((ROOT / ".agent-tool-policy.yaml").resolve()), "kind": "tool_policy"},
     ]
     privacy_path = project_privacy_path(MEMORY_CONTROL_ROOT, project, project_profile)
     if privacy_path is not None:

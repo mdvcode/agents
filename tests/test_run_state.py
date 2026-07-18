@@ -52,6 +52,23 @@ def test_artifact_ownership_detects_foreign_write(tmp_path: Path) -> None:
     assert errors == ["planner modified artifact owned by another role: verdict.json"]
 
 
+def test_artifact_ownership_allows_owned_evidence_namespace(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    evidence = artifacts / "frontend-evidence"
+    evidence.mkdir(parents=True)
+    before = run_state.file_snapshot(artifacts)
+    (evidence / "screen.png").write_bytes(b"png")
+
+    errors = run_state.ownership_errors(
+        role="frontend-qa-agent",
+        allowed_artifacts=["frontend_qa.json", "frontend-evidence/**"],
+        before=before,
+        after=run_state.file_snapshot(artifacts),
+    )
+
+    assert errors == []
+
+
 def test_metrics_persist_role_token_usage(tmp_path: Path) -> None:
     layout = run_state.RunLayout.create(tmp_path / ".agent-runs", "run-1")
     run_state.write_metrics(

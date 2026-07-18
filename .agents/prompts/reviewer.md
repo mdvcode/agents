@@ -23,6 +23,8 @@ The review must confirm:
 - agent workspace changes include artifact/schema validation.
 
 ## Required `review.json` fields
+- `verdict`: `works`, `broken`, or `unavailable`
+- `expected`, `observed`, `evidence`, `blockers`, `repair_required`
 - `status`: `pass` or `block`
 - `project_profile`
 - `findings`

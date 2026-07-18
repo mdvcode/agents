@@ -28,6 +28,8 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from repository_registry import RepositoryRecord, find_by_remote
 from run_state import RunLayout
+from tool_governance import audit_tool_call, authorize_tool_call
+from workflow_router import required_gate_roles
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -356,6 +358,7 @@ class Publisher:
         self.repository_registry_path = self.root / ".agent-repositories.yaml"
         self.project_profiles_path = self.root / ".agent-project-profiles.yaml"
         self.routing_path = self.root / ".agent-routing.yaml"
+        self.tool_policy_path = self.root / ".agent-tool-policy.yaml"
         self.publication_path = self.artifacts / "publication.json"
         self.publication_payload_path = self.artifacts / "publication_payload.json"
         self.verdict_path = self.artifacts / "verdict.json"
@@ -378,10 +381,7 @@ class Publisher:
         except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
             publication.errors.append(f"cannot validate workflow gates: {exc}")
             return
-        required = routing.get("required_before_publication", [])
-        if not isinstance(required, list):
-            publication.errors.append("required_before_publication must be a list")
-            return
+        required = required_gate_roles(workflow, self.artifacts)
         completed = {
             str(checkpoint.get("role", ""))
             for checkpoint in workflow.get("roles", [])
@@ -403,6 +403,9 @@ class Publisher:
             "test-generator": ("test_plan.json", "test_result.json"),
             "quality-runner": ("quality.json",),
             "security-agent": ("security.json",),
+            "frontend-qa-agent": ("frontend_qa.json",),
+            "architecture-consistency-agent": ("architecture_consistency.json",),
+            "semantic-conflict-agent": ("semantic_conflict.json",),
             "reviewer": ("review.json",),
             "orchestrator": ("verdict.json",),
             "publication-prepare": ("change_set.json", "publication_payload.json"),
@@ -420,6 +423,49 @@ class Publisher:
             )
 
     def run_command(self, args: Sequence[str], cwd: Path | None = None) -> CommandResult:
+        if self.tool_policy_path.exists() and args:
+            tool = "shell"
+            action = "project_command"
+            domain = ""
+            credential_type = ""
+            if args[0] == "git" and len(args) > 1:
+                tool = "git"
+                git_actions = {
+                    "rev-parse": "rev_parse",
+                    "show-ref": "show_ref",
+                    "ls-files": "ls_files",
+                }
+                action = git_actions.get(args[1], args[1].replace("-", "_"))
+                if args[1] == "push" and any(value in {"--force", "-f"} for value in args[2:]):
+                    action = "force_push"
+            elif args[0] == "gh" and len(args) > 1:
+                tool = "github"
+                domain = "github.com"
+                credential_type = "gh_auth"
+                if args[1:3] == ["auth", "status"]:
+                    action = "auth_status"
+                elif args[1:3] == ["pr", "view"]:
+                    action = "read_pr"
+                elif args[1:3] == ["pr", "create"]:
+                    action = "create_pr"
+                elif args[1:3] == ["pr", "comment"]:
+                    action = "comment_pr"
+                elif args[1:3] == ["pr", "ready"]:
+                    action = "mark_ready"
+                else:
+                    action = "update_pr"
+            decision = authorize_tool_call(
+                role="publication",
+                tool=tool,
+                action=action,
+                domain=domain,
+                credential_type=credential_type,
+                timeout_seconds=getattr(self.runner, "timeout_seconds", DEFAULT_COMMAND_TIMEOUT_SECONDS),
+                policy_path=self.tool_policy_path,
+            )
+            audit_tool_call(self.artifacts.parent, decision, phase="publication-command")
+            if not decision.allowed:
+                return CommandResult(126, "", f"tool governance denied {tool}/{action}: {decision.reason}")
         return self.runner.run(args, cwd or self.root)
 
     def trusted_repository_record(
@@ -516,6 +562,42 @@ class Publisher:
         result = self.run_command(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo)
         return result.stdout.strip() if not command_failed(result) else ""
 
+    def authoritative_task_worktree(
+        self,
+        target_repo: Path,
+        publication: PublicationResult,
+    ) -> Path:
+        workflow_path = self.artifacts.parent / "workflow.json"
+        try:
+            workflow = read_json(workflow_path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            publication.errors.append(f"cannot resolve authoritative task worktree: {exc}")
+            return target_repo
+        raw_worktree = workflow.get("worktree")
+        if not isinstance(raw_worktree, str) or not raw_worktree:
+            publication.errors.append("workflow.json does not record the task worktree")
+            return target_repo
+        worktree = Path(raw_worktree).resolve()
+        if worktree != target_repo.resolve():
+            publication.errors.append(
+                "publication repository must be the original task worktree from workflow.json"
+            )
+            return target_repo
+        if not worktree.is_dir():
+            publication.errors.append("authoritative task worktree does not exist")
+            return target_repo
+        workflow_branch = workflow.get("branch")
+        actual_branch = self.current_branch(worktree)
+        if not isinstance(workflow_branch, str) or not workflow_branch:
+            publication.errors.append("workflow.json does not record the task branch")
+        elif actual_branch != workflow_branch or publication.branch != workflow_branch:
+            publication.errors.append(
+                f"task worktree branch mismatch: workflow={workflow_branch!r}, "
+                f"actual={actual_branch!r}, publication={publication.branch!r}"
+            )
+        publication.worktree = str(worktree)
+        return worktree
+
     def publication_branch(self, target_repo: Path, change_set: dict[str, Any], payload: dict[str, Any]) -> str:
         explicit = payload.get("branch") or change_set.get("branch")
         if isinstance(explicit, str) and explicit.strip():
@@ -600,7 +682,6 @@ class Publisher:
             "profile_version": profiles_doc.get("version"),
             "profile": project_profile,
             "profile_doc": profile_doc,
-            "head": self.current_head(target_repo),
         }
         encoded = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
@@ -1155,6 +1236,14 @@ class Publisher:
         if not publication.worktree:
             return
         worktree = Path(publication.worktree)
+        workflow_path = self.artifacts.parent / "workflow.json"
+        if workflow_path.exists():
+            try:
+                workflow = read_json(workflow_path)
+            except (OSError, ValueError, json.JSONDecodeError):
+                workflow = {}
+            if str(workflow.get("worktree", "")) and Path(str(workflow["worktree"])).resolve() == worktree.resolve():
+                return
         if not worktree.exists():
             return
         remove = self.run_command(["git", "worktree", "remove", "--force", publication.worktree], cwd=target_repo)
@@ -1193,6 +1282,8 @@ class Publisher:
         skip_checks: bool = False,
         repo_override: Path | None = None,
     ) -> PublicationResult:
+        if not self.tool_policy_path.exists():
+            return self.structured_blocked(".agent-tool-policy.yaml is required for publication.", dry_run)
         if skip_checks and not (dry_run and os.environ.get("AGENT_HARNESS_TEST_MODE") == "1"):
             return self.structured_blocked("--skip-checks is only allowed in AGENT_HARNESS_TEST_MODE=1 dry-run unit tests.", dry_run)
         publication = PublicationResult(dry_run=dry_run)
@@ -1315,19 +1406,10 @@ class Publisher:
                 self.finalize(target_repo, publication, profile_name, post_comment=False)
                 return publication
 
-            worktree = self.create_worktree(target_repo, change_set, publication)
+            worktree = self.authoritative_task_worktree(target_repo, publication)
             if publication.errors:
-                publication.execution_status = "failed"
-                if not dry_run:
-                    self.finalize(target_repo, publication, profile_name, post_comment=False)
-                return publication
-            self.copy_selected_changes(target_repo, worktree, selected, publication)
-            if publication.errors:
-                publication.execution_status = "failed"
-                if not dry_run:
-                    self.finalize(worktree, publication, profile_name, post_comment=False)
-                else:
-                    self.cleanup_worktree(target_repo, publication)
+                publication.execution_status = "blocked"
+                self.finalize(target_repo, publication, profile_name, post_comment=False)
                 return publication
 
             if not publication.commit_sha:

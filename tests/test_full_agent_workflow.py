@@ -120,23 +120,29 @@ elif role == "quality-runner":
     }), encoding="utf-8")
 elif role == "security-agent":
     (artifacts / "security.json").write_text(json.dumps({
-        "status": "pass", "project_profile": request["project_profile"], "findings": [],
+        "verdict": "works", "expected": [], "observed": [], "evidence": [],
+        "blockers": [], "repair_required": False,
+        "status": "pass", "highest_severity": "none", "project_profile": request["project_profile"], "findings": [],
         "blocker_ids": [], "secret_findings": [], "commands_attempted": [], "warnings": []
     }), encoding="utf-8")
 elif role == "frontend-qa-agent":
     (artifacts / "frontend_qa.json").write_text(json.dumps({
+        "verdict": "unavailable", "expected": [], "observed": [], "evidence": [],
+        "repair_required": False,
         "evidence_required": False,
         "evidence_collected": False,
         "screenshots": [],
         "console_errors": [],
         "network_errors": [],
-        "blockers": [],
+        "blockers": ["browser unavailable"],
         "local_url": "",
         "dev_server": {},
         "next_action": "continue"
     }), encoding="utf-8")
 elif role == "architecture-consistency-agent":
     (artifacts / "architecture_consistency.json").write_text(json.dumps({
+        "verdict": "works", "expected": [], "observed": [], "evidence": [],
+        "blockers": [], "repair_required": False,
         "consistency_status": "pass",
         "findings": [],
         "protected_boundaries": [],
@@ -145,6 +151,8 @@ elif role == "architecture-consistency-agent":
     }), encoding="utf-8")
 elif role == "semantic-conflict-agent":
     (artifacts / "semantic_conflict.json").write_text(json.dumps({
+        "verdict": "works", "expected": [], "observed": [], "evidence": [],
+        "blockers": [], "repair_required": False,
         "conflicts": [],
         "risk_level": "low",
         "required_resolution": [],
@@ -152,6 +160,8 @@ elif role == "semantic-conflict-agent":
     }), encoding="utf-8")
 elif role == "reviewer":
     (artifacts / "review.json").write_text(json.dumps({
+        "verdict": "works", "expected": [], "observed": [], "evidence": [],
+        "blockers": [], "repair_required": False,
         "status": "pass", "project_profile": request["project_profile"], "findings": [],
         "blocker_ids": [], "policy_violations": [], "known_lesson_conflicts": [], "warnings": []
     }), encoding="utf-8")
@@ -505,6 +515,8 @@ elif role == "quality-runner":
     next_action = "reviewer"
 elif role == "reviewer":
     result_artifacts = [{"path": "review.json", "content": json.dumps({
+        "verdict": "works", "expected": [], "observed": [], "evidence": [],
+        "blockers": [], "repair_required": False,
         "status": "pass", "project_profile": request["project_profile"], "findings": [],
         "blocker_ids": [], "policy_violations": [], "known_lesson_conflicts": [], "warnings": []
     })}]

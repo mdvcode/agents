@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -224,6 +225,9 @@ def ensure_project_profile_artifact(artifacts_dir: Path, project_profile: str) -
                 data.get("frontend_evidence_required", False)
                 or (isinstance(frontend, dict) and frontend.get("required") is True)
             ),
+            "frontend_dev_command": str(frontend.get("dev_command", "")) if isinstance(frontend, dict) else "",
+            "frontend_local_url": str(frontend.get("local_url", "")) if isinstance(frontend, dict) else "",
+            "frontend_network_scope": list(frontend.get("network_scope", [])) if isinstance(frontend, dict) and isinstance(frontend.get("network_scope", []), list) else [],
             "warnings": data.get("warnings", []),
         }
     )
@@ -356,6 +360,65 @@ def validate_role_artifacts(
         source_snapshot_after = git_snapshot(source_repository)
         if source_snapshot_after != source_snapshot_before:
             errors.append(f"{role} changed the source repository instead of only the task worktree")
+    errors.extend(validate_verifier_artifact(role, artifacts_dir))
+    return errors
+
+
+def validate_verifier_artifact(role: str, artifacts_dir: Path) -> list[str]:
+    artifact_names = {
+        "security-agent": "security.json",
+        "frontend-qa-agent": "frontend_qa.json",
+        "architecture-consistency-agent": "architecture_consistency.json",
+        "semantic-conflict-agent": "semantic_conflict.json",
+        "reviewer": "review.json",
+    }
+    artifact_name = artifact_names.get(role)
+    if artifact_name is None or not (artifacts_dir / artifact_name).exists():
+        return []
+    try:
+        artifact = load_json(artifacts_dir / artifact_name)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        return [f"{artifact_name} verifier artifact is invalid: {exc}"]
+    verdict = artifact.get("verdict")
+    blockers = artifact.get("blockers", [])
+    repair_required = artifact.get("repair_required")
+    errors: list[str] = []
+    if verdict == "works" and (repair_required is not False or blockers):
+        errors.append(f"{artifact_name}: works requires repair_required=false and no blockers")
+    if verdict == "broken" and (repair_required is not True or not blockers):
+        errors.append(f"{artifact_name}: broken requires repair_required=true and blockers")
+    if verdict == "unavailable" and not blockers:
+        errors.append(f"{artifact_name}: unavailable requires a blocker explaining missing verification")
+    if role == "security-agent":
+        severity = artifact.get("highest_severity")
+        if verdict == "works" and severity not in {"none", "low"}:
+            errors.append("security.json: works permits only none or low highest_severity")
+        if verdict == "broken" and severity not in {"medium", "high", "critical"}:
+            errors.append("security.json: broken requires medium, high, or critical highest_severity")
+    if role != "frontend-qa-agent" or verdict != "works":
+        return errors
+    local_url = str(artifact.get("local_url", ""))
+    host = (urlparse(local_url).hostname or "").lower()
+    if host not in {"localhost", "127.0.0.1", "::1"}:
+        errors.append("frontend_qa.json: works requires a loopback local_url")
+    if artifact.get("evidence_collected") is not True:
+        errors.append("frontend_qa.json: works requires evidence_collected=true")
+    screenshots = artifact.get("screenshots", [])
+    if not isinstance(screenshots, list) or not screenshots:
+        errors.append("frontend_qa.json: works requires at least one screenshot")
+    else:
+        for value in screenshots:
+            if not isinstance(value, str) or not value.startswith("frontend-evidence/") or not safe_artifact_name(value):
+                errors.append(f"frontend_qa.json: unsafe screenshot path {value!r}")
+                continue
+            if not (artifacts_dir / value).is_file():
+                errors.append(f"frontend_qa.json: screenshot is missing: {value}")
+    dev_server = artifact.get("dev_server")
+    if not isinstance(dev_server, dict) or not {"command", "status"}.issubset(dev_server):
+        errors.append("frontend_qa.json: works requires dev_server command and status")
+    evidence = artifact.get("evidence", [])
+    if not isinstance(evidence, list) or not evidence:
+        errors.append("frontend_qa.json: works requires interaction evidence")
     return errors
 
 
@@ -370,7 +433,7 @@ def workflow_budgets(workflow: str) -> dict[str, int]:
     configured = document.get("workflows", {}).get(workflow, {}).get("budgets", {})
     defaults = {
         "max_roles": 40,
-        "max_repair_iterations": 3,
+        "max_repair_iterations": 12,
         "max_duration_seconds": 7200,
         "max_tokens": 300000,
     }
@@ -390,7 +453,7 @@ def initial_loops() -> dict[str, dict[str, Any]]:
             "last_diff_fingerprint": "",
             "progress_detected": False,
         }
-        for name in ("quality_repair", "review_repair", "ci_repair")
+        for name in ("quality_repair", "review_repair", "ci_repair", "frontend_verification_repair")
     }
 
 
@@ -508,6 +571,11 @@ def frontend_qa_unavailable_result(artifacts_dir: Path, warnings: list[str]) -> 
     write_json(
         artifacts_dir / "frontend_qa.json",
         {
+            "verdict": "unavailable",
+            "expected": ["A running local development environment and Playwright interaction evidence."],
+            "observed": ["Browser or Playwright capability is unavailable in this runtime."],
+            "evidence": [],
+            "repair_required": False,
             "evidence_required": True,
             "evidence_collected": False,
             "screenshots": [],
@@ -531,12 +599,15 @@ def preflight_role_execution(
     project_profile: str,
     artifacts_dir: Path,
     dry_run: bool,
+    repository: Path | None = None,
 ) -> dict[str, Any] | None:
     outcome = role_tool_preflight(
         role=role,
         allowed_tools=role_tools(role),
         project_profile=project_profile,
         dry_run=dry_run,
+        run_dir=artifacts_dir.parent,
+        repository=repository,
     )
     if outcome["status"] == "blocked":
         return blocked_result("Role tool preflight failed.", list(outcome["blockers"]))
@@ -626,7 +697,7 @@ def run_issue_intake(
     return {
         "status": "completed",
         "next_action": "context-compiler",
-        "summary": "Issue intake recorded.",
+        "summary": "Deterministic Issue Intake harness stage recorded.",
         "artifacts_created": ["issue.json"],
         "blockers": [],
         "warnings": [],
@@ -873,7 +944,8 @@ def run_roles(
         artifact_contents_before = file_contents_snapshot(run_artifacts)
         artifact_snapshot_before = file_snapshot(run_artifacts)
         role_repo_snapshot_before = git_snapshot(worktree)
-        if guard > len(ROLE_CHAIN) * 3 or role_visits[role] > 3:
+        max_roles = int(state.get("budgets", {}).get("max_roles", 40))
+        if guard > max_roles:
             result = blocked_result("Workflow routing exceeded the safety limit.", ["dynamic routing loop detected"])
         elif role == "issue-intake":
             result = run_issue_intake(
@@ -912,6 +984,7 @@ def run_roles(
                 project_profile=project_profile,
                 artifacts_dir=run_artifacts,
                 dry_run=dry_run,
+                repository=worktree,
             )
             result = preflight_result or run_publication(
                 run_id=run_id,
@@ -948,6 +1021,7 @@ def run_roles(
                     project_profile=project_profile,
                     artifacts_dir=run_artifacts,
                     dry_run=dry_run,
+                    repository=worktree,
                 )
                 if preflight_result is not None:
                     result = preflight_result
@@ -983,16 +1057,21 @@ def run_roles(
             for item in contract.get("expected_artifacts", [])
             if isinstance(item, str)
         ]
+        owned_patterns = [
+            str(item)
+            for item in contract.get("owned_artifact_patterns", [])
+            if isinstance(item, str)
+        ]
         artifact_ownership_errors = ownership_errors(
             role=role,
-            allowed_artifacts=expected_artifacts,
+            allowed_artifacts=[*expected_artifacts, *owned_patterns],
             before=artifact_snapshot_before,
             after=file_snapshot(run_artifacts),
         )
         if artifact_ownership_errors:
             restore_foreign_artifacts(
                 directory=run_artifacts,
-                allowed_artifacts=expected_artifacts,
+                allowed_artifacts=[*expected_artifacts, *owned_patterns],
                 before=artifact_contents_before,
             )
             result = blocked_result("Role artifact ownership validation failed.", artifact_ownership_errors)
@@ -1016,6 +1095,8 @@ def run_roles(
         checkpoint = {
             "time": datetime.now(timezone.utc).isoformat(),
             "role": role,
+            "execution_kind": str(role_contract(role).get("execution_kind", "llm_role")),
+            "llm_invoked": role in ADAPTER_ROLES,
             "prompt_file": PROMPT_FILES.get(role, ""),
             "prompt": role_prompt(role),
             "result": result,
@@ -1048,6 +1129,27 @@ def run_roles(
             artifacts_dir=run_artifacts,
             workflow_state=state,
         )
+        route_errors = validate_contract(
+            route,
+            load_json(SCHEMAS / "workflow_route.schema.json"),
+            "workflow_route",
+        )
+        if route_errors:
+            route = {
+                "next_role": "approval-gate",
+                "reason": "Deterministic router returned an invalid route contract.",
+                "stop": True,
+                "publication_allowed": False,
+                "loop": None,
+                "warnings": route_errors,
+            }
+            record_failure(
+                layout,
+                stage="routing",
+                code="INVALID_ROUTE_CONTRACT",
+                message=route["reason"],
+                details=route_errors,
+            )
         state["last_route"] = route
         write_json(layout.workflow, state)
         write_metrics(layout, state)
@@ -1092,6 +1194,15 @@ def run_roles(
                 state["execution_status"] = "completed"
             else:
                 state["execution_status"] = "blocked"
+                state["blockers"] = [route["reason"], *route.get("warnings", [])]
+                append_trace(layout, {"event": "workflow_blocked", "reason": route["reason"]})
+                record_failure(
+                    layout,
+                    stage="routing",
+                    code="ROUTER_BLOCKED",
+                    message=route["reason"],
+                    details=route.get("warnings", []),
+                )
             break
         role = route["next_role"]
 

@@ -21,6 +21,9 @@
     "quality_commands_selected": "list",
     "security_commands_selected": "list",
     "frontend_evidence_required": "bool",
+    "frontend_dev_command": "str",
+    "frontend_local_url": "str",
+    "frontend_network_scope": "list",
     "warnings": "list"
   }
 }

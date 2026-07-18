@@ -48,7 +48,7 @@ def with_exec_subcommand(command: list[str]) -> list[str]:
 
 
 def sandbox_for_filesystem_access(access: str) -> str:
-    if access in {"task_worktree_write", "workspace_write"}:
+    if access in {"task_worktree_write", "workspace_write", "evidence_write"}:
         return "workspace-write"
     return "read-only"
 
@@ -456,11 +456,17 @@ def run_codex(
         str(result_path),
         "-",
     ]
+    if str(request.get("filesystem_access", "")) == "evidence_write":
+        command[command.index("-"):command.index("-")] = [
+            "--add-dir",
+            str(Path(str(request["artifacts_dir"])).resolve()),
+        ]
     repository = Path(str(request["repository"]))
     env = os.environ.copy()
     env["AGENT_ROLE"] = str(request["role"])
     env["AGENT_ROLE_ALLOWED_TOOLS"] = json.dumps(request.get("allowed_tools", []))
     env["AGENT_ROLE_FILESYSTEM_ACCESS"] = str(request.get("filesystem_access", "read_only"))
+    env["AGENT_TOOL_POLICY_PATH"] = str((Path(__file__).resolve().parents[2] / ".agent-tool-policy.yaml"))
     before_snapshot = ""
     if not role_can_write_repository(str(request.get("filesystem_access", "read_only"))):
         before_snapshot = git_snapshot(repository)

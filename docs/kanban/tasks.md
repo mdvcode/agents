@@ -8,11 +8,14 @@
 
 ## In Progress
 - Step 1 evidence series: implementation and real Codex smoke are complete; collect and verify 10-20 real task runs against a disposable publication target.
+- Step 2 production evidence: implementation is complete; run at least three real queued tasks with two overlapping workers, one successful PR, one human exception, and UI evidence in a registered web repository.
 
 ## Review
 - None.
 
 ## Done
+- Step 2 implementation: deterministic routing, four bounded repair loops, independent verifier contracts, same-worktree publication, SQLite workers, exception CLI, tool governance, and acceptance verifier.
+- Security severity routing and explicit non-LLM Issue Intake harness-stage classification.
 - Step 1 implementation: authoritative run state, artifact ownership, structured errors, metrics, publication idempotency, default-branch safety, and series verifier.
 - P3.1e: real Codex preflight and smoke pass with the application-bundled CLI.
 - Generated and verified `Daryna_Barabanova_CV_ATS.pdf` with embedded TrueType fonts and three-parser ATS extraction checks.

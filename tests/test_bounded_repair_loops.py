@@ -24,6 +24,7 @@ def state(diff_hash: str) -> dict[str, object]:
             "quality_repair": {"iterations": 0},
             "review_repair": {"iterations": 0},
             "ci_repair": {"iterations": 0},
+            "frontend_verification_repair": {"iterations": 0},
         },
         "diff_hash": diff_hash,
     }
@@ -72,7 +73,7 @@ def test_quality_loop_is_bounded_even_when_diff_changes(tmp_path: Path) -> None:
     assert routes[-1]["next_role"] == "approval-gate"
 
 
-def test_failure_fingerprint_includes_failure_inputs_and_diff(tmp_path: Path) -> None:
+def test_failure_fingerprint_is_independent_from_diff_fingerprint(tmp_path: Path) -> None:
     artifacts = tmp_path / "artifacts"
     write_json(artifacts / "quality.json", {"failed_command": "pytest", "stderr_excerpt": "failed"})
     first = failure_fingerprint(
@@ -85,7 +86,7 @@ def test_failure_fingerprint_includes_failure_inputs_and_diff(tmp_path: Path) ->
         state={"diff_hash": "two", "changed_files": ["src/a.py"]},
         artifacts_dir=artifacts,
     )
-    assert first != second
+    assert first == second
 
 
 def test_ci_failure_routes_through_ci_repair_agent(tmp_path: Path) -> None:
@@ -101,3 +102,26 @@ def test_ci_failure_routes_through_ci_repair_agent(tmp_path: Path) -> None:
     )
     assert result["next_role"] == "ci-repair-agent"
     assert result["loop"]["name"] == "ci_repair"
+
+
+def test_distinct_repair_loops_do_not_share_a_three_iteration_ceiling(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    write_json(artifacts / "quality.json", {"overall_status": "fail", "failed_command": "pytest"})
+    current = state("quality-diff")
+    current["loops"] = {
+        "quality_repair": {"iterations": 0},
+        "review_repair": {"iterations": 1},
+        "ci_repair": {"iterations": 1},
+        "frontend_verification_repair": {"iterations": 1},
+    }
+
+    result = decide_next_role(
+        current_role="quality-runner",
+        role_result={"status": "completed"},
+        run_dir=tmp_path,
+        artifacts_dir=artifacts,
+        workflow_state=current,
+    )
+
+    assert result["next_role"] == "implementation-agent"
+    assert result["loop"]["iteration"] == 1

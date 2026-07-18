@@ -186,6 +186,7 @@ def run_workflow(
                         "quality_repair": {"iterations": 0},
                         "review_repair": {"iterations": 0},
                         "ci_repair": {"iterations": 0},
+                        "frontend_verification_repair": {"iterations": 0},
                     },
                     "budgets": budgets,
                     "role_count": 0,

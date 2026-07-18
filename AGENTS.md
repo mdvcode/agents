@@ -151,6 +151,11 @@ Treat changes touching any of the following as HIGH risk and protected:
 - `errors.jsonl`: structured terminal errors and approval stops.
 - `audit-log.jsonl`: autonomous publication actions.
 - `.agent-artifact-owners.yaml` and `.agent-role-contracts.yaml` are the ownership source of truth.
+- `.agent-routing.yaml` and `scripts/workflow_router.py` are authoritative for gates; role `next_action` is advisory.
+- `.agent-tool-policy.yaml` is authoritative for role tool actions, side effects, domains, credential types, and timeouts.
+- `.agent-queue/tasks.db` is scheduler state only. It must not duplicate mutable workflow or artifact state from `.agent-runs/<run-id>/`.
+- Issue Intake is a deterministic `harness_stage` with `llm_invocation=false`; it must not be treated as an LLM role.
+- Security routing is severity-aware: CRITICAL findings hard-block the workflow; MEDIUM and HIGH findings require human approval.
 
 ## Artifact hygiene
 - Do not create or mutate repository-root `artifacts/`; it is not workflow state.
@@ -177,6 +182,7 @@ A task is not done until:
 - for UI or user-visible work that requires visual evidence, local screenshot/video/trace evidence is captured, or a warning is recorded and any PR is draft when policy allows publication without evidence
 - the next action is clearly stated
 - an audit log entry is written for autonomous actions
+- concurrent acceptance claims pass `make step2-verify` against real queued runs, not synthetic fixtures
 
 ## Persistent repository rules
 - Treat any migration, auth, permission, session, CSRF, production settings, secret-management, webhook, payment, billing, or irreversible side-effect change as elevated risk.

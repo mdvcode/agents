@@ -46,6 +46,7 @@ def completed_state(**extra: object) -> dict[str, object]:
             "quality_repair": {"iterations": 0},
             "review_repair": {"iterations": 0},
             "ci_repair": {"iterations": 0},
+            "frontend_verification_repair": {"iterations": 0},
         },
         **extra,
     }
@@ -110,7 +111,14 @@ def setup_artifacts(tmp_path: Path, risk_class: str = "low", changed_areas: list
     artifact(
         artifacts_dir / "security.json",
         {
+            "verdict": "works",
+            "expected": [],
+            "observed": [],
+            "evidence": [],
+            "blockers": [],
+            "repair_required": False,
             "status": "pass",
+            "highest_severity": "none",
             "project_profile": "agent_workspace",
             "findings": [],
             "blocker_ids": [],
@@ -122,6 +130,12 @@ def setup_artifacts(tmp_path: Path, risk_class: str = "low", changed_areas: list
     artifact(
         artifacts_dir / "review.json",
         {
+            "verdict": "works",
+            "expected": [],
+            "observed": [],
+            "evidence": [],
+            "blockers": [],
+            "repair_required": False,
             "status": "pass",
             "project_profile": "agent_workspace",
             "findings": [],
@@ -257,6 +271,12 @@ def test_review_blocker_starts_review_repair(tmp_path: Path) -> None:
     artifact(
         artifacts_dir / "review.json",
         {
+            "verdict": "broken",
+            "expected": [],
+            "observed": [],
+            "evidence": [],
+            "blockers": ["R1"],
+            "repair_required": True,
             "status": "block",
             "project_profile": "agent_workspace",
             "findings": ["R1"],
@@ -272,22 +292,109 @@ def test_review_blocker_starts_review_repair(tmp_path: Path) -> None:
     assert result["loop"]["name"] == "review_repair"
 
 
-def test_security_blocker_routes_to_approval(tmp_path: Path) -> None:
-    artifacts_dir = setup_artifacts(tmp_path)
+def test_critical_security_finding_blocks_workflow(tmp_path: Path) -> None:
+    setup_artifacts(tmp_path)
     state = completed_state(security_blockers_present=True)
     result = route(tmp_path, state, "security-agent")
+    assert result["next_role"] == "blocked"
+    assert result["stop"] is True
+
+
+def test_medium_security_finding_routes_to_approval(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    security = json.loads((artifacts_dir / "security.json").read_text(encoding="utf-8"))
+    security.update(
+        {
+            "verdict": "broken",
+            "status": "warn",
+            "highest_severity": "medium",
+            "findings": [{"id": "SEC-MEDIUM", "severity": "medium"}],
+            "blockers": ["SEC-MEDIUM"],
+            "blocker_ids": ["SEC-MEDIUM"],
+            "repair_required": True,
+        }
+    )
+    artifact(artifacts_dir / "security.json", security)
+
+    result = route(tmp_path, completed_state(), "security-agent")
+
     assert result["next_role"] == "approval-gate"
     assert result["stop"] is True
 
 
 def test_missing_frontend_evidence_allows_draft_only_publication(tmp_path: Path) -> None:
     artifacts_dir = setup_artifacts(tmp_path, changed_areas=["ui"])
-    artifact(artifacts_dir / "frontend_qa.json", {"evidence_required": True, "evidence_collected": False})
+    artifact(
+        artifacts_dir / "frontend_qa.json",
+        {
+            "verdict": "unavailable",
+            "expected": [],
+            "observed": [],
+            "evidence": [],
+            "blockers": ["browser unavailable"],
+            "repair_required": False,
+            "evidence_required": True,
+            "evidence_collected": False,
+            "screenshots": [],
+            "console_errors": [],
+            "network_errors": [],
+            "local_url": "",
+            "dev_server": {},
+            "next_action": "continue",
+        },
+    )
     state = completed_state()
+    state["roles"].append({"role": "frontend-qa-agent", "result": {"status": "completed"}})  # type: ignore[union-attr]
     result = route(tmp_path, state, "publication-prepare")
     assert result["next_role"] == "publication"
     assert result["publication_allowed"] is True
     assert any("draft" in warning for warning in result["warnings"])
+
+
+def test_broken_frontend_verification_starts_bounded_repair(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path, changed_areas=["ui"])
+    artifact(
+        artifacts_dir / "frontend_qa.json",
+        {
+            "verdict": "broken",
+            "expected": ["button submits"],
+            "observed": ["button throws"],
+            "evidence": ["screenshot.png"],
+            "blockers": ["UI-1"],
+            "repair_required": True,
+        },
+    )
+    state = completed_state(diff_hash="ui-diff")
+
+    result = route(tmp_path, state, "frontend-qa-agent")
+
+    assert result["next_role"] == "implementation-agent"
+    assert result["loop"]["name"] == "frontend_verification_repair"
+    assert result["loop"]["diff_fingerprint"] == "ui-diff"
+
+
+def test_loop_token_budget_routes_to_approval(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    artifact(artifacts_dir / "quality.json", {"overall_status": "fail", "failed_command": "pytest"})
+    state = completed_state(diff_hash="changed", tokens_used=70000)
+    state["loops"]["quality_repair"] = {"iterations": 0, "tokens_at_start": 0, "elapsed_at_start": 0}  # type: ignore[index]
+
+    result = route(tmp_path, state, "quality-runner")
+
+    assert result["next_role"] == "approval-gate"
+    assert any("tokens" in warning for warning in result["warnings"])
+
+
+def test_loop_time_budget_routes_to_approval(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    artifact(artifacts_dir / "quality.json", {"overall_status": "fail", "failed_command": "pytest"})
+    state = completed_state(diff_hash="changed", elapsed_seconds=2000)
+    state["loops"]["quality_repair"] = {"iterations": 0, "tokens_at_start": 0, "elapsed_at_start": 0}  # type: ignore[index]
+
+    result = route(tmp_path, state, "quality-runner")
+
+    assert result["next_role"] == "approval-gate"
+    assert any("seconds" in warning for warning in result["warnings"])
 
 
 def test_publication_remains_unreachable_until_required_gates_exist(tmp_path: Path) -> None:

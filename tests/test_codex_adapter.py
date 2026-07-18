@@ -69,6 +69,28 @@ def context_manifest_payload(tmp_path: Path, raw_dir: Path | None = None) -> dic
     }
 
 
+def test_json_contract_supports_nullable_nested_objects() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "loop": {
+                "type": ["object", "null"],
+                "properties": {"iteration": {"type": "integer"}},
+                "required": ["iteration"],
+                "additionalProperties": False,
+            }
+        },
+        "required": ["loop"],
+        "additionalProperties": False,
+    }
+
+    assert codex_adapter.validate_contract({"loop": None}, schema, "route") == []
+    assert codex_adapter.validate_contract({"loop": {"iteration": 1}}, schema, "route") == []
+    assert codex_adapter.validate_contract({"loop": {}}, schema, "route") == [
+        "route.loop: missing required field 'iteration'"
+    ]
+
+
 def test_codex_adapter_blocks_when_no_command_configured(tmp_path: Path, monkeypatch: object) -> None:
     monkeypatch.delenv("AGENT_CODEX_COMMAND", raising=False)
     monkeypatch.delenv("AGENT_LLM_COMMAND", raising=False)

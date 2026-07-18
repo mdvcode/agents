@@ -40,6 +40,9 @@ This repository is the local operating base for agents working across supported 
 - `make validate-artifacts`: validate required structured artifacts.
 - `make security`: lightweight repository-local scan for obvious secrets, private keys, private paths, and protected staged files.
 - `make agent-status`: print git status and current verdict.
+- `make queue-worker`: process queued workflows with three leased workers.
+- `make list-exceptions`: show runs and queue items requiring a human without transcripts.
+- `make step2-verify RUN_ID=<run-id> QUEUE_DB=<path>`: verify real concurrent Step 2 acceptance evidence.
 
 ## Runtime State
 - `.agent-runs/<run-id>/workflow.json`: authoritative workflow state.
@@ -50,3 +53,4 @@ This repository is the local operating base for agents working across supported 
 - `.agent-runs/<run-id>/metrics.json`: per-role duration and token usage.
 - `.agent-runs/<run-id>/errors.jsonl`: structured failures and approval stops.
 - Repository-root `artifacts/` is forbidden mutable state.
+- `.agent-queue/tasks.db` is scheduler coordination state only; it does not mirror run artifacts or workflow state.

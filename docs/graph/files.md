@@ -15,6 +15,10 @@
 - `.agent-runs/<run-id>/artifacts/verdict.json` -> immutable pre-publication decision, owned by Orchestrator.
 - `.agent-runs/<run-id>/artifacts/publication.json` -> commit/push/PR state, owned by Publication.
 - `.agent-runs/<run-id>/audit-log.jsonl` -> append-only publication action history.
+- `.agent-runs/<run-id>/raw-events/tool-calls.jsonl` -> sanitized tool authorization and execution decisions.
+- `.agent-queue/tasks.db` -> scheduler-only leases, heartbeats, retries, and dead-letter state; never task artifact state.
+- `.agent-routing.yaml` -> deterministic gate and bounded-loop policy.
+- `.agent-tool-policy.yaml` -> role/action/domain/credential/timeout tool authority.
 
 ## Durable Memory
 - `docs/projects/<project>/issues/` -> private per-project issue histories.

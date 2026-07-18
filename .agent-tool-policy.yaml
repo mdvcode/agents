@@ -1,0 +1,72 @@
+version: 1
+audit_log: raw-events/tool-calls.jsonl
+defaults:
+  timeout_seconds: 300
+  arbitrary_network: false
+tools:
+  filesystem_read:
+    roles: [issue-intake, context-compiler, planner, risk-classifier, implementation-agent, test-generator, quality-runner, security-agent, frontend-qa-agent, architecture-consistency-agent, semantic-conflict-agent, reviewer, ci-repair-agent, orchestrator, eval-runner, report-agent, publication-prepare, publication]
+    allowed: [read]
+    side_effects: none
+    timeout_seconds: 60
+  repository_search:
+    roles: [issue-intake, context-compiler, planner, risk-classifier, implementation-agent, test-generator, security-agent, architecture-consistency-agent, semantic-conflict-agent, reviewer, ci-repair-agent, orchestrator, eval-runner, report-agent]
+    allowed: [search]
+    side_effects: none
+    timeout_seconds: 60
+  filesystem_write:
+    roles: [implementation-agent, test-generator, ci-repair-agent]
+    allowed: [write]
+    side_effects: task_worktree
+    timeout_seconds: 300
+  apply_patch:
+    roles: [implementation-agent, test-generator, ci-repair-agent]
+    allowed: [patch]
+    side_effects: task_worktree
+    timeout_seconds: 300
+  git_diff:
+    roles: [architecture-consistency-agent, semantic-conflict-agent, reviewer, publication-prepare]
+    allowed: [diff]
+    side_effects: none
+    timeout_seconds: 60
+  shell:
+    roles: [implementation-agent, quality-runner, security-agent, frontend-qa-agent, ci-repair-agent, eval-runner, publication]
+    allowed: [project_command]
+    forbidden: [arbitrary_network]
+    command_source: project_profile
+    network_domains: []
+    credentials: []
+    side_effects: declared_command
+    timeout_seconds: 900
+  playwright:
+    roles: [frontend-qa-agent]
+    allowed: [start_dev_server, navigate, interact, screenshot, inspect_console, inspect_network]
+    forbidden: [external_navigation]
+    network_domains: [localhost, 127.0.0.1, "::1"]
+    credentials: []
+    side_effects: browser_session
+    timeout_seconds: 180
+  browser:
+    roles: [frontend-qa-agent]
+    allowed: [navigate, interact, screenshot, inspect_console, inspect_network]
+    forbidden: [external_navigation]
+    network_domains: [localhost, 127.0.0.1, "::1"]
+    credentials: []
+    side_effects: browser_session
+    timeout_seconds: 180
+  git:
+    roles: [publication]
+    allowed: [status, diff, fetch, rev_parse, show_ref, ls_files, remote, add, commit, push, worktree, config, branch]
+    forbidden: [force_push, reset_hard, clean_force]
+    network_domains: [github.com]
+    credentials: [git_credential]
+    side_effects: task_branch
+    timeout_seconds: 300
+  github:
+    roles: [publication]
+    allowed: [auth_status, read_pr, create_pr, update_pr, comment_pr, mark_ready]
+    forbidden: [merge, force_push, delete_branch]
+    network_domains: [github.com, api.github.com]
+    credentials: [gh_auth]
+    side_effects: pull_request
+    timeout_seconds: 300
