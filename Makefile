@@ -1,6 +1,6 @@
 CODEX_CLI ?= $(shell if [ -x /Applications/ChatGPT.app/Contents/Resources/codex ]; then printf /Applications/ChatGPT.app/Contents/Resources/codex; elif [ -x "$$HOME/Applications/ChatGPT.app/Contents/Resources/codex" ]; then printf "$$HOME/Applications/ChatGPT.app/Contents/Resources/codex"; else command -v codex 2>/dev/null || printf codex; fi)
 
-.PHONY: check security validate-artifacts codex-preflight codex-smoke step1-verify step2-verify queue-worker worker-service-start worker-service-restart worker-service-status worker-service-health worker-service-stop control-plane metrics approve-run resume-run reject-run list-exceptions publish-dry-run publish agent-status
+.PHONY: check security validate-artifacts runtime-preflight codex-preflight codex-smoke step1-verify step2-verify queue-worker worker-service-start worker-service-restart worker-service-status worker-service-health worker-service-stop control-plane metrics approve-run resume-run reject-run list-exceptions publish-dry-run publish agent-status
 
 RUN_ID ?=
 STEP1_MANIFEST ?=
@@ -26,8 +26,10 @@ validate-artifacts:
 		python3 scripts/validate_artifacts.py --contracts-only; \
 	fi
 
-codex-preflight:
-	python3 scripts/check_codex_runtime.py --repo . --codex-command "$(CODEX_CLI)"
+runtime-preflight:
+	AGENT_CODEX_CLI_COMMAND="$(CODEX_CLI)" python3 scripts/check_runtime.py --repo .
+
+codex-preflight: runtime-preflight
 
 codex-smoke:
 	AGENT_REAL_CODEX_SMOKE=1 AGENT_CODEX_CLI_COMMAND="$(CODEX_CLI)" \

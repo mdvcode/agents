@@ -9,6 +9,13 @@ from pathlib import Path
 import pytest
 
 
+SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+from runtimes import create_runtime
+
+
 @pytest.mark.skipif(
     os.environ.get("AGENT_REAL_CODEX_SMOKE") != "1" or not os.environ.get("AGENT_CODEX_CLI_COMMAND"),
     reason="optional real Codex smoke requires AGENT_REAL_CODEX_SMOKE=1 and AGENT_CODEX_CLI_COMMAND",
@@ -75,19 +82,22 @@ def test_real_codex_runtime_smoke(tmp_path: Path) -> None:
         "timeout_seconds": 60,
     }
 
-    executor = Path(__file__).resolve().parents[1] / "scripts" / "adapters" / "codex_cli_executor.py"
-    completed = subprocess.run(
-        [sys.executable, str(executor)],
-        input=json.dumps(request),
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=90,
+    runtime = create_runtime(
+        raw_output_dir=raw_dir,
+        timeout_seconds=90,
+    )
+    result = runtime.execute(
+        role="planner",
+        context=manifest,
+        task=request,
+        worktree=repo,
+        artifacts=artifacts_dir,
     )
 
-    assert completed.returncode == 0
-    result = json.loads(completed.stdout)
     assert result["status"] == "completed", result
+    assert runtime.descriptor.provider == "codex-cli"
+    assert runtime.descriptor.transport == "local_subscription"
+    assert runtime.descriptor.api_required is False
     assert (artifacts_dir / "plan.md").exists()
     assert (artifacts_dir / "project_profile.json").exists()
     assert result["thread_id"]

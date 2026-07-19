@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from adapters.codex_adapter import load_json as load_schema, validate_contract
+from runtime_contracts import load_json as load_schema, validate_contract
 from task_queue import DEFAULT_DB, TaskQueue, TaskRecord
 from tool_governance import audit_tool_call, authorize_tool_call
 

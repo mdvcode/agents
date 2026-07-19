@@ -21,6 +21,12 @@ GitHub Actions failure -> HMAC-verified webhook -> governed failed-log read -> s
 
 The queue coordinates tasks; it never replaces `.agent-runs/<run-id>/` as the authoritative state of a task.
 
+## Runtime Flow
+
+Harness role request -> provider-neutral `Runtime.execute(...)` -> configured Runtime Adapter -> Codex CLI local subscription -> structured role result + provider trace -> authoritative run state.
+
+Step 2 has one production provider (`codex-cli`) and no Model Router. Future provider adapters are isolated Step 3 additions behind the same contract; model selection is deferred to Step 4.
+
 ## Deterministic Gate Flow
 
 HIGH risk -> approval; CRITICAL security -> blocked; MEDIUM/HIGH security -> approval; UI changed -> frontend verifier; quality/review/CI/frontend broken -> bounded repair; repeated failure plus unchanged diff -> approval; all required gates valid -> publication. Model `next_action` is advisory throughout.

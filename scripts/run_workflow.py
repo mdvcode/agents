@@ -140,6 +140,8 @@ def run_workflow(
     base_branch: str = "main",
     adapter_command: str = "",
     resume: bool = False,
+    runtime_provider: str = "",
+    runtime_command: str = "",
 ) -> int:
     workflows = read_workflows()
     workflow = workflows.get("workflows", {}).get(workflow_name)
@@ -169,7 +171,10 @@ def run_workflow(
     max_retries = int(retry.get("max_retries", 0)) if isinstance(retry, dict) else 0
     backoff_seconds = float(retry.get("backoff_seconds", 0)) if isinstance(retry, dict) else 0.0
     steps = workflow_steps(workflow)
-    effective_adapter_command = adapter_command or str(workflow.get("adapter_command", ""))
+    effective_runtime_provider = runtime_provider or str(workflow.get("runtime_provider", ""))
+    effective_runtime_command = runtime_command or adapter_command or str(
+        workflow.get("runtime_command", workflow.get("adapter_command", ""))
+    )
     artifacts_dir = layout.artifacts
     budgets = workflow_budgets(workflow)
     started = time.monotonic()
@@ -235,14 +240,25 @@ def run_workflow(
                 .replace("{repository}", quote_placeholder(repository_value))
                 .replace("{branch}", quote_placeholder(branch_value))
                 .replace("{base_branch}", quote_placeholder(base_branch))
-                .replace("{adapter_command}", quote_placeholder(effective_adapter_command))
+                .replace("{runtime_provider}", quote_placeholder(effective_runtime_provider))
+                .replace("{runtime_command}", quote_placeholder(effective_runtime_command))
+                .replace("{adapter_command}", quote_placeholder(effective_runtime_command))
             )
             if (
-                effective_adapter_command
+                effective_runtime_command
                 and command.startswith("python3 scripts/agent_role_runner.py")
+                and "--runtime-command" not in command
                 and "--adapter-command" not in command
             ):
-                command = f"{command} --adapter-command {quote_placeholder(effective_adapter_command)}"
+                legacy_adapter = "adapter_command" in workflow and "runtime_provider" not in workflow
+                flag = "--adapter-command" if legacy_adapter else "--runtime-command"
+                command = f"{command} {flag} {quote_placeholder(effective_runtime_command)}"
+            if (
+                effective_runtime_provider
+                and command.startswith("python3 scripts/agent_role_runner.py")
+                and "--runtime-provider" not in command
+            ):
+                command = f"{command} --runtime-provider {quote_placeholder(effective_runtime_provider)}"
             if (
                 dry_run
                 and command.startswith(("python3 scripts/publish_pr.py", "python3 scripts/agent_role_runner.py"))
@@ -307,6 +323,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--branch", default="")
     parser.add_argument("--base-branch", default="main")
     parser.add_argument("--adapter-command", default="")
+    parser.add_argument("--runtime-provider", default="")
+    parser.add_argument("--runtime-command", default="")
     parser.add_argument("--resume", action="store_true")
     return parser.parse_args()
 
@@ -325,6 +343,8 @@ def main() -> int:
         base_branch=args.base_branch,
         adapter_command=args.adapter_command,
         resume=args.resume,
+        runtime_provider=args.runtime_provider,
+        runtime_command=args.runtime_command,
     )
 
 

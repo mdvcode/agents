@@ -21,7 +21,7 @@ if str(SCRIPT_DIR) not in sys.path:
 if str(SCRIPT_DIR.parent) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR.parent))
 
-from codex_adapter import (  # noqa: E402
+from runtime_contracts import (  # noqa: E402
     DEFAULT_TIMEOUT_SECONDS,
     ROOT,
     SCHEMAS,

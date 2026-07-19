@@ -89,6 +89,26 @@ def test_issue_intake_contract_is_explicitly_non_llm_harness_stage() -> None:
     ]
 
 
+def test_step2_runtime_config_allows_only_local_codex_cli_without_router() -> None:
+    config = {
+        "version": 1,
+        "runtime": {
+            "provider": "codex-cli",
+            "executor_command": "python3 scripts/adapters/codex_cli_executor.py",
+            "transport": "local_subscription",
+            "api_required": False,
+            "model_router": False,
+        },
+    }
+
+    assert validator.validate_runtime_config_data(config) == []
+    config["runtime"]["api_required"] = True
+    config["runtime"]["model_router"] = True
+    errors = validator.validate_runtime_config_data(config)
+    assert any("must not require an API" in error for error in errors)
+    assert any("model_router is forbidden" in error for error in errors)
+
+
 def policy_payload(branch_prefixes: list[str] | None = None) -> dict[str, Any]:
     allowed = branch_prefixes or ["feat/", "fix/", "issue/", "tast/"]
     publication = {

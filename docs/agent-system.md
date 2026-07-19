@@ -60,16 +60,29 @@ Security routing is severity-aware. A `critical` finding returns a hard `blocked
 - `scripts/ci_feedback.py` verifies GitHub webhook HMAC, reads failed logs through tool governance, redacts credential patterns, stores CI evidence inside the run, and queues `ci-repair-agent` against the existing branch and PR.
 - `scripts/control_plane_api.py` is a loopback-only API for intake, approvals, resume, exceptions, and metrics. `scripts/operational_metrics.py` exposes compact runs/workers/queue/leases/budgets/exceptions state without transcripts.
 
-Step 2 production acceptance is evidence-gated by `make step2-verify`. It requires real concurrent Codex runs, isolated worktrees, independent gates, governed tool traces, at least one PR, and at least one human exception; fixture-only concurrency is not sufficient.
+## Runtime Abstraction
 
-## Codex Executor And Step 1 Gates
-The production Codex executor has an independent environment-dependent smoke gate:
+The Harness controls a provider-neutral runtime boundary:
+
+```text
+Harness -> Runtime Adapter -> Codex CLI
+```
+
+Every model-backed role uses `Runtime.execute(role, context, task, worktree, artifacts)`. Harness code never constructs `codex exec`, calls an OpenAI or Anthropic API, or imports provider-specific execution code. `.agent-runtime.yaml` configures the only Step 2 production provider, `codex-cli`, using a local subscription transport with `api_required: false`. Runtime identity and provenance are stored in each authoritative run.
+
+Additional OpenAI, Claude, or Ollama adapters are deferred to Step 3. A Model Router is explicitly deferred to Step 4; deterministic workflow routing remains authoritative and is not a model-selection router.
+
+Step 2 production acceptance is evidence-gated by `make step2-verify`. It requires real concurrent Codex CLI runtime runs, isolated worktrees, independent gates, governed tool traces, at least one PR, and at least one human exception; fixture-only concurrency is not sufficient.
+
+## Runtime And Step 1 Gates
+The configured production runtime has a provider-neutral preflight; Codex CLI also retains its explicit compatibility gate and real smoke:
 
 ```sh
+make runtime-preflight
 make codex-preflight
 make codex-smoke
 ```
 
-The smoke must run against a real authenticated Codex CLI. It verifies that the Planner role completes, creates `plan.md` and `project_profile.json`, preserves a clean read-only repository, and records raw JSONL plus token usage.
+`make codex-preflight` aliases the configured runtime preflight. The smoke must run against a real authenticated Codex CLI. It verifies that the Planner role completes, creates `plan.md` and `project_profile.json`, preserves a clean read-only repository, and records raw JSONL plus token usage.
 
 Step 1 closes only after a selected 10-20 run manifest passes `make step1-verify`. The verifier rejects fake/external adapter provenance, missing gates, default-branch mutations, HIGH publication, missing PRs for LOW/MEDIUM, duplicate publications, secret leakage, missing token evidence, and unstructured terminal errors.

@@ -42,6 +42,8 @@ def safe_payload(record: TaskRecord) -> dict[str, str]:
         "base_branch",
         "run_id",
         "adapter_command",
+        "runtime_provider",
+        "runtime_command",
         "goal",
         "source",
         "event_id",
@@ -53,8 +55,10 @@ def safe_payload(record: TaskRecord) -> dict[str, str]:
     missing = [field for field in required if not isinstance(record.payload.get(field), str) or not record.payload[field]]
     if missing:
         raise ValueError("missing task payload fields: " + ", ".join(missing))
-    if record.payload.get("adapter_command") and os.environ.get("AGENT_HARNESS_TEST_MODE") != "1":
-        raise ValueError("adapter_command overrides are restricted to harness test mode")
+    if (
+        record.payload.get("adapter_command") or record.payload.get("runtime_command")
+    ) and os.environ.get("AGENT_HARNESS_TEST_MODE") != "1":
+        raise ValueError("runtime command overrides are restricted to harness test mode")
     return {key: str(value) for key, value in record.payload.items()}
 
 
@@ -112,6 +116,10 @@ class WorkflowWorkerPool:
         ]
         if payload.get("adapter_command"):
             command.extend(["--adapter-command", payload["adapter_command"]])
+        if payload.get("runtime_provider"):
+            command.extend(["--runtime-provider", payload["runtime_provider"]])
+        if payload.get("runtime_command"):
+            command.extend(["--runtime-command", payload["runtime_command"]])
         workflow_path = RUNS_DIR / run_id / "workflow.json"
         if workflow_path.exists():
             try:

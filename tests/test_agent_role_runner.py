@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from approval_lifecycle import approve_run, prepare_resume  # noqa: E402
+from runtimes.codex_cli import CodexCliRuntime  # noqa: E402
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "agent_role_runner.py"
@@ -159,7 +160,7 @@ def add_local_origin(repo: Path) -> None:
     subprocess.run(["git", "push", "-u", "origin", "main"], cwd=repo, check=True, capture_output=True)
 
 
-def test_agent_role_runner_preflights_default_codex_executor_before_roles(tmp_path: Path, monkeypatch: object) -> None:
+def test_agent_role_runner_preflights_configured_runtime_before_roles(tmp_path: Path, monkeypatch: object) -> None:
     subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
@@ -168,19 +169,19 @@ def test_agent_role_runner_preflights_default_codex_executor_before_roles(tmp_pa
     subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True, capture_output=True)
     add_local_origin(tmp_path)
     monkeypatch.setattr(agent_role_runner, "RUNS", tmp_path / ".agent-runs")
-    monkeypatch.delenv("AGENT_CODEX_COMMAND", raising=False)
-    monkeypatch.delenv("AGENT_LLM_COMMAND", raising=False)
+    monkeypatch.delenv("AGENT_RUNTIME_PROVIDER", raising=False)
+    monkeypatch.delenv("AGENT_RUNTIME_COMMAND", raising=False)
     calls: list[Path] = []
 
-    def fake_check_codex_runtime(**kwargs: object) -> dict[str, object]:
-        calls.append(Path(str(kwargs["repo"])))
+    def fake_preflight(self: object, *, worktree: Path, timeout_seconds: int) -> dict[str, object]:
+        calls.append(worktree)
         return {
             "execution_status": "blocked",
             "blockers": ["Codex CLI is not available or not authenticated."],
             "warnings": [],
         }
 
-    monkeypatch.setattr(agent_role_runner, "check_codex_runtime", fake_check_codex_runtime)
+    monkeypatch.setattr(CodexCliRuntime, "preflight", fake_preflight)
 
     state = agent_role_runner.run_roles(
         run_id="run-1",
@@ -194,6 +195,7 @@ def test_agent_role_runner_preflights_default_codex_executor_before_roles(tmp_pa
     assert len(calls) == 1
     assert calls[0].parent.name == ".agent-worktrees"
     assert state["blockers"] == ["Codex CLI is not available or not authenticated."]
+    assert state["runtime"]["provider"] == "codex-cli"
 
 
 def test_agent_role_runner_invokes_adapter_for_core_roles(tmp_path: Path, monkeypatch: object) -> None:

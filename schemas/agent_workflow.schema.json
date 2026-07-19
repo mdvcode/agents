@@ -9,7 +9,7 @@
     "budgets",
     "role_count",
     "tokens_used",
-    "executor",
+    "runtime",
     "input_fingerprint",
     "base_branch_sha_before",
     "base_branch_sha_after"
@@ -27,7 +27,7 @@
     "budgets": "dict",
     "role_count": "int",
     "tokens_used": "int",
-    "executor": "dict",
+    "runtime": "dict",
     "input_fingerprint": "str",
     "base_branch_sha_before": "str",
     "base_branch_sha_after": "str",
@@ -40,7 +40,8 @@
   },
   "object_required": {
     "loops": ["quality_repair", "review_repair", "ci_repair", "frontend_verification_repair"],
-    "budgets": ["max_roles", "max_repair_iterations", "max_duration_seconds", "max_tokens"]
+    "budgets": ["max_roles", "max_repair_iterations", "max_duration_seconds", "max_tokens"],
+    "runtime": ["provider", "kind", "transport", "production", "command", "api_required"]
   },
   "additionalProperties": false
 }

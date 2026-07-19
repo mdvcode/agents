@@ -38,6 +38,7 @@ This repository is the local operating base for agents working across supported 
 ## Validation
 - `make check`: validate artifacts and diff hygiene.
 - `make validate-artifacts`: validate required structured artifacts.
+- `make runtime-preflight`: preflight the production provider through the Runtime abstraction (`codex-cli` in Step 2).
 - `make security`: lightweight repository-local scan for obvious secrets, private keys, private paths, and protected staged files.
 - `make agent-status`: print git status and current verdict.
 - `make queue-worker`: process queued workflows with three leased workers.
@@ -48,6 +49,9 @@ This repository is the local operating base for agents working across supported 
 - `make step2-verify RUN_ID=<run-id> QUEUE_DB=<path>`: verify real concurrent Step 2 acceptance evidence.
 
 ## Runtime State
+- `.agent-runtime.yaml`: the single production runtime selection; Step 2 permits only local-subscription `codex-cli`, requires no API, and disables Model Router.
+- `scripts/runtimes/`: provider-neutral contract, registry, generic structured subprocess boundary, and provider adapters.
+- All model-backed execution must pass through `Runtime.execute(...)`. Additional adapters belong to Step 3; Model Router belongs to Step 4.
 - `.agent-runs/<run-id>/workflow.json`: authoritative workflow state.
 - `.agent-runs/<run-id>/context-manifests/`: scoped role context.
 - `.agent-runs/<run-id>/role-results/`: role checkpoints.

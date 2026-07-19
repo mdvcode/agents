@@ -535,7 +535,7 @@ def _invalid_required_gates(state: dict[str, Any], artifacts_dir: Path, current_
     }
     invalid: list[str] = []
     required = required_gate_roles(state, artifacts_dir)
-    from adapters.codex_adapter import contract_section
+    from runtime_contracts import contract_section
     from validate_artifacts import validate_required
 
     for role in required:

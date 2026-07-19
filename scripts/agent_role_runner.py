@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Run the agent-role workflow with strict adapter and run-scoped artifacts."""
+"""Run the agent-role workflow through a provider-neutral runtime boundary."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
-import os
 import subprocess
 import sys
 import time
@@ -20,11 +19,11 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from adapters.codex_adapter import CodexAdapter, contract_section, load_json, validate_contract
 from approval_lifecycle import ApprovalError, request_approval
-from check_codex_runtime import check_codex_runtime
 from context_compiler import create_context_manifest, role_capability, role_contract
 from repository_registry import RepositoryRecord, find_by_remote
+from runtime_contracts import contract_section, load_json, validate_contract
+from runtimes import RuntimeConfigurationError, create_runtime
 from run_state import (
     RunLayout,
     file_contents_snapshot,
@@ -87,7 +86,6 @@ PROMPT_FILES = {
 }
 DEFAULT_ALLOWED_TOOLS = ["filesystem_read", "repository_search"]
 KNOWN_PROJECT_PROFILES = {"agent_workspace", "django", "nextjs_web"}
-DEFAULT_CODEX_ADAPTER_COMMAND = "python3 scripts/adapters/codex_cli_executor.py"
 
 
 def make_run_id(workflow: str) -> str:
@@ -553,21 +551,6 @@ def build_role_request(
     }
 
 
-def effective_adapter_command(workflow: str, adapter_command: str) -> str:
-    if adapter_command:
-        return adapter_command
-    configured = os.environ.get("AGENT_CODEX_COMMAND", "") or os.environ.get("AGENT_LLM_COMMAND", "")
-    if configured:
-        return configured
-    if workflow == "full_agent_workflow":
-        return DEFAULT_CODEX_ADAPTER_COMMAND
-    return ""
-
-
-def uses_production_codex_executor(command: str) -> bool:
-    return "codex_cli_executor.py" in command
-
-
 def frontend_qa_unavailable_result(artifacts_dir: Path, warnings: list[str]) -> dict[str, Any]:
     write_json(
         artifacts_dir / "frontend_qa.json",
@@ -802,6 +785,8 @@ def run_roles(
     timeout_seconds: int = 600,
     create_task_worktree: bool = False,
     resume: bool = False,
+    runtime_provider: str = "",
+    runtime_command: str = "",
 ) -> dict[str, Any]:
     run_id = run_id or make_run_id(workflow)
     existing_workflow = RUNS / run_id / "workflow.json"
@@ -840,7 +825,7 @@ def run_roles(
         )
         if existing.get("execution_status") == "completed" and existing.get("input_fingerprint") == fingerprint:
             return existing
-        if isinstance(existing.get("executor"), dict):
+        if isinstance(existing.get("runtime"), dict) or isinstance(existing.get("executor"), dict):
             if existing.get("input_fingerprint") == fingerprint:
                 return existing
             return {
@@ -883,9 +868,14 @@ def run_roles(
         worktree = Path(str(state.get("worktree", ""))).resolve()
         effective_branch = str(state.get("branch", branch))
         effective_base = str(state.get("base_branch", base_branch))
-        executor = state.get("executor", {})
-        configured_adapter = executor.get("command", "") if isinstance(executor, dict) else ""
-        adapter_command = effective_adapter_command(workflow, adapter_command or str(configured_adapter))
+        stored_runtime = state.get("runtime", state.get("executor", {}))
+        if not isinstance(stored_runtime, dict):
+            stored_runtime = {}
+        stored_provider = str(stored_runtime.get("provider", ""))
+        if not stored_provider and stored_runtime.get("kind") == "codex_cli":
+            stored_provider = "codex-cli"
+        selected_provider = runtime_provider or stored_provider
+        selected_command = runtime_command or adapter_command or str(stored_runtime.get("command", ""))
         setup_errors = []
         if not repository.is_dir() or not worktree.is_dir():
             setup_errors.append("resume repository or task worktree is missing")
@@ -905,7 +895,8 @@ def run_roles(
         append_trace(layout, {"event": "workflow_resumed", "role": role})
     else:
         project_profile = project_profile_for(project)
-        adapter_command = effective_adapter_command(workflow, adapter_command)
+        selected_provider = runtime_provider
+        selected_command = runtime_command or adapter_command
         worktree, effective_branch, effective_base, setup_errors = prepare_worktree(
             repository,
             task_id,
@@ -915,10 +906,25 @@ def run_roles(
             base_branch,
             create_task_worktree,
         )
-        if uses_production_codex_executor(adapter_command) and not create_task_worktree:
-            setup_errors.append(
-                "production Codex full workflow requires --create-worktree; implementation may not run in the source repository"
-            )
+    runtime = None
+    try:
+        runtime = create_runtime(
+            provider=selected_provider,
+            command=selected_command,
+            timeout_seconds=timeout_seconds,
+            raw_output_dir=raw_dir,
+        )
+    except RuntimeConfigurationError as exc:
+        setup_errors.append(str(exc))
+    if runtime is not None and runtime.descriptor.production and not create_task_worktree:
+        setup_errors.append(
+            "production runtime requires --create-worktree; implementation may not run in the source repository"
+        )
+    if resume:
+        if runtime is not None:
+            state["runtime"] = runtime.descriptor.as_json()
+            state.pop("executor", None)
+    else:
         state = {
             "run_id": run_id,
             "workflow": workflow,
@@ -939,10 +945,13 @@ def run_roles(
             "role_count": 0,
             "tokens_used": 0,
             "input_fingerprint": fingerprint,
-            "executor": {
-                "kind": "codex_cli" if uses_production_codex_executor(adapter_command) else "external_adapter",
-                "command": adapter_command,
-                "production": uses_production_codex_executor(adapter_command),
+            "runtime": runtime.descriptor.as_json() if runtime is not None else {
+                "provider": selected_provider,
+                "kind": "runtime_adapter",
+                "transport": "invalid",
+                "production": False,
+                "command": selected_command,
+                "api_required": False,
             },
             "base_branch_sha_before": git_ref_sha(repository, effective_base),
             "base_branch_sha_after": "",
@@ -968,26 +977,25 @@ def run_roles(
         write_metrics(layout, state)
         return state
 
-    if uses_production_codex_executor(adapter_command):
-        runtime_preflight = check_codex_runtime(repo=worktree, sandbox="read-only", timeout_seconds=min(timeout_seconds, 60))
-        write_json(layout.root / "codex-runtime-preflight.json", runtime_preflight)
-        if runtime_preflight.get("execution_status") != "completed":
-            blockers = [str(item) for item in runtime_preflight.get("blockers", [])]
-            state["execution_status"] = "blocked"
-            state["blockers"] = blockers or ["Codex CLI is not available or not authenticated."]
-            write_json(layout.workflow, state)
-            append_trace(layout, {"event": "workflow_blocked", "blockers": state["blockers"]})
-            record_failure(
-                layout,
-                stage="codex-preflight",
-                code="CODEX_RUNTIME_BLOCKED",
-                message="Real Codex executor preflight failed.",
-                details=state["blockers"],
-            )
-            write_metrics(layout, state)
-            return state
-
-    adapter = CodexAdapter(command=adapter_command, timeout_seconds=timeout_seconds, raw_output_dir=raw_dir)
+    assert runtime is not None
+    runtime_preflight = runtime.preflight(worktree=worktree, timeout_seconds=timeout_seconds)
+    runtime_preflight["provider"] = runtime.descriptor.provider
+    write_json(layout.root / "runtime-preflight.json", runtime_preflight)
+    if runtime_preflight.get("execution_status") != "completed":
+        blockers = [str(item) for item in runtime_preflight.get("blockers", [])]
+        state["execution_status"] = "blocked"
+        state["blockers"] = blockers or ["Configured runtime is unavailable."]
+        write_json(layout.workflow, state)
+        append_trace(layout, {"event": "workflow_blocked", "blockers": state["blockers"]})
+        record_failure(
+            layout,
+            stage="runtime-preflight",
+            code="RUNTIME_PREFLIGHT_BLOCKED",
+            message="Configured runtime preflight failed.",
+            details=state["blockers"],
+        )
+        write_metrics(layout, state)
+        return state
     prior_roles = [
         str(item.get("role", ""))
         for item in state.get("roles", [])
@@ -1108,7 +1116,13 @@ def run_roles(
                         project_profile=project_profile,
                     )
                     write_json(requests_dir / f"{role}.json", request)
-                    result = adapter.invoke(request)
+                    result = runtime.execute(
+                        role=role,
+                        context=manifest_path,
+                        task=request,
+                        worktree=worktree,
+                        artifacts=run_artifacts,
+                    )
 
         result_errors = validate_role_result(result, role)
         if result_errors:
@@ -1312,7 +1326,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo", type=Path, default=ROOT)
     parser.add_argument("--branch", default="")
     parser.add_argument("--base-branch", default="main")
-    parser.add_argument("--adapter-command", default="")
+    parser.add_argument("--runtime-provider", default="")
+    parser.add_argument("--runtime-command", default="")
+    parser.add_argument("--adapter-command", default="", help=argparse.SUPPRESS)
     parser.add_argument("--token-budget", type=int, default=12000)
     parser.add_argument("--timeout-seconds", type=int, default=600)
     parser.add_argument("--create-worktree", action="store_true")
@@ -1323,21 +1339,23 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     state = run_roles(
-        args.workflow,
-        args.run_id,
-        args.artifacts_dir,
-        args.dry_run,
-        args.task_id,
-        args.goal,
-        args.project,
-        args.repo,
-        args.branch,
-        args.base_branch,
-        args.adapter_command,
-        args.token_budget,
-        args.timeout_seconds,
-        args.create_worktree,
-        args.resume,
+        workflow=args.workflow,
+        run_id=args.run_id,
+        artifacts_dir=args.artifacts_dir,
+        dry_run=args.dry_run,
+        task_id=args.task_id,
+        goal=args.goal,
+        project=args.project,
+        repository=args.repo,
+        branch=args.branch,
+        base_branch=args.base_branch,
+        adapter_command=args.adapter_command,
+        token_budget=args.token_budget,
+        timeout_seconds=args.timeout_seconds,
+        create_task_worktree=args.create_worktree,
+        resume=args.resume,
+        runtime_provider=args.runtime_provider,
+        runtime_command=args.runtime_command,
     )
     print(json.dumps(state, indent=2, ensure_ascii=False))
     return 0 if state["execution_status"] == "completed" else 1

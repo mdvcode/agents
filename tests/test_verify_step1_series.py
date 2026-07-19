@@ -41,8 +41,9 @@ def make_run(runs: Path, index: int, risk_class: str) -> Path:
                 }
                 for role in roles
             ],
-            "executor": {
-                "kind": "codex_cli",
+            "runtime": {
+                "kind": "runtime_adapter",
+                "provider": "codex-cli",
                 "production": True,
                 "command": "python3 scripts/adapters/codex_cli_executor.py",
             },

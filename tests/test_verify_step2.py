@@ -35,7 +35,7 @@ def make_run(runs: Path, tmp_path: Path, run_id: str, *, published: bool) -> Pat
                 {"role": "security-agent", "result": {"status": "completed"}},
                 {"role": "reviewer", "result": {"status": "completed"}},
             ],
-            "executor": {"kind": "codex_cli", "production": True},
+            "runtime": {"kind": "runtime_adapter", "provider": "codex-cli", "production": True},
         },
     )
     write_json(run / "metrics.json", {"tokens_used": 10})

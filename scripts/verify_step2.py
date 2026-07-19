@@ -81,10 +81,11 @@ def verify_run(runs_dir: Path, run_id: str, queue_status: str) -> dict[str, Any]
     publication = read_json(run_dir / "artifacts" / "publication.json")
     issue = read_json(run_dir / "artifacts" / "issue.json")
     blockers: list[str] = []
-    executor = workflow.get("executor", {})
+    executor = workflow.get("runtime", workflow.get("executor", {}))
+    provider = executor.get("provider") if isinstance(executor, dict) else ""
     real_executor = (
         isinstance(executor, dict)
-        and executor.get("kind") == "codex_cli"
+        and (provider == "codex-cli" or executor.get("kind") == "codex_cli")
         and executor.get("production") is True
         and (run_dir / "raw-events" / "planner.jsonl").exists()
         and int(metrics.get("tokens_used", 0) or 0) > 0

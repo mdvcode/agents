@@ -191,3 +191,4 @@ A task is not done until:
 ## Persistent repository rules
 - Treat any migration, auth, permission, session, CSRF, production settings, secret-management, webhook, payment, billing, or irreversible side-effect change as elevated risk.
 - Keep local agent memory private; do not copy private issue journals into public PR text unless explicitly approved and sanitized.
+- Route every model-backed role through the provider-neutral `Runtime` contract. In Step 2 only local-subscription `codex-cli` is a production runtime; direct provider SDK/CLI calls from Harness code and Model Router behavior are forbidden.

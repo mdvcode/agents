@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from adapters.codex_adapter import load_json, validate_contract
+from runtime_contracts import load_json, validate_contract
 from task_queue import DEFAULT_DB, TaskQueue, TaskRecord
 
 

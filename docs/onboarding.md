@@ -33,15 +33,18 @@ Use this checklist before making changes.
 13. Append `.agent-runs/<run-id>/audit-log.jsonl`.
 14. Leave the next action explicit.
 
-## Codex Runtime Gate
-Run these before building workflow routing or repair-loop changes on top of the production Codex executor:
+## Runtime Gate
+Run these before building workflow routing or repair-loop changes on top of the production runtime:
 
 ```sh
+make runtime-preflight
 make codex-preflight
 make codex-smoke
 ```
 
-`make codex-preflight` checks that `codex exec` is available, authenticated, supports the required JSON/schema/output flags, can access the target repo, and can apply the requested sandbox. `make codex-smoke` runs the strict real-Codex planner smoke: `plan.md` and `project_profile.json` must be created, raw JSONL and token usage must be saved, and the read-only role must leave the repo unchanged.
+`.agent-runtime.yaml` selects the only Step 2 production runtime, `codex-cli`, using the local subscription with no API dependency. `make runtime-preflight` loads it through the runtime registry; `make codex-preflight` is its compatibility alias. The preflight checks that `codex exec` is available, authenticated, supports the required JSON/schema/output flags, can access the target repo, and can apply the requested sandbox. `make codex-smoke` runs the strict real-Codex planner smoke: `plan.md` and `project_profile.json` must be created, raw JSONL and token usage must be saved, and the read-only role must leave the repo unchanged.
+
+Harness code may call only `Runtime.preflight(...)` and `Runtime.execute(...)`; provider commands and SDK calls belong inside runtime adapters. New provider adapters are Step 3 work. Model selection is Step 4 work and must not be added to the deterministic workflow router.
 
 After smoke, Step 1 acceptance requires `make step1-verify RUN_ID=<evidence-run-id> STEP1_MANIFEST=<run-id-list-file>` against 10-20 real task runs.
 

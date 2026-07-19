@@ -24,6 +24,7 @@ SCHEMAS = ROOT / "schemas"
 POLICY = ROOT / ".agent-policy.yaml"
 PROJECT_PROFILES = ROOT / ".agent-project-profiles.yaml"
 AGENT_WORKFLOWS = ROOT / ".agent-workflows.yaml"
+AGENT_RUNTIME = ROOT / ".agent-runtime.yaml"
 AGENT_ROUTING = ROOT / ".agent-routing.yaml"
 AGENT_REPOSITORIES = ROOT / ".agent-repositories.yaml"
 AGENT_ROLE_CONTRACTS = ROOT / ".agent-role-contracts.yaml"
@@ -467,6 +468,10 @@ def validate_agent_workflows_data(
     if not isinstance(full, dict):
         errors.append(f"{label}: workflows.full_agent_workflow must be an object")
     else:
+        if full.get("runtime_provider") != "codex-cli":
+            errors.append(f"{label}: workflows.full_agent_workflow.runtime_provider must be codex-cli")
+        if "adapter_command" in full:
+            errors.append(f"{label}: workflows.full_agent_workflow must not configure a provider-specific adapter command")
         budgets = full.get("budgets")
         if not isinstance(budgets, dict):
             errors.append(f"{label}: workflows.full_agent_workflow.budgets must be an object")
@@ -481,9 +486,28 @@ def validate_agent_workflows_data(
             errors.append(f"{label}: workflows.full_agent_workflow.executor must pass the run-scoped artifacts dir")
         if not isinstance(executor, str) or "--create-worktree" not in executor:
             errors.append(f"{label}: workflows.full_agent_workflow.executor must create a task worktree")
+        if not isinstance(executor, str) or "--runtime-provider {runtime_provider}" not in executor:
+            errors.append(f"{label}: workflows.full_agent_workflow.executor must use the runtime provider boundary")
     mutation_rules = publish_pr.get("mutation_rules")
     if not isinstance(mutation_rules, list) or not any("git add -A" in rule for rule in mutation_rules):
         errors.append(f"{label}: workflows.publish_pr.mutation_rules must forbid git add -A")
+    return errors
+
+
+def validate_runtime_config_data(data: Any, label: str = ".agent-runtime.yaml") -> list[str]:
+    if not isinstance(data, dict) or data.get("version") != 1:
+        return [f"{label}: version must be 1"]
+    runtime = data.get("runtime")
+    if not isinstance(runtime, dict):
+        return [f"{label}: runtime must be an object"]
+    schema = load_json(SCHEMAS / "runtime_config.schema.json")
+    errors = validate_required(runtime, schema, f"{label}.runtime")
+    if runtime.get("api_required") is not False:
+        errors.append(f"{label}: Step 2 codex-cli runtime must not require an API")
+    if runtime.get("model_router") is not False:
+        errors.append(f"{label}: model_router is forbidden before Step 4")
+    if "codex_cli_executor.py" not in str(runtime.get("executor_command", "")):
+        errors.append(f"{label}: codex-cli executor command must use the Codex CLI adapter")
     return errors
 
 
@@ -799,6 +823,10 @@ def main(artifacts_dir: Path | None = None) -> int:
     errors.extend(workflow_errors)
     if workflows_doc is not None:
         errors.extend(validate_agent_workflows_data(workflows_doc))
+    runtime_doc, runtime_errors = load_yaml(AGENT_RUNTIME, ".agent-runtime.yaml")
+    errors.extend(runtime_errors)
+    if runtime_doc is not None:
+        errors.extend(validate_runtime_config_data(runtime_doc))
     routing_doc, routing_errors = load_yaml(AGENT_ROUTING, ".agent-routing.yaml")
     errors.extend(routing_errors)
     if routing_doc is not None:

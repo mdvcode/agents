@@ -541,17 +541,17 @@ print(json.dumps({
     )
     monkeypatch.setattr(agent_role_runner, "RUNS", tmp_path / ".agent-runs")
     monkeypatch.setenv("AGENT_CODEX_CLI_COMMAND", f"{sys.executable} {codex_cli}")
-    executor = Path(__file__).resolve().parents[1] / "scripts" / "adapters" / "codex_cli_executor.py"
-
     state = agent_role_runner.run_roles(
         run_id="run-production-executor-smoke",
         repository=tmp_path,
-        adapter_command=f"{sys.executable} {executor}",
+        runtime_provider="codex-cli",
         dry_run=True,
         create_task_worktree=True,
     )
 
     assert state["execution_status"] == "awaiting_approval"
+    assert state["runtime"]["provider"] == "codex-cli"
+    assert state["runtime"]["api_required"] is False
     assert [item["role"] for item in state["roles"]][:8] == [
         "issue-intake",
         "context-compiler",

@@ -102,16 +102,18 @@ def verify_run(run_dir: Path) -> dict[str, Any]:
         return {"run_id": run_dir.name, "status": "fail", "risk_class": "", "blockers": [str(exc)]}
     risk_class = str(risk.get("risk_class", ""))
     roles = completed_roles(state)
-    executor = state.get("executor", {})
+    runtime = state.get("runtime", state.get("executor", {}))
+    provider = runtime.get("provider") if isinstance(runtime, dict) else ""
+    legacy_codex = isinstance(runtime, dict) and runtime.get("kind") == "codex_cli"
     real_executor = (
-        isinstance(executor, dict)
-        and executor.get("kind") == "codex_cli"
-        and executor.get("production") is True
-        and "codex_cli_executor.py" in str(executor.get("command", ""))
+        isinstance(runtime, dict)
+        and (provider == "codex-cli" or legacy_codex)
+        and runtime.get("production") is True
+        and "codex_cli_executor.py" in str(runtime.get("command", ""))
         and raw_codex_proof(run_dir)
     )
     if not real_executor:
-        blockers.append("run does not contain real Codex executor proof")
+        blockers.append("run does not contain real codex-cli runtime proof")
     if int(metrics.get("tokens_used", 0) or 0) <= 0:
         blockers.append("token usage was not persisted")
     before = str(state.get("base_branch_sha_before", ""))
