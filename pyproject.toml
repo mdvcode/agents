@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-harness"
+version = "0.1.0"
+description = "Policy-governed local engineering harness with a provider-neutral runtime"
+readme = "docs/index.md"
+requires-python = ">=3.11"
+dependencies = [
+  "PyYAML>=6.0",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+
+[project.scripts]
+agent = "ai_harness.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ai_harness*"]
+
+[tool.setuptools.data-files]
+"share/ai-harness" = [
+  ".agent-artifact-owners.yaml",
+  ".agent-policy.yaml",
+  ".agent-project-profiles.yaml",
+  ".agent-role-capabilities.yaml",
+  ".agent-role-contracts.yaml",
+  ".agent-routing.yaml",
+  ".agent-runtime.yaml",
+  ".agent-tool-policy.yaml",
+  ".agent-workflows.yaml",
+  "AGENTS.md",
+  "Makefile",
+  "packaging/.agent-repositories.yaml",
+]
+"share/ai-harness/scripts" = ["scripts/*.py"]
+"share/ai-harness/scripts/adapters" = ["scripts/adapters/*.py"]
+"share/ai-harness/scripts/runtimes" = ["scripts/runtimes/*.py"]
+"share/ai-harness/schemas" = ["schemas/*.json"]
+"share/ai-harness/schemas/roles" = ["schemas/roles/*.json"]
+"share/ai-harness/.agents/prompts" = [".agents/prompts/*.md"]

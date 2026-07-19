@@ -6,7 +6,7 @@ Build safe, reviewable improvements across supported project profiles using a po
 ## Agent workspace model
 - Treat this repository as the local home base for agents: prompts, skills, docs, logs, kanban boards, and audit artifacts live here.
 - New agents should start with `docs/onboarding.md`, then read `AGENTS.md`, `docs/memory/lessons_learned.md`, and the current `.agent-runs/<run-id>/artifacts/plan.md`.
-- Treat `/Users/user/agents` as a private control plane. Do not assume its memory files can be committed to any target project repository.
+- Treat the active Harness home as a private control plane. Do not assume its memory files can be committed to any target project repository.
 - Use git as the history of agent work. Keep changes small, reviewable, and traceable through `.agent-runs/<run-id>/audit-log.jsonl`.
 - Store durable process documentation in `docs/`, not in one-off task artifacts.
 - For multiple projects, keep private project memory under `docs/projects/<project>/`.
@@ -21,7 +21,7 @@ Build safe, reviewable improvements across supported project profiles using a po
 - The expected output of autonomous work is a local git repository state with code, docs, logs, artifacts, and a clear verdict.
 
 ## Privacy and publication rules
-- Private execution memory stays in `/Users/user/agents` by default.
+- Private execution memory stays in the active Harness home by default.
 - Target project repositories should receive only reviewed code, tests, migrations when explicitly allowed by the project rules, and safe public documentation.
 - Do not publish `docs/projects/*/issues/`, `docs/projects/*/memory/`, `docs/projects/*/wiki/`, `docs/projects/*/graph/`, or `artifacts/` into a target project repository unless the user explicitly approves.
 - Before copying any memory into a PR, issue comment, commit message, or project documentation, sanitize it: remove secrets, tokens, private customer data, internal reasoning traces, private URLs, and unnecessary names.
@@ -192,3 +192,4 @@ A task is not done until:
 - Treat any migration, auth, permission, session, CSRF, production settings, secret-management, webhook, payment, billing, or irreversible side-effect change as elevated risk.
 - Keep local agent memory private; do not copy private issue journals into public PR text unless explicitly approved and sanitized.
 - Route every model-backed role through the provider-neutral `Runtime` contract. In Step 2 only local-subscription `codex-cli` is a production runtime; direct provider SDK/CLI calls from Harness code and Model Router behavior are forbidden.
+- Treat `.agent/project.yaml` as local execution identity only. It must never grant publication, merge, deployment, credential, network, protected-path, or provider-routing authority.

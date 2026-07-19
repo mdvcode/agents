@@ -1,0 +1,41 @@
+{
+  "required": [
+    "version",
+    "created_at",
+    "task",
+    "repository",
+    "project",
+    "project_profile",
+    "role",
+    "runtime",
+    "retriever",
+    "query_terms",
+    "budget",
+    "source_counts",
+    "selected",
+    "excluded"
+  ],
+  "types": {
+    "version": "int",
+    "created_at": "str",
+    "task": "str",
+    "repository": "str",
+    "project": "str",
+    "project_profile": "str",
+    "role": "str",
+    "runtime": "str",
+    "retriever": "str",
+    "query_terms": "list",
+    "budget": "dict",
+    "source_counts": "dict",
+    "selected": "list",
+    "excluded": "list"
+  },
+  "object_required": {
+    "budget": [
+      "total_tokens",
+      "used_tokens",
+      "remaining_tokens"
+    ]
+  }
+}

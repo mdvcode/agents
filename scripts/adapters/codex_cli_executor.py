@@ -217,6 +217,18 @@ def context_budget(manifest: dict[str, Any]) -> tuple[int, int]:
 
 def context_reference_contents(manifest: dict[str, Any]) -> str:
     max_total_bytes, max_bytes_per_file = context_budget(manifest)
+    package_path = manifest.get("context_package_path")
+    if isinstance(package_path, str) and package_path:
+        path = Path(package_path)
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            return f"### context_package: {path}\n[unavailable: {exc}]"
+        encoded = content.encode("utf-8")
+        if len(encoded) > max_total_bytes:
+            content = encoded[:max_total_bytes].decode("utf-8", errors="ignore").rstrip()
+            content += "\n[truncated: context byte safety limit]"
+        return f"### context_package: {path}\n{content}"
     references: list[tuple[str, str]] = []
     for item in manifest.get("context_files", []):
         if isinstance(item, dict) and isinstance(item.get("path"), str):

@@ -1,5 +1,11 @@
 # Workflow Graph
 
+## User CLI Flow
+
+`pipx install ai-harness` -> `agent init` -> `.agent/project.yaml` + `AGENTS.md` -> `agent task "Goal"` -> normalized Task envelope -> SQLite queue -> worker/worktree/workflow -> `agent status` -> PR or compact exception.
+
+Project-local configuration authorizes onboarding into isolated execution only. Central Harness policy and repository trust remain mandatory for publication.
+
 ## GitHub Issue Flow
 User gives project + GitHub issue -> branch -> `docs/projects/<project>/issues/issue-<number>.md` -> one `.agent-runs/<run-id>/` -> plan -> risk -> patch -> tests -> quality -> security -> review -> verdict -> PR/handoff -> project wiki/memory update.
 
@@ -34,10 +40,14 @@ HIGH risk -> approval; CRITICAL security -> blocked; MEDIUM/HIGH security -> app
 Issue Intake is a deterministic harness stage (`llm_invocation=false`), not an LLM role. It records task/worktree identity before any model-backed role runs.
 
 ## Knowledge Flow
-Raw source -> project issue journal -> project topic memory -> project wiki page -> future task context.
+Static source -> Knowledge Source -> Retriever -> Context Builder -> Context Package -> Runtime -> role.
 
 ## Memory Retrieval Flow
-Task goal + role -> select the active project's approved private memory roots -> Markdown heading chunks -> local BM25 ranking -> bounded run-local retrieval file -> context manifest -> role generation.
+Memory candidate -> future MemPalace implementation -> `MemoryManager` lifecycle -> approved memory source -> Retriever -> Context Builder. The current milestone stops at the interface and does not inject long-term memory.
+
+## Context Intelligence Flow
+
+Task + repository + role + runtime -> bounded repository/Obsidian/profile/policy/skill/contract sources -> deterministic rule retrieval -> prioritized token budgets -> one Context Package + provenance log -> runtime reads the package only.
 
 ## Stop Flow
 Protected path or high risk -> update risk/verdict -> stop and request approval.

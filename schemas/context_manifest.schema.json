@@ -53,6 +53,9 @@
     "skill_references": "list",
     "previous_roles": "list",
     "retrieval_rules": "list",
-    "raw_outputs_dir": "str"
+    "raw_outputs_dir": "str",
+    "context_engine_version": "int",
+    "context_package_path": "str",
+    "context_log_path": "str"
   }
 }

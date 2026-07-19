@@ -8,7 +8,12 @@
 - `schemas/` plus `scripts/validate_artifacts.py` provide local guardrails for structured artifacts.
 
 ## 2026-07-12
-- Role context manifests retrieve relevant Markdown sections from the active memory scope with local BM25, preserve provenance, and enforce result and byte budgets.
+- Role context manifests originally retrieved relevant Markdown sections from the active memory scope with local BM25, preserving provenance and enforcing result and byte budgets. This path was superseded by CIP on 2026-07-19.
+
+## 2026-07-19
+- Context Engine is the single knowledge-to-role boundary. It discovers bounded static sources, uses a swappable Retriever (currently deterministic rules), builds one prioritized token-bounded Context Package, and logs selected/excluded provenance.
+- Runtime adapters read the compiled package only; Obsidian and other knowledge sources are never direct role inputs.
+- MemPalace is represented by the abstract `MemoryManager` lifecycle contract. Storage, long-term retrieval, learning, semantic search, and embeddings remain deferred.
 
 ## 2026-07-18
 - Mutable task state is authoritative only under `.agent-runs/<run-id>/`; the root `artifacts/` mirror was removed.

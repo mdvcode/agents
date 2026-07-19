@@ -5,6 +5,7 @@ This repository is the local operating base for agents working across supported 
 ## Start Here
 - `docs/onboarding.md`: how a new agent should enter the workspace.
 - `docs/agent-system.md`: current agent analysis and improvement plan.
+- `docs/cli.md`: install and use the `agent` product CLI from any project.
 - `docs/git-and-logs.md`: git, logs, docs, and artifact expectations.
 - `docs/issues/README.md`: per-GitHub-issue history and branch tracking.
 - `docs/projects/README.md`: multi-project private memory layout and privacy rules.
@@ -31,6 +32,7 @@ This repository is the local operating base for agents working across supported 
 - `docs/projects/<project>/graph/`: project-private maps.
 
 ## Memory And Knowledge
+- `docs/wiki/concepts/context-intelligence-platform.md`: Context Engine, Knowledge Sources, Retriever, Context Builder, budgets, logs, and MemPalace contract.
 - `docs/wiki/`: stable cross-project agent-system knowledge.
 - `docs/memory/`: cross-project agent-system memory, daily logs, scratchpad, and topics.
 - `docs/graph/`: cross-project agent-system maps that help agents navigate without broad scans.
@@ -47,6 +49,14 @@ This repository is the local operating base for agents working across supported 
 - `make control-plane`: serve the loopback control API; `make metrics` prints the same compact operational state.
 - `make list-exceptions`: show runs and queue items requiring a human without transcripts.
 - `make step2-verify RUN_ID=<run-id> QUEUE_DB=<path>`: verify real concurrent Step 2 acceptance evidence.
+
+## Product CLI
+
+- `pipx install .`: install the local `ai-harness` distribution once.
+- `agent init`: create `.agent/project.yaml` and safe project instructions.
+- `agent task "Goal"`: enqueue a normalized task for the current project.
+- `agent status`: show compact project queue/run state.
+- `agent doctor [--full]`: validate packaging, project config, Codex CLI, and optionally runtime authentication.
 
 ## Runtime State
 - `.agent-runtime.yaml`: the single production runtime selection; Step 2 permits only local-subscription `codex-cli`, requires no API, and disables Model Router.

@@ -35,12 +35,17 @@ def test_context_manifest_references_role_scoped_skills(tmp_path: Path) -> None:
 
     skill_names = {item["name"] for item in manifest["skill_references"]}
     assert {"context-engineering", "repo-policy", "structured-output-guard"}.issubset(skill_names)
-    assert manifest["context_budget"] == {"max_total_bytes": 120000, "max_file_bytes": 24000}
+    assert manifest["context_budget"]["max_total_bytes"] == 120000
+    assert manifest["context_budget"]["max_file_bytes"] == 24000
+    assert manifest["context_budget"]["max_total_tokens"] == 12000
+    assert manifest["context_budget"]["used_tokens"] <= 12000
     assert isinstance(manifest["selected_context"], list)
-    assert manifest["excluded_context"] == []
+    assert isinstance(manifest["excluded_context"], list)
     assert manifest["retrieval_queries"] == ["Plan a task planner"]
     assert isinstance(manifest["source_file_candidates"], list)
-    assert manifest["repo_intelligence"]["project_memory_retrieval"]["algorithm"] == "bm25_markdown_sections"
+    assert manifest["repo_intelligence"]["context_engine"]["algorithm"] == "rule_based_keyword_v1"
+    assert Path(manifest["context_package_path"]).is_file()
+    assert Path(manifest["context_log_path"]).is_file()
 
 
 def test_context_manifest_records_role_capabilities_and_contract(tmp_path: Path) -> None:
@@ -94,15 +99,15 @@ def test_nextjs_web_implementation_context_omits_python_standards(tmp_path: Path
     assert "test-writing" in skill_names
 
 
-def test_context_manifest_includes_retrieved_project_memory(tmp_path: Path, monkeypatch: object) -> None:
+def test_context_manifest_includes_retrieved_project_knowledge(tmp_path: Path, monkeypatch: object) -> None:
     control_root = tmp_path / "control"
     privacy = control_root / "docs/projects/web/privacy.md"
-    memory = control_root / "docs/projects/web/memory/topics/search.md"
+    knowledge = control_root / "docs/projects/web/wiki/search.md"
     privacy.parent.mkdir(parents=True)
     privacy.write_text("# Privacy\nPrivate by default.\n", encoding="utf-8")
-    memory.parent.mkdir(parents=True)
-    memory.write_text(
-        "# Search\nBM25 project memory retrieval keeps provenance.\n",
+    knowledge.parent.mkdir(parents=True)
+    knowledge.write_text(
+        "# Search\nRule-based project knowledge retrieval keeps provenance.\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(context_compiler, "MEMORY_CONTROL_ROOT", control_root)
@@ -110,7 +115,7 @@ def test_context_manifest_includes_retrieved_project_memory(tmp_path: Path, monk
     path = context_compiler.create_context_manifest(
         run_id="run-rag",
         role="planner",
-        goal="Implement BM25 project memory retrieval",
+        goal="Implement rule-based project knowledge retrieval",
         repository=tmp_path,
         artifacts_dir=tmp_path / "artifacts",
         context_dir=tmp_path / "context",
@@ -122,13 +127,17 @@ def test_context_manifest_includes_retrieved_project_memory(tmp_path: Path, monk
     )
 
     manifest = json.loads(path.read_text(encoding="utf-8"))
-    retrieved = [item for item in manifest["context_files"] if item["kind"] == "retrieved_project_memory"]
-
-    assert len(retrieved) == 1
-    assert Path(retrieved[0]["path"]).is_file()
-    assert manifest["selected_context"][0]["path"] == "docs/projects/web/memory/topics/search.md"
-    assert manifest["repo_intelligence"]["project_memory_retrieval"]["status"] == "retrieved"
-    assert any(item["kind"] == "project_privacy" for item in manifest["context_files"])
+    assert manifest["context_files"] == [
+        {"path": manifest["context_package_path"], "kind": "context_package"}
+    ]
+    assert any(
+        item["source"] == "private_project_knowledge"
+        and item["path"] == "web/wiki/search.md"
+        for item in manifest["selected_context"]
+    )
+    package = Path(manifest["context_package_path"]).read_text(encoding="utf-8")
+    assert "Rule-based project knowledge retrieval keeps provenance" in package
+    assert manifest["repo_intelligence"]["context_engine"]["status"] == "compiled"
 
 
 def test_local_skills_have_yaml_frontmatter() -> None:

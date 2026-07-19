@@ -104,7 +104,7 @@ projects:
       - "agent-generated"
       - "implemented by an agent"
       - "automated by agents"
-      - "/Users/user/agents"
+      - ".agent-runs"
       - "external/agents"
       - ".agents"
       - "artifacts"

@@ -53,7 +53,7 @@ Never auto-merge, deploy, force-push, rewrite history, or access production cred
 - For LOW and MEDIUM risk work, `publish_pr` may be allowed when no hard blockers remain and required visual evidence is provided or a warning explains why it is unavailable.
 - For HIGH risk or protected-path work, choose `await_approval`.
 - For publication, use only the task-scoped changed-file set and the configured `git config user.name` and `git config user.email`. If identity is missing, choose `await_approval`.
-- Staged files for a target repository must exclude private control-plane paths: `/Users/user/agents`, `external/agents/`, `.agents/`, `artifacts/`, private issue journals, private memory/wiki/graph files, prompt files, skills, audit logs, and sensitive screenshot/video/trace artifacts.
+- Staged files for a target repository must exclude private control-plane paths: the active Harness home, `external/agents/`, `.agents/`, `.agent-runs/`, private issue journals, private memory/wiki/graph files, prompt files, skills, audit logs, and sensitive screenshot/video/trace artifacts.
 - Commit and PR output must be sanitized and may include safe local evidence references, but must not publish private issue journals, secrets, raw sensitive screenshots, private URLs, internal reasoning, agent files, or forbidden internal-process phrases from `.agent-policy.yaml`.
 - Never auto-merge or deploy.
 

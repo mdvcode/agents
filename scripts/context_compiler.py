@@ -4,41 +4,27 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
 import yaml
 
-from project_memory import project_privacy_path, retrieve_project_memory
-
-
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ai_harness.context import ContextEngine
+from ai_harness.context.sources import ROLE_SKILLS
+
+
 MEMORY_CONTROL_ROOT = ROOT
 SKILLS = ROOT / ".agents" / "skills"
 ROLE_CAPABILITIES = ROOT / ".agent-role-capabilities.yaml"
 ROLE_CONTRACTS = ROOT / ".agent-role-contracts.yaml"
 DEFAULT_MAX_TOTAL_CONTEXT_BYTES = 120000
 DEFAULT_MAX_FILE_CONTEXT_BYTES = 24000
-ROLE_SKILLS = {
-    "issue-intake": ["issue-intake", "repo-policy", "context-engineering"],
-    "context-compiler": ["context-engineering", "repo-policy"],
-    "planner": ["context-engineering", "repo-policy", "structured-output-guard"],
-    "risk-classifier": ["repo-policy", "security-checklist"],
-    "implementation-agent": ["repo-policy", "python-standards", "test-writing"],
-    "test-generator": ["test-writing", "structured-output-guard"],
-    "quality-runner": ["structured-output-guard"],
-    "security-agent": ["security-checklist", "repo-policy"],
-    "frontend-qa-agent": ["context-engineering"],
-    "architecture-consistency-agent": ["repo-policy", "context-engineering"],
-    "semantic-conflict-agent": ["repo-policy", "structured-output-guard"],
-    "reviewer": ["repo-policy", "structured-output-guard"],
-    "ci-repair-agent": ["repo-policy", "test-writing"],
-    "orchestrator": ["repo-policy", "git-workflow", "structured-output-guard"],
-    "eval-runner": ["structured-output-guard"],
-    "report-agent": ["structured-output-guard"],
-    "publication": ["git-workflow", "release-safety", "repo-policy"],
-}
 
 
 def load_yaml_mapping(path: Path) -> dict[str, Any]:
@@ -99,7 +85,7 @@ def artifact_references(artifacts_dir: Path) -> list[dict[str, str]]:
 
 
 def role_skill_names(role: str, project_profile: str) -> list[str]:
-    names = list(ROLE_SKILLS.get(role, []))
+    names = list(ROLE_SKILLS.get(role, ()))
     if project_profile == "nextjs_web" and role in {"implementation-agent", "ci-repair-agent"}:
         names = [name for name in names if name != "python-standards"]
     return names
@@ -131,6 +117,7 @@ def create_context_manifest(
     prompt_path: str = "",
     output_contract: str = "",
     expected_artifacts: Sequence[str] = (),
+    runtime: str = "codex-cli",
 ) -> Path:
     capability = role_capability(role)
     contract = role_contract(role)
@@ -140,35 +127,32 @@ def create_context_manifest(
     contract_path = output_contract or str(contract.get("output_contract", ""))
     artifacts = list(expected_artifacts) or list(contract.get("expected_artifacts", []))
     retrieval_query = " ".join(part for part in (goal.strip(), role.replace("-", " ")) if part)
-    retrieval = retrieve_project_memory(
+    context_log_path = context_dir / "logs" / f"{role}.jsonl"
+    engine = ContextEngine.default(
         control_root=MEMORY_CONTROL_ROOT,
         project=project,
         project_profile=project_profile,
-        query=retrieval_query,
-        context_path=context_dir / "retrieved" / f"{role}.md",
+        artifacts_dir=artifacts_dir,
+        context_log_path=context_log_path,
+        repository=repository,
+        token_budget=token_budget,
     )
-    selected_context = [
+    context = engine.build(goal, repository, role, runtime)
+    package_path = context_dir / "packages" / f"{role}.md"
+    package_path.parent.mkdir(parents=True, exist_ok=True)
+    package_path.write_text(context.package, encoding="utf-8")
+    selected_context = list(context.log.get("selected", []))
+    excluded_context = list(context.log.get("excluded", []))
+    candidate_paths = sorted(
         {
-            "path": item.chunk.display_path,
-            "heading": item.chunk.heading,
-            "score": round(item.score, 6),
-            "bytes": len(item.chunk.content.encode("utf-8")),
+            f"{item.get('source', '')}:{item.get('path', '')}"
+            for item in selected_context + excluded_context
+            if isinstance(item, dict)
         }
-        for item in retrieval.selected
-    ]
+    )
     context_files = [
-        {"path": str((ROOT / "AGENTS.md").resolve()), "kind": "policy"},
-        {"path": str((ROOT / ".agent-policy.yaml").resolve()), "kind": "policy"},
-        {"path": str((ROOT / ".agent-project-profiles.yaml").resolve()), "kind": "profile"},
-        {"path": str((ROOT / ".agent-repositories.yaml").resolve()), "kind": "registry"},
-        {"path": str((ROOT / ".agent-artifact-owners.yaml").resolve()), "kind": "artifact_owners"},
-        {"path": str((ROOT / ".agent-tool-policy.yaml").resolve()), "kind": "tool_policy"},
+        {"path": str(package_path.resolve()), "kind": "context_package"},
     ]
-    privacy_path = project_privacy_path(MEMORY_CONTROL_ROOT, project, project_profile)
-    if privacy_path is not None:
-        context_files.append({"path": str(privacy_path), "kind": "project_privacy"})
-    if retrieval.context_path is not None:
-        context_files.append({"path": str(retrieval.context_path), "kind": "retrieved_project_memory"})
     manifest = {
         "run_id": run_id,
         "role": role,
@@ -187,26 +171,32 @@ def create_context_manifest(
         "context_budget": {
             "max_total_bytes": DEFAULT_MAX_TOTAL_CONTEXT_BYTES,
             "max_file_bytes": DEFAULT_MAX_FILE_CONTEXT_BYTES,
+            "max_total_tokens": context.token_budget,
+            "used_tokens": context.tokens_used,
         },
         "selected_context": selected_context,
-        "excluded_context": [],
+        "excluded_context": excluded_context,
         "retrieval_queries": [retrieval_query] if retrieval_query else [],
-        "source_file_candidates": list(retrieval.candidate_paths),
+        "source_file_candidates": candidate_paths,
         "repo_intelligence": {
-            "project_memory_retrieval": {
-                "algorithm": "bm25_markdown_sections",
-                "status": retrieval.status,
-                "candidate_count": len(retrieval.candidate_paths),
-                "selected_count": len(retrieval.selected),
+            "context_engine": {
+                "algorithm": str(context.log.get("retriever", "rule_based_keyword_v1")),
+                "status": "compiled",
+                "candidate_count": len(candidate_paths),
+                "selected_count": len(selected_context),
+                "excluded_count": len(excluded_context),
             }
         },
+        "context_engine_version": 1,
+        "context_package_path": str(package_path.resolve()),
+        "context_log_path": context.log_path,
         "context_files": context_files,
         "artifact_references": artifact_references(artifacts_dir),
         "skill_references": skill_references(role, project_profile),
         "previous_roles": list(previous_roles),
         "retrieval_rules": [
-            "Read only the listed context files and artifacts needed for this role.",
-            "Treat retrieved project memory as private, potentially stale context rather than authoritative policy.",
+            "Use the compiled Context Package as the only supplied knowledge input.",
+            "Do not read Obsidian or other knowledge roots directly.",
             "Use repository search for exact symbols or paths before opening broad files.",
             "Keep raw command outputs outside the context manifest.",
             "Write role outputs as strict JSON matching schemas/role_result.schema.json.",

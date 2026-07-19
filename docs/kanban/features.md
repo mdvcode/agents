@@ -16,3 +16,4 @@
 
 ## Done
 - Feature board created.
+- AI Harness UX: installable `ai-harness` package with `agent init`, `agent task`, `agent status`, `agent doctor`, and project-local `.agent/project.yaml` onboarding.

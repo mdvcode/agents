@@ -1,5 +1,7 @@
 # Agent Onboarding
 
+For ordinary project use, install the product CLI once with `pipx install .`, then run `agent init` inside the project. See `docs/cli.md`. The lower-level checklist below is for contributors changing the Harness itself.
+
 Use this checklist before making changes.
 
 ## Entry Order
