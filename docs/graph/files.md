@@ -29,5 +29,7 @@
 - `docs/memory/` -> global agent-system long-term, daily, scratchpad, and topic memory.
 - `docs/kanban/` -> global boards.
 - `docs/graph/` -> global agent-system maps.
-- `scripts/project_memory.py` -> scoped Markdown chunking, BM25 ranking, and run-local retrieval context generation.
+- `ai_harness/context/` -> Context Engine, static knowledge sources, retrieval protocol, rule retriever, token-budgeted builder, context logs, and MemPalace interface.
+- `scripts/context_compiler.py` -> workflow compatibility facade that writes Context Engine packages and manifests.
+- `scripts/project_memory.py` -> legacy scoped BM25 compatibility helper; not an implicit Context Engine source.
 - `.agent-runs/<run-id>/context-manifests/retrieved/<role>.md` -> ephemeral retrieved chunks with provenance for one role execution.

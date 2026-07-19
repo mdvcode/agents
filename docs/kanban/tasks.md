@@ -14,6 +14,7 @@
 - None.
 
 ## Done
+- Context Intelligence Platform: compiled-only static knowledge sources, rule retrieval, token budgets, provenance logging, Obsidian discovery, and the MemPalace interface behind Context Engine.
 - AI Harness UX milestone: pip/pipx packaging, product CLI, local project configuration, idempotent task intake, compact status, and doctor diagnostics.
 - Step 2 operational control plane: scoped approval/resume API, crash checkpoint recovery, signed CI feedback ingestion, registered worker daemon lifecycle, universal task intake, and compact operational metrics API.
 - Step 2 implementation: deterministic routing, four bounded repair loops, independent verifier contracts, same-worktree publication, SQLite workers, exception CLI, tool governance, and acceptance verifier.

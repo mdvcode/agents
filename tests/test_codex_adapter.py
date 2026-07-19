@@ -16,6 +16,14 @@ assert SPEC.loader is not None
 sys.modules[SPEC.name] = codex_adapter
 SPEC.loader.exec_module(codex_adapter)
 
+EXECUTOR_PATH = MODULE_PATH.with_name("codex_cli_executor.py")
+EXECUTOR_SPEC = importlib.util.spec_from_file_location("codex_cli_executor", EXECUTOR_PATH)
+assert EXECUTOR_SPEC is not None
+codex_cli_executor = importlib.util.module_from_spec(EXECUTOR_SPEC)
+assert EXECUTOR_SPEC.loader is not None
+sys.modules[EXECUTOR_SPEC.name] = codex_cli_executor
+EXECUTOR_SPEC.loader.exec_module(codex_cli_executor)
+
 
 def role_request(tmp_path: Path) -> dict[str, object]:
     manifest = tmp_path / "context.json"
@@ -67,6 +75,24 @@ def context_manifest_payload(tmp_path: Path, raw_dir: Path | None = None) -> dic
         "retrieval_rules": [],
         "raw_outputs_dir": str(raw_dir or tmp_path / "raw"),
     }
+
+
+def test_compiled_context_package_is_the_only_reference_read(tmp_path: Path) -> None:
+    package = tmp_path / "package.md"
+    direct_reference = tmp_path / "direct.md"
+    package.write_text("compiled-safe-context", encoding="utf-8")
+    direct_reference.write_text("must-not-be-read-directly", encoding="utf-8")
+    manifest = context_manifest_payload(tmp_path)
+    manifest["context_package_path"] = str(package)
+    manifest["context_files"] = [{"path": str(direct_reference), "kind": "policy"}]
+    manifest["skill_references"] = [
+        {"name": "unsafe-direct-skill", "path": str(direct_reference)}
+    ]
+
+    contents = codex_cli_executor.context_reference_contents(manifest)
+
+    assert "compiled-safe-context" in contents
+    assert "must-not-be-read-directly" not in contents
 
 
 def test_json_contract_supports_nullable_nested_objects() -> None:

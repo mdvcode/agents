@@ -32,6 +32,7 @@ This repository is the local operating base for agents working across supported 
 - `docs/projects/<project>/graph/`: project-private maps.
 
 ## Memory And Knowledge
+- `docs/wiki/concepts/context-intelligence-platform.md`: Context Engine, Knowledge Sources, Retriever, Context Builder, budgets, logs, and MemPalace contract.
 - `docs/wiki/`: stable cross-project agent-system knowledge.
 - `docs/memory/`: cross-project agent-system memory, daily logs, scratchpad, and topics.
 - `docs/graph/`: cross-project agent-system maps that help agents navigate without broad scans.

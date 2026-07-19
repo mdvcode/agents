@@ -8,6 +8,7 @@ The control plane is packaged as `ai-harness` and exposes `agent init`, `agent t
 - The repository has a good role split: planner, risk classifier, implementation agent, test generator, quality runner, security agent, reviewer, report agent, and orchestrator.
 - The skills are clear and useful, especially the Django, DRF, security, git, testing, and lessons policies.
 - Each task now has one authoritative `.agent-runs/<run-id>/` containing workflow state, context manifests, role requests/results, raw events, owned artifacts, metrics, errors, and publication audit state.
+- Every model-backed role receives one token-bounded Context Package compiled by Context Engine from static knowledge sources. Runtime adapters do not read Obsidian, skills, policies, contracts, or artifacts as independent prompt inputs.
 - Repository-root `artifacts/` was removed; it is no longer a mutable compatibility path.
 - Artifact ownership is declared in `.agent-artifact-owners.yaml` and enforced after every role.
 

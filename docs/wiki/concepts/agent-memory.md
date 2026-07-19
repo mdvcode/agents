@@ -23,15 +23,8 @@ Agent memory in this workspace has five layers:
 - Read only the project wiki/memory pages related to the task.
 - Use `rg` before broad file reads.
 
-## RAG Retrieval
-The context compiler augments each role prompt with relevant private project memory before generation:
+## Context and memory boundary
 
-1. Build a query from the task goal and current role.
-2. Scope candidates to Markdown under the active project's `memory/`, `wiki/`, `graph/`, and `issues/` directories. Target-project retrieval is disabled when `privacy.md` is absent.
-3. Split documents at Markdown headings and rank sections with deterministic local BM25.
-4. Select at most six sections within a 22 KB retrieval budget.
-5. Write a run-local retrieval file with source paths, headings, and scores, then reference it from the role context manifest.
+Context Intelligence Platform retrieves static project/Harness knowledge through Context Engine. Memory is a separate layer: `MemoryManager` defines lifecycle operations, but the current milestone does not inject long-term memory into role context and does not implement storage or learning.
 
-For the `agent_workspace` profile, retrieval uses only global agent-system `docs/memory/`, `docs/wiki/`, and `docs/graph/`. It never mixes target-project memory into the global profile or one target project's memory into another.
-
-Retrieval is local and makes no embedding/API calls. Retrieved memory is private, potentially stale supporting context; `AGENTS.md`, `.agent-policy.yaml`, project privacy policy, and current repository evidence remain authoritative.
+The earlier `scripts/project_memory.py` BM25 helper remains a compatibility utility, not an implicit role-context source. A future MemPalace adapter may expose approved memory records as `KnowledgeType.MEMORY` without changing Context Engine, Retriever, Context Builder, or runtime call sites.
