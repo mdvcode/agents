@@ -16,6 +16,7 @@ Unlike `artifacts/`, this directory is not cleared between tasks. Agents update 
 - `decisions/2026-07-18-step2-deterministic-concurrency.md`: authoritative routing, bounded repairs, verifier plane, worker queue, and tool governance.
 - `decisions/2026-07-18-step2-operational-control-plane.md`: approval/resume, recovery, event and CI ingestion, worker service lifecycle, and metrics API.
 - `decisions/2026-07-19-runtime-abstraction.md`: provider-neutral Runtime contract, the sole Step 2 Codex CLI runtime, and the deferred adapter/router roadmap.
+- `decisions/2026-07-19-ai-harness-ux.md`: installable `agent` CLI, project-local onboarding, and the boundary between local execution identity and central publication authority.
 - `contradictions.md`: claims or practices that need reconciliation.
 
 ## Update Rules

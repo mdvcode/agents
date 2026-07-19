@@ -210,6 +210,10 @@ def test_repository_registry_requires_trusted_branch_prefixes() -> None:
     assert any("allowed_branch_prefixes" in error for error in validator.validate_registry_data(registry))
 
 
+def test_empty_central_repository_registry_is_safe_by_default() -> None:
+    assert validator.validate_registry_data({"version": 1, "repositories": {}}) == []
+
+
 def test_repository_tool_policy_covers_role_capabilities_and_verifiers() -> None:
     policy, policy_errors = validator.load_yaml(
         validator.AGENT_TOOL_POLICY,

@@ -21,7 +21,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from approval_lifecycle import ApprovalError, request_approval
 from context_compiler import create_context_manifest, role_capability, role_contract
-from repository_registry import RepositoryRecord, find_by_remote
+from repository_registry import RepositoryRecord, find_by_remote, load_local_project_record
 from runtime_contracts import contract_section, load_json, validate_contract
 from runtimes import RuntimeConfigurationError, create_runtime
 from run_state import (
@@ -480,13 +480,20 @@ def git_ref_sha(repo: Path, ref: str) -> str:
 
 def resolve_registry_record(repository: Path, project: str) -> tuple[RepositoryRecord | None, list[str]]:
     remote = git_remote(repository)
-    if not remote and project:
-        return None, ["repository has no origin remote to verify against registry"]
     record = find_by_remote(remote) if remote else None
+    if record is None:
+        try:
+            record = load_local_project_record(repository)
+        except ValueError as exc:
+            return None, [str(exc)]
     if project and record is None:
-        return None, ["repository remote is not trusted by .agent-repositories.yaml"]
-    if project and record is not None and record.repository_id != project:
-        return record, [f"repository registry record is {record.repository_id!r}, expected {project!r}"]
+        return None, [
+            "repository is not centrally registered or locally initialized; run `agent init` first"
+        ]
+    if project and record is not None:
+        expected = record.project_profile if record.source == "local_project_config" else record.repository_id
+        if expected != project:
+            return record, [f"repository identity is {expected!r}, expected {project!r}"]
     return record, []
 
 

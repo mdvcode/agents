@@ -1,5 +1,11 @@
 # Workflow Graph
 
+## User CLI Flow
+
+`pipx install ai-harness` -> `agent init` -> `.agent/project.yaml` + `AGENTS.md` -> `agent task "Goal"` -> normalized Task envelope -> SQLite queue -> worker/worktree/workflow -> `agent status` -> PR or compact exception.
+
+Project-local configuration authorizes onboarding into isolated execution only. Central Harness policy and repository trust remain mandatory for publication.
+
 ## GitHub Issue Flow
 User gives project + GitHub issue -> branch -> `docs/projects/<project>/issues/issue-<number>.md` -> one `.agent-runs/<run-id>/` -> plan -> risk -> patch -> tests -> quality -> security -> review -> verdict -> PR/handoff -> project wiki/memory update.
 

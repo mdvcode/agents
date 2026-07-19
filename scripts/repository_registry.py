@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,12 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ai_harness.project import ProjectConfigError, load_project_config, project_is_trusted
+
+
 REGISTRY = ROOT / ".agent-repositories.yaml"
 
 
@@ -22,6 +29,7 @@ class RepositoryRecord:
     base_branch: str
     allowed_branch_prefixes: tuple[str, ...]
     protected_paths: tuple[str, ...]
+    source: str = "central_registry"
 
 
 def load_registry(path: Path = REGISTRY) -> dict[str, RepositoryRecord]:
@@ -46,6 +54,7 @@ def load_registry(path: Path = REGISTRY) -> dict[str, RepositoryRecord]:
                 item for item in raw.get("allowed_branch_prefixes", []) if isinstance(item, str)
             ),
             protected_paths=tuple(item for item in raw.get("protected_paths", []) if isinstance(item, str)),
+            source="central_registry",
         )
     return records
 
@@ -57,6 +66,29 @@ def find_by_remote(remote_url: str, path: Path = REGISTRY) -> RepositoryRecord |
     return None
 
 
+def load_local_project_record(repository: Path) -> RepositoryRecord | None:
+    """Load local execution identity without granting publication authority."""
+    path = repository.resolve() / ".agent" / "project.yaml"
+    if not path.is_file():
+        return None
+    try:
+        config = load_project_config(repository)
+        trusted = project_is_trusted(config)
+    except ProjectConfigError as exc:
+        raise ValueError(str(exc)) from exc
+    if not trusted:
+        return None
+    return RepositoryRecord(
+        repository_id=config.project_id,
+        project_profile=config.profile,
+        expected_remotes=(),
+        base_branch=config.base_branch,
+        allowed_branch_prefixes=(config.branch_prefix,),
+        protected_paths=(),
+        source="local_project_config",
+    )
+
+
 def validate_registry_data(data: Any, label: str = ".agent-repositories.yaml") -> list[str]:
     errors: list[str] = []
     if not isinstance(data, dict):
@@ -64,8 +96,8 @@ def validate_registry_data(data: Any, label: str = ".agent-repositories.yaml") -
     if data.get("version") != 1:
         errors.append(f"{label}: version must be 1")
     repositories = data.get("repositories")
-    if not isinstance(repositories, dict) or not repositories:
-        return errors + [f"{label}: repositories must be a non-empty object"]
+    if not isinstance(repositories, dict):
+        return errors + [f"{label}: repositories must be an object"]
     expected_prefixes = ["feat/", "fix/", "issue/", "tast/"]
     for repository_id, raw in repositories.items():
         if not isinstance(raw, dict):

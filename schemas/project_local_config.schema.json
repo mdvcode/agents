@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "required": ["version", "project", "runtime"],
+  "properties": {
+    "version": {"type": "integer", "enum": [1]},
+    "project": {
+      "type": "object",
+      "required": ["id", "profile", "repository", "base_branch", "branch_prefix"],
+      "properties": {
+        "id": {"type": "string"},
+        "profile": {"type": "string", "enum": ["agent_workspace", "django", "nextjs_web"]},
+        "repository": {"type": "string", "enum": ["."]},
+        "base_branch": {"type": "string"},
+        "branch_prefix": {"type": "string", "enum": ["feat/", "fix/", "issue/", "tast/"]}
+      },
+      "additionalProperties": false
+    },
+    "runtime": {
+      "type": "object",
+      "required": ["provider"],
+      "properties": {
+        "provider": {"type": "string", "enum": ["codex-cli"]}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
