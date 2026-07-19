@@ -1,0 +1,34 @@
+{
+  "required": [
+    "run_id",
+    "role",
+    "goal",
+    "repository",
+    "artifacts_dir",
+    "context_manifest",
+    "prompt_path",
+    "output_contract",
+    "project_profile",
+    "expected_artifacts",
+    "allowed_tools",
+    "filesystem_access",
+    "token_budget",
+    "timeout_seconds"
+  ],
+  "types": {
+    "run_id": "str",
+    "role": "str",
+    "goal": "str",
+    "repository": "str",
+    "artifacts_dir": "str",
+    "context_manifest": "str",
+    "prompt_path": "str",
+    "output_contract": "str",
+    "project_profile": "str",
+    "expected_artifacts": "list",
+    "allowed_tools": "list",
+    "filesystem_access": "str",
+    "token_budget": "int",
+    "timeout_seconds": "int"
+  }
+}

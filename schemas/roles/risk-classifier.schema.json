@@ -1,0 +1,41 @@
+{
+  "role_result": {
+    "required": ["status", "next_action", "summary", "artifacts_created", "blockers", "warnings", "tokens_used"],
+    "enums": {
+      "status": ["completed", "blocked", "failed", "awaiting_approval"]
+    },
+    "types": {
+      "status": "str",
+      "next_action": "str",
+      "summary": "str",
+      "artifacts_created": "list",
+      "blockers": "list",
+      "warnings": "list",
+      "tokens_used": "int",
+      "duration_ms": "int"
+    }
+  },
+  "artifact": {
+    "required": [
+      "risk_class",
+      "reasons",
+      "changed_areas",
+      "high_risk_triggers",
+      "protected_paths_touched",
+      "protected_actions_required",
+      "autonomy_allowed"
+    ],
+    "enums": {
+      "risk_class": ["low", "medium", "high"]
+    },
+    "types": {
+      "risk_class": "str",
+      "reasons": "list",
+      "changed_areas": "list",
+      "high_risk_triggers": "list",
+      "protected_paths_touched": "list",
+      "protected_actions_required": "list",
+      "autonomy_allowed": "dict"
+    }
+  }
+}

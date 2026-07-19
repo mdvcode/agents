@@ -1,3 +1,7 @@
+---
+name: security-checklist
+description: "Review common security risks, secrets, auth, settings, and unsafe operations."
+---
 # Security Checklist Skill
 
 ## Rules

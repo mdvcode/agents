@@ -1,0 +1,12 @@
+{
+  "required": ["source", "identifier", "status", "requires_human", "stalled", "reasons", "run_id"],
+  "types": {
+    "source": "str",
+    "identifier": "str",
+    "status": "str",
+    "requires_human": "bool",
+    "stalled": "bool",
+    "reasons": "list",
+    "run_id": "str"
+  }
+}

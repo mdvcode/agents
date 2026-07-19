@@ -1,0 +1,9 @@
+{
+  "required": ["version", "audit_log", "defaults", "tools"],
+  "types": {
+    "version": "int",
+    "audit_log": "str",
+    "defaults": "dict",
+    "tools": "dict"
+  }
+}

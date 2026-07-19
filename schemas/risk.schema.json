@@ -3,10 +3,33 @@
     "risk_class",
     "reasons",
     "changed_areas",
+    "high_risk_triggers",
     "protected_paths_touched",
+    "protected_actions_required",
     "autonomy_allowed"
   ],
   "enums": {
     "risk_class": ["low", "medium", "high"]
+  },
+  "types": {
+    "risk_class": "str",
+    "reasons": "list",
+    "changed_areas": "list",
+    "high_risk_triggers": "list",
+    "protected_paths_touched": "list",
+    "protected_actions_required": "list",
+    "autonomy_allowed": "dict"
+  },
+  "object_required": {
+    "autonomy_allowed": [
+      "patch",
+      "commit",
+      "push",
+      "open_pr",
+      "update_pr",
+      "auto_merge",
+      "deploy_staging",
+      "deploy_production"
+    ]
   }
 }

@@ -1,0 +1,7 @@
+version: 1
+runtime:
+  provider: codex-cli
+  executor_command: "python3 scripts/adapters/codex_cli_executor.py"
+  transport: local_subscription
+  api_required: false
+  model_router: false

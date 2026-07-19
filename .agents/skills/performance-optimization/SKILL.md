@@ -1,3 +1,7 @@
+---
+name: performance-optimization
+description: "Analyze safe complexity and performance improvements without premature behavior changes."
+---
 # Performance Optimization Skill
 
 ## Purpose

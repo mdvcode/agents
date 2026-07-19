@@ -1,6 +1,6 @@
 # Agent Workspace Index
 
-This repository is the local operating base for agents working on the Django codebase.
+This repository is the local operating base for agents working across supported project profiles.
 
 ## Start Here
 - `docs/onboarding.md`: how a new agent should enter the workspace.
@@ -38,16 +38,27 @@ This repository is the local operating base for agents working on the Django cod
 ## Validation
 - `make check`: validate artifacts and diff hygiene.
 - `make validate-artifacts`: validate required structured artifacts.
-- `make security`: documentation-only security placeholder for this agent workspace.
+- `make runtime-preflight`: preflight the production provider through the Runtime abstraction (`codex-cli` in Step 2).
+- `make security`: lightweight repository-local scan for obvious secrets, private keys, private paths, and protected staged files.
 - `make agent-status`: print git status and current verdict.
+- `make queue-worker`: process queued workflows with three leased workers.
+- `make worker-service-start|restart|status|health|stop`: operate the registered worker daemon.
+- `make approve-run|resume-run|reject-run RUN_ID=...`: perform scoped supervised-autonomy transitions.
+- `make control-plane`: serve the loopback control API; `make metrics` prints the same compact operational state.
+- `make list-exceptions`: show runs and queue items requiring a human without transcripts.
+- `make step2-verify RUN_ID=<run-id> QUEUE_DB=<path>`: verify real concurrent Step 2 acceptance evidence.
 
-## Runtime Artifacts
-- `artifacts/plan.md`
-- `artifacts/risk.json`
-- `artifacts/review.md`
-- `artifacts/quality.json`
-- `artifacts/security.md`
-- `artifacts/verdict.json`
-- `artifacts/report.md`
-- `artifacts/lessons_learned.md`
-- `artifacts/audit_log.jsonl`
+## Runtime State
+- `.agent-runtime.yaml`: the single production runtime selection; Step 2 permits only local-subscription `codex-cli`, requires no API, and disables Model Router.
+- `scripts/runtimes/`: provider-neutral contract, registry, generic structured subprocess boundary, and provider adapters.
+- All model-backed execution must pass through `Runtime.execute(...)`. Additional adapters belong to Step 3; Model Router belongs to Step 4.
+- `.agent-runs/<run-id>/workflow.json`: authoritative workflow state.
+- `.agent-runs/<run-id>/context-manifests/`: scoped role context.
+- `.agent-runs/<run-id>/role-results/`: role checkpoints.
+- `.agent-runs/<run-id>/raw-events/`: raw executor JSONL and usage evidence.
+- `.agent-runs/<run-id>/artifacts/`: owned plan, risk, quality, security, review, verdict, and publication outputs.
+- `.agent-runs/<run-id>/metrics.json`: per-role duration and token usage.
+- `.agent-runs/<run-id>/errors.jsonl`: structured failures and approval stops.
+- Repository-root `artifacts/` is forbidden mutable state.
+- `.agent-queue/tasks.db` is scheduler coordination state only; it does not mirror run artifacts or workflow state.
+- `.agent-queue/events/` stores normalized immutable intake envelopes; worker-service state is operational scheduler metadata, never task workflow state.

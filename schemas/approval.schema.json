@@ -1,0 +1,26 @@
+{
+  "required": [
+    "run_id", "approval_id", "status", "requested_scope", "approved_scope",
+    "checkpoint_role", "checkpoint_fingerprint", "requested_at", "expires_at",
+    "decided_at", "decided_by", "reason", "decision_reason", "resume_count"
+  ],
+  "enums": {
+    "status": ["pending", "approved", "rejected", "expired", "consumed"]
+  },
+  "types": {
+    "run_id": "str",
+    "approval_id": "str",
+    "status": "str",
+    "requested_scope": "dict",
+    "approved_scope": "dict",
+    "checkpoint_role": "str",
+    "checkpoint_fingerprint": "str",
+    "requested_at": "str",
+    "expires_at": "str",
+    "decided_at": "str",
+    "decided_by": "str",
+    "reason": "str",
+    "decision_reason": "str",
+    "resume_count": "int"
+  }
+}

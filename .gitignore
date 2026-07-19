@@ -1,0 +1,11 @@
+.idea/
+.pytest_cache/
+__pycache__/
+*.pyc
+.env
+.env.*
+.agent-runs/
+.agent-worktrees/
+.agent-queue/
+tmp/
+output/

@@ -1,0 +1,14 @@
+{
+  "required": [
+    "run_id", "provider", "external_run_id", "event", "conclusion", "head_branch",
+    "head_sha", "html_url", "received_at", "logs_path", "failure_fingerprint",
+    "repair_task_id", "existing_pr_url", "status", "errors"
+  ],
+  "enums": {"status": ["ingested", "repair_queued", "blocked"]},
+  "types": {
+    "run_id": "str", "provider": "str", "external_run_id": "str", "event": "str",
+    "conclusion": "str", "head_branch": "str", "head_sha": "str", "html_url": "str",
+    "received_at": "str", "logs_path": "str", "failure_fingerprint": "str",
+    "repair_task_id": "int", "existing_pr_url": "str", "status": "str", "errors": "list"
+  }
+}

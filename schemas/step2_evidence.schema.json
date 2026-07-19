@@ -1,0 +1,19 @@
+{
+  "required": ["status", "minimum_tasks", "task_count", "worker_count", "max_concurrency", "real_executor_runs", "isolated_worktrees", "completed_prs", "human_exceptions", "stalled_workers", "dead_letters", "runs", "blockers"],
+  "enums": {"status": ["pass", "fail"]},
+  "types": {
+    "status": "str",
+    "minimum_tasks": "int",
+    "task_count": "int",
+    "worker_count": "int",
+    "max_concurrency": "int",
+    "real_executor_runs": "int",
+    "isolated_worktrees": "bool",
+    "completed_prs": "int",
+    "human_exceptions": "int",
+    "stalled_workers": "int",
+    "dead_letters": "int",
+    "runs": "list",
+    "blockers": "list"
+  }
+}

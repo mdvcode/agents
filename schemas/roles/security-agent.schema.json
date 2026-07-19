@@ -1,0 +1,41 @@
+{
+  "role_result": {
+    "required": ["status", "next_action", "summary", "artifacts_created", "blockers", "warnings", "tokens_used"],
+    "enums": {"status": ["completed", "blocked", "failed", "awaiting_approval"]},
+    "types": {
+      "verdict": "str",
+      "expected": "list",
+      "observed": "list",
+      "evidence": "list",
+      "blockers": "list",
+      "repair_required": "bool",
+      "status": "str",
+      "next_action": "str",
+      "summary": "str",
+      "artifacts_created": "list",
+      "blockers": "list",
+      "warnings": "list",
+      "tokens_used": "int",
+      "duration_ms": "int"
+    }
+  },
+  "artifact": {
+    "required": ["verdict", "expected", "observed", "evidence", "blockers", "repair_required", "status", "highest_severity", "project_profile", "findings", "blocker_ids", "secret_findings", "commands_attempted", "warnings"],
+    "enums": {
+      "verdict": ["works", "broken", "unavailable"],
+      "status": ["pass", "warn", "fail"],
+      "highest_severity": ["none", "low", "medium", "high", "critical"],
+      "project_profile": ["agent_workspace", "django", "nextjs_web"]
+    },
+    "types": {
+      "status": "str",
+      "highest_severity": "str",
+      "project_profile": "str",
+      "findings": "list",
+      "blocker_ids": "list",
+      "secret_findings": "list",
+      "commands_attempted": "list",
+      "warnings": "list"
+    }
+  }
+}

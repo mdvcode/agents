@@ -1,0 +1,45 @@
+name: Agent harness checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+      - feat/**
+      - fix/**
+      - issue/**
+      - tast/**
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install development dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Validate artifacts
+        run: make validate-artifacts
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Run changed-file security scan
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python scripts/security_scan.py --base-ref "${{ github.event.pull_request.base.sha }}" --head-ref HEAD
+          else
+            python scripts/security_scan.py --base-ref "${{ github.event.before }}" --head-ref HEAD
+          fi
+
+      - name: Run full check target
+        run: make check

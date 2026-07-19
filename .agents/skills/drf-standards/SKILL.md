@@ -1,3 +1,7 @@
+---
+name: drf-standards
+description: "Apply Django REST Framework validation, permission, compatibility, and view-boundary rules."
+---
 # DRF Standards Skill
 
 ## Rules

@@ -1,0 +1,159 @@
+version: 1
+default:
+  prompt_path: ""
+  output_contract: schemas/role_result.schema.json
+  expected_artifacts: []
+  artifact_schemas: {}
+  owned_artifact_patterns: []
+  execution_kind: llm_role
+  llm_invocation: true
+roles:
+  approval-gate:
+    prompt_path: ""
+    output_contract: schemas/role_result.schema.json
+    execution_kind: harness_stage
+    llm_invocation: false
+    expected_artifacts:
+      - approval.json
+    artifact_schemas:
+      approval.json: schemas/approval.schema.json
+  ci-ingestion:
+    prompt_path: ""
+    output_contract: schemas/role_result.schema.json
+    execution_kind: harness_stage
+    llm_invocation: false
+    expected_artifacts:
+      - ci_feedback.json
+    artifact_schemas:
+      ci_feedback.json: schemas/ci_feedback.schema.json
+  issue-intake:
+    prompt_path: ""
+    output_contract: schemas/role_result.schema.json
+    execution_kind: harness_stage
+    llm_invocation: false
+    expected_artifacts:
+      - issue.json
+  context-compiler:
+    prompt_path: .agents/prompts/context-compiler.md
+    output_contract: schemas/role_result.schema.json
+    execution_kind: harness_stage
+    llm_invocation: false
+    expected_artifacts: []
+  planner:
+    prompt_path: .agents/prompts/planner.md
+    output_contract: schemas/roles/planner.schema.json
+    expected_artifacts:
+      - plan.md
+      - project_profile.json
+    artifact_schemas:
+      project_profile.json: schemas/project_profile.schema.json
+  risk-classifier:
+    prompt_path: .agents/prompts/risk-classifier.md
+    output_contract: schemas/roles/risk-classifier.schema.json
+    expected_artifacts:
+      - risk.json
+    artifact_schemas:
+      risk.json: schemas/risk.schema.json
+  implementation-agent:
+    prompt_path: .agents/prompts/implementation-agent.md
+    output_contract: schemas/role_result.schema.json
+    expected_artifacts:
+      - implementation.json
+  test-generator:
+    prompt_path: .agents/prompts/test-generator.md
+    output_contract: schemas/role_result.schema.json
+    expected_artifacts:
+      - test_plan.json
+      - test_result.json
+  quality-runner:
+    prompt_path: .agents/prompts/quality-runner.md
+    output_contract: schemas/roles/quality-runner.schema.json
+    expected_artifacts:
+      - quality.json
+    artifact_schemas:
+      quality.json: schemas/roles/quality-runner.schema.json
+  security-agent:
+    prompt_path: .agents/prompts/security-agent.md
+    output_contract: schemas/roles/security-agent.schema.json
+    expected_artifacts:
+      - security.json
+    artifact_schemas:
+      security.json: schemas/security.schema.json
+  frontend-qa-agent:
+    prompt_path: .agents/prompts/frontend-qa-agent.md
+    output_contract: schemas/roles/frontend-qa-agent.schema.json
+    expected_artifacts:
+      - frontend_qa.json
+    artifact_schemas:
+      frontend_qa.json: schemas/roles/frontend-qa-agent.schema.json
+    owned_artifact_patterns:
+      - frontend-evidence/**
+  architecture-consistency-agent:
+    prompt_path: .agents/prompts/architecture-consistency-agent.md
+    output_contract: schemas/roles/architecture-consistency.schema.json
+    expected_artifacts:
+      - architecture_consistency.json
+    artifact_schemas:
+      architecture_consistency.json: schemas/roles/architecture-consistency.schema.json
+  semantic-conflict-agent:
+    prompt_path: .agents/prompts/semantic-conflict-agent.md
+    output_contract: schemas/roles/semantic-conflict.schema.json
+    expected_artifacts:
+      - semantic_conflict.json
+    artifact_schemas:
+      semantic_conflict.json: schemas/roles/semantic-conflict.schema.json
+  reviewer:
+    prompt_path: .agents/prompts/reviewer.md
+    output_contract: schemas/roles/reviewer.schema.json
+    expected_artifacts:
+      - review.json
+    artifact_schemas:
+      review.json: schemas/review.schema.json
+  ci-repair-agent:
+    prompt_path: .agents/prompts/ci-repair-agent.md
+    output_contract: schemas/role_result.schema.json
+    expected_artifacts:
+      - ci_repair.json
+  orchestrator:
+    prompt_path: .agents/prompts/orchestrator.md
+    output_contract: schemas/roles/orchestrator.schema.json
+    expected_artifacts:
+      - verdict.json
+    artifact_schemas:
+      verdict.json: schemas/verdict.schema.json
+  eval-runner:
+    prompt_path: .agents/prompts/eval-runner.md
+    output_contract: schemas/roles/eval-runner.schema.json
+    expected_artifacts:
+      - eval_runner.json
+      - step1_evidence.json
+      - step2_evidence.json
+    artifact_schemas:
+      eval_runner.json: schemas/roles/eval-runner.schema.json
+      step1_evidence.json: schemas/step1_evidence.schema.json
+      step2_evidence.json: schemas/step2_evidence.schema.json
+  report-agent:
+    prompt_path: .agents/prompts/report-agent.md
+    output_contract: schemas/roles/report-agent.schema.json
+    expected_artifacts:
+      - report.md
+  publication-prepare:
+    prompt_path: ""
+    output_contract: schemas/role_result.schema.json
+    execution_kind: harness_stage
+    llm_invocation: false
+    expected_artifacts:
+      - change_set.json
+      - publication_payload.json
+    artifact_schemas:
+      change_set.json: schemas/change_set.schema.json
+      publication_payload.json: schemas/publication_payload.schema.json
+  publication:
+    prompt_path: ""
+    output_contract: schemas/role_result.schema.json
+    execution_kind: tool_stage
+    llm_invocation: false
+    expected_artifacts:
+      - publication.json
+    artifact_schemas:
+      publication.json: schemas/publication.schema.json

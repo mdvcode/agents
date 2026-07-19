@@ -1,0 +1,106 @@
+version: 1
+required_before_publication:
+  - issue-intake
+  - context-compiler
+  - planner
+  - risk-classifier
+  - implementation-agent
+  - test-generator
+  - quality-runner
+  - security-agent
+  - reviewer
+  - orchestrator
+  - publication-prepare
+optional_gates:
+  frontend_qa:
+    role: frontend-qa-agent
+    required_when:
+      changed_areas_any:
+        - ui
+        - routing
+        - public_rendering
+        - dashboard_ui
+        - user_visible_behavior
+  architecture_consistency:
+    role: architecture-consistency-agent
+    required_when:
+      code_changed: true
+  semantic_conflict:
+    role: semantic-conflict-agent
+    required_when:
+      code_changed: true
+routing:
+  high_risk:
+    when:
+      risk_class: high
+    next: approval-gate
+    stop_publication: true
+  security_critical:
+    when:
+      highest_severity: critical
+    next: blocked
+    stop_publication: true
+  security_review_required:
+    when:
+      highest_severity_any:
+        - medium
+        - high
+    next: approval-gate
+    stop_publication: true
+  quality_failed:
+    when:
+      quality_status:
+        - fail
+    loop:
+      name: quality_repair
+      from: quality-runner
+      to: implementation-agent
+      max_iterations: 3
+      max_tokens: 60000
+      max_duration_seconds: 1800
+  review_blocked:
+    when:
+      review_status:
+        - block
+    loop:
+      name: review_repair
+      from: reviewer
+      to: implementation-agent
+      max_iterations: 3
+      max_tokens: 60000
+      max_duration_seconds: 1800
+  ci_failed:
+    when:
+      ci_status:
+        - fail
+    loop:
+      name: ci_repair
+      from: ci-repair-agent
+      to: quality-runner
+      max_iterations: 3
+      max_tokens: 60000
+      max_duration_seconds: 1800
+  frontend_verification_failed:
+    when:
+      frontend_verdict: broken
+    loop:
+      name: frontend_verification_repair
+      from: frontend-qa-agent
+      to: implementation-agent
+      max_iterations: 3
+      max_tokens: 60000
+      max_duration_seconds: 1800
+publication:
+  allowed:
+    when:
+      risk_class_any:
+        - low
+        - medium
+      blockers_empty: true
+      security_blockers_empty: true
+      required_gates_passed: true
+    next: publication-prepare
+  denied:
+    when:
+      risk_class: high
+    next: approval-gate

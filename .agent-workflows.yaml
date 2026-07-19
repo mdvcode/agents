@@ -1,0 +1,88 @@
+version: 1
+workflows:
+  full_agent_workflow:
+    description: "Run deterministic harness stages and the agent-role chain with one run id, task worktree, scoped context manifests, strict role results, and safe publication routing."
+    budgets:
+      max_roles: 40
+      max_repair_iterations: 12
+      max_duration_seconds: 7200
+      max_tokens: 300000
+    runtime_provider: codex-cli
+    executor: "python3 scripts/agent_role_runner.py --workflow full_agent_workflow --run-id {run_id} --task-id {task_id} --project {project} --repo {repository} --branch {branch} --base-branch {base_branch} --artifacts-dir {artifacts_dir} --create-worktree --runtime-provider {runtime_provider}"
+    max_iterations: 1
+    timeout_seconds: 7200
+    retry:
+      max_retries: 0
+      backoff_seconds: 0
+    trace_store: ".agent-runs/<run-id>/raw-events/workflow.jsonl"
+    steps:
+      - name: "agent_role_chain"
+        command: "python3 scripts/agent_role_runner.py --workflow full_agent_workflow --run-id {run_id} --task-id {task_id} --project {project} --repo {repository} --branch {branch} --base-branch {base_branch} --artifacts-dir {artifacts_dir} --create-worktree --runtime-provider {runtime_provider}"
+  publish_pr:
+    description: "Validate, stage an allowlisted change set, commit, push, and create or update a PR when policy gates allow it."
+    budgets:
+      max_roles: 40
+      max_repair_iterations: 12
+      max_duration_seconds: 7200
+      max_tokens: 300000
+    executor: "python3 scripts/publish_pr.py --run-id {run_id} --artifacts-dir {artifacts_dir}"
+    max_iterations: 1
+    retry:
+      max_retries: 0
+      backoff_seconds: 0
+    stop_conditions:
+      - "step returncode is non-zero"
+      - "workflow reaches max_iterations"
+    trace_store: ".agent-runs/<run-id>/raw-events/workflow.jsonl"
+    steps:
+      - name: "publish_pr"
+        command: "python3 scripts/publish_pr.py --run-id {run_id} --artifacts-dir {artifacts_dir}"
+    required_artifacts:
+      - ".agent-runs/<run-id>/artifacts/risk.json"
+      - ".agent-runs/<run-id>/artifacts/project_profile.json"
+      - ".agent-runs/<run-id>/artifacts/test_plan.json"
+      - ".agent-runs/<run-id>/artifacts/test_result.json"
+      - ".agent-runs/<run-id>/artifacts/quality.json"
+      - ".agent-runs/<run-id>/artifacts/security.json"
+      - ".agent-runs/<run-id>/artifacts/review.json"
+      - ".agent-runs/<run-id>/artifacts/verdict.json"
+      - ".agent-runs/<run-id>/artifacts/change_set.json"
+      - ".agent-runs/<run-id>/artifacts/publication.json"
+      - ".agent-runs/<run-id>/artifacts/publication_payload.json"
+    preflight:
+      - "make validate-artifacts"
+      - "profile-aware security scan"
+      - "profile-selected quality checks"
+      - "profile-selected security checks"
+      - "git identity check"
+      - "branch and remote check"
+      - "gh auth check"
+      - "orchestrator decision gate"
+      - "isolated staged set gate"
+    publication_states:
+      ready_pr:
+        when:
+          - "checks pass"
+          - "required visual evidence is present or not required"
+      draft_pr:
+        when:
+          - "checks fail"
+          - "checks are unavailable"
+          - "required visual evidence is unavailable"
+      blocked:
+        when:
+          - "HIGH risk"
+          - "secret detected"
+          - "protected path touched"
+          - "invalid artifacts"
+          - "destructive or policy-denied action"
+    mutation_rules:
+      - "Commit, push, and create or update the PR from the exact task worktree and branch recorded in workflow.json."
+      - "Never create a second publication-only worktree or copy changes between unrelated checkouts."
+      - "Never use git add -A."
+      - "Stage only paths listed in artifacts/change_set.json include and not matched by exclude."
+      - "Block if any pre-existing staged file is outside the selected change set."
+      - "Block if git add fails or the final staged set differs from the selected change set."
+      - "Use the run-scoped publication_payload.json for public PR title, body, and commit message."
+      - "Never auto-merge or deploy."
+      - "Record publication failures only in the publication-owned run-scoped publication.json; verdict.json is immutable after the orchestrator writes it."

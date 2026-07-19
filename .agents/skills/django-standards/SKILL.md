@@ -1,3 +1,7 @@
+---
+name: django-standards
+description: "Apply Django model, ORM, transaction, settings, and migration risk standards."
+---
 # Django Standards Skill
 
 ## Rules

@@ -1,0 +1,19 @@
+version: 1
+repositories:
+  agent_workspace:
+    project_profile: agent_workspace
+    expected_remotes:
+      - "git@github.com-mdvcode:mdvcode/agents.git"
+    base_branch: main
+    allowed_branch_prefixes:
+      - "feat/"
+      - "fix/"
+      - "issue/"
+      - "tast/"
+    protected_paths:
+      - ".env"
+      - ".env.*"
+      - "**/*.pem"
+      - "**/*.key"
+      - "**/*secret*"
+      - "**/*token*"

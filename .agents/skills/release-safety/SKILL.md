@@ -1,3 +1,7 @@
+---
+name: release-safety
+description: "Apply release and deployment safety gates for agent-managed changes."
+---
 # Release Safety Skill
 
 ## Rules

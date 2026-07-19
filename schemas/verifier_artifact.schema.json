@@ -1,0 +1,14 @@
+{
+  "required": ["verdict", "expected", "observed", "evidence", "blockers", "repair_required"],
+  "enums": {
+    "verdict": ["works", "broken", "unavailable"]
+  },
+  "types": {
+    "verdict": "str",
+    "expected": "list",
+    "observed": "list",
+    "evidence": "list",
+    "blockers": "list",
+    "repair_required": "bool"
+  }
+}

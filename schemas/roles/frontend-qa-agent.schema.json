@@ -1,0 +1,53 @@
+{
+  "role_result": {
+    "required": ["status", "next_action", "summary", "artifacts_created", "blockers", "warnings", "tokens_used"],
+    "enums": {
+      "status": ["completed", "blocked", "failed", "awaiting_approval"]
+    },
+    "types": {
+      "status": "str",
+      "next_action": "str",
+      "summary": "str",
+      "artifacts_created": "list",
+      "blockers": "list",
+      "warnings": "list",
+      "tokens_used": "int",
+      "duration_ms": "int"
+    }
+  },
+  "artifact": {
+    "required": [
+      "verdict",
+      "expected",
+      "observed",
+      "evidence",
+      "repair_required",
+      "evidence_required",
+      "evidence_collected",
+      "screenshots",
+      "console_errors",
+      "network_errors",
+      "blockers",
+      "local_url",
+      "dev_server",
+      "next_action"
+    ],
+    "types": {
+      "verdict": "str",
+      "expected": "list",
+      "observed": "list",
+      "evidence": "list",
+      "repair_required": "bool",
+      "evidence_required": "bool",
+      "evidence_collected": "bool",
+      "screenshots": "list",
+      "console_errors": "list",
+      "network_errors": "list",
+      "blockers": "list",
+      "local_url": "str",
+      "dev_server": "dict",
+      "next_action": "str"
+    },
+    "enums": {"verdict": ["works", "broken", "unavailable"]}
+  }
+}

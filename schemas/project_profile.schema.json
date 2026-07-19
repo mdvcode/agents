@@ -1,0 +1,29 @@
+{
+  "required": [
+    "project_profile",
+    "confidence",
+    "reasons",
+    "matched_markers",
+    "quality_commands_selected",
+    "security_commands_selected",
+    "frontend_evidence_required",
+    "warnings"
+  ],
+  "enums": {
+    "project_profile": ["agent_workspace", "django", "nextjs_web"],
+    "confidence": ["low", "medium", "high"]
+  },
+  "types": {
+    "project_profile": "str",
+    "confidence": "str",
+    "reasons": "list",
+    "matched_markers": "list",
+    "quality_commands_selected": "list",
+    "security_commands_selected": "list",
+    "frontend_evidence_required": "bool",
+    "frontend_dev_command": "str",
+    "frontend_local_url": "str",
+    "frontend_network_scope": "list",
+    "warnings": "list"
+  }
+}

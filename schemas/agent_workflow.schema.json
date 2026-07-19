@@ -1,0 +1,47 @@
+{
+  "required": [
+    "run_id",
+    "workflow",
+    "task_id",
+    "execution_status",
+    "roles",
+    "loops",
+    "budgets",
+    "role_count",
+    "tokens_used",
+    "runtime",
+    "input_fingerprint",
+    "base_branch_sha_before",
+    "base_branch_sha_after"
+  ],
+  "enums": {
+    "execution_status": ["planned", "running", "resuming", "completed", "blocked", "failed", "awaiting_approval"]
+  },
+  "types": {
+    "run_id": "str",
+    "workflow": "str",
+    "task_id": "str",
+    "execution_status": "str",
+    "roles": "list",
+    "loops": "dict",
+    "budgets": "dict",
+    "role_count": "int",
+    "tokens_used": "int",
+    "runtime": "dict",
+    "input_fingerprint": "str",
+    "base_branch_sha_before": "str",
+    "base_branch_sha_after": "str",
+    "resume_count": "int",
+    "resume_role": "str",
+    "resumed_at": "str",
+    "approval_override": "dict",
+    "approval_grants": "list",
+    "ci_feedback_pending": "bool"
+  },
+  "object_required": {
+    "loops": ["quality_repair", "review_repair", "ci_repair", "frontend_verification_repair"],
+    "budgets": ["max_roles", "max_repair_iterations", "max_duration_seconds", "max_tokens"],
+    "runtime": ["provider", "kind", "transport", "production", "command", "api_required"]
+  },
+  "additionalProperties": false
+}

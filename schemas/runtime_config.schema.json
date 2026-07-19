@@ -1,0 +1,14 @@
+{
+  "required": ["provider", "executor_command", "transport", "api_required", "model_router"],
+  "enums": {
+    "provider": ["codex-cli"],
+    "transport": ["local_subscription"]
+  },
+  "types": {
+    "provider": "str",
+    "executor_command": "str",
+    "transport": "str",
+    "api_required": "bool",
+    "model_router": "bool"
+  }
+}

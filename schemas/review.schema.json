@@ -1,0 +1,23 @@
+{
+  "required": ["verdict", "expected", "observed", "evidence", "blockers", "repair_required", "status", "project_profile", "findings", "blocker_ids", "policy_violations", "known_lesson_conflicts", "warnings"],
+  "enums": {
+    "verdict": ["works", "broken", "unavailable"],
+    "status": ["pass", "block"],
+    "project_profile": ["agent_workspace", "django", "nextjs_web"]
+  },
+  "types": {
+    "verdict": "str",
+    "expected": "list",
+    "observed": "list",
+    "evidence": "list",
+    "blockers": "list",
+    "repair_required": "bool",
+    "status": "str",
+    "project_profile": "str",
+    "findings": "list",
+    "blocker_ids": "list",
+    "policy_violations": "list",
+    "known_lesson_conflicts": "list",
+    "warnings": "list"
+  }
+}

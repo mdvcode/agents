@@ -1,0 +1,14 @@
+{
+  "required": [
+    "title",
+    "body",
+    "commit_message",
+    "base_branch"
+  ],
+  "types": {
+    "title": "str",
+    "body": "str",
+    "commit_message": "str",
+    "base_branch": "str"
+  }
+}

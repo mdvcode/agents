@@ -1,3 +1,7 @@
+---
+name: lessons-writer
+description: "Record recurring failures as concise actionable lessons."
+---
 # Lessons Writer Skill
 
 ## Rules

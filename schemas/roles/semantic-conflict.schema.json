@@ -1,0 +1,34 @@
+{
+  "role_result": {
+    "required": ["status", "next_action", "summary", "artifacts_created", "blockers", "warnings", "tokens_used"],
+    "enums": {
+      "status": ["completed", "blocked", "failed", "awaiting_approval"]
+    },
+    "types": {
+      "status": "str",
+      "next_action": "str",
+      "summary": "str",
+      "artifacts_created": "list",
+      "blockers": "list",
+      "warnings": "list",
+      "tokens_used": "int",
+      "duration_ms": "int"
+    }
+  },
+  "artifact": {
+    "required": ["verdict", "expected", "observed", "evidence", "blockers", "repair_required", "conflicts", "risk_level", "required_resolution", "next_action"],
+    "types": {
+      "verdict": "str",
+      "expected": "list",
+      "observed": "list",
+      "evidence": "list",
+      "blockers": "list",
+      "repair_required": "bool",
+      "conflicts": "list",
+      "risk_level": "str",
+      "required_resolution": "list",
+      "next_action": "str"
+    },
+    "enums": {"verdict": ["works", "broken", "unavailable"]}
+  }
+}

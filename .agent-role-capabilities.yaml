@@ -1,0 +1,114 @@
+version: 1
+default:
+  tools:
+    - filesystem_read
+    - repository_search
+  filesystem: read_only
+roles:
+  issue-intake:
+    tools:
+      - filesystem_read
+      - repository_search
+    filesystem: artifacts_write
+  context-compiler:
+    tools:
+      - filesystem_read
+      - repository_search
+    filesystem: context_write
+  planner:
+    tools:
+      - filesystem_read
+      - repository_search
+    filesystem: read_only
+  risk-classifier:
+    tools:
+      - filesystem_read
+      - repository_search
+    filesystem: artifacts_write
+  implementation-agent:
+    tools:
+      - filesystem_read
+      - repository_search
+      - filesystem_write
+      - apply_patch
+      - shell
+    filesystem: task_worktree_write
+  test-generator:
+    tools:
+      - filesystem_read
+      - repository_search
+      - filesystem_write
+      - apply_patch
+    filesystem: task_worktree_write
+  quality-runner:
+    tools:
+      - filesystem_read
+      - shell
+    filesystem: artifacts_write
+  security-agent:
+    tools:
+      - filesystem_read
+      - repository_search
+      - shell
+    filesystem: artifacts_write
+  frontend-qa-agent:
+    tools:
+      - filesystem_read
+      - shell
+      - browser
+      - playwright
+    filesystem: evidence_write
+  architecture-consistency-agent:
+    tools:
+      - filesystem_read
+      - repository_search
+      - git_diff
+    filesystem: artifacts_write
+  semantic-conflict-agent:
+    tools:
+      - filesystem_read
+      - repository_search
+      - git_diff
+    filesystem: artifacts_write
+  reviewer:
+    tools:
+      - filesystem_read
+      - repository_search
+      - git_diff
+    filesystem: read_only
+  ci-repair-agent:
+    tools:
+      - filesystem_read
+      - repository_search
+      - filesystem_write
+      - apply_patch
+      - shell
+    filesystem: task_worktree_write
+  orchestrator:
+    tools:
+      - filesystem_read
+      - repository_search
+    filesystem: artifacts_write
+  eval-runner:
+    tools:
+      - filesystem_read
+      - repository_search
+      - shell
+    filesystem: artifacts_write
+  report-agent:
+    tools:
+      - filesystem_read
+      - repository_search
+    filesystem: artifacts_write
+  publication-prepare:
+    tools:
+      - filesystem_read
+      - git_diff
+    filesystem: artifacts_write
+  publication:
+    tools:
+      - filesystem_read
+      - shell
+      - git
+      - github
+    filesystem: task_worktree_write
