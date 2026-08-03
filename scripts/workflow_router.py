@@ -249,13 +249,49 @@ def security_blockers(state: dict[str, Any], artifacts_dir: Path) -> list[str]:
     return []
 
 
-def workflow_blockers(state: dict[str, Any], current_result: dict[str, Any]) -> list[str]:
+def _artifact_resolves_role_blockers(role: str, artifacts_dir: Path) -> bool:
+    artifact_names = {
+        "quality-runner": "quality.json",
+        "security-agent": "security.json",
+        "frontend-qa-agent": "frontend_qa.json",
+        "architecture-consistency-agent": "architecture_consistency.json",
+        "semantic-conflict-agent": "semantic_conflict.json",
+        "reviewer": "review.json",
+    }
+    artifact_name = artifact_names.get(role)
+    if not artifact_name:
+        return False
+    value = _artifact(artifacts_dir, artifact_name)
+    if not isinstance(value, dict) or _blocker_values(value):
+        return False
+    if role == "quality-runner":
+        return value.get("overall_status") in {"pass", "warn"}
+    return value.get("verdict") == "works" or value.get("status") in {"pass", "warn"}
+
+
+def workflow_blockers(
+    state: dict[str, Any],
+    current_result: dict[str, Any],
+    artifacts_dir: Path,
+) -> list[str]:
     blockers = _list_values(state.get("blockers"))
     blockers.extend(_list_values(current_result.get("blockers")))
+    latest_results: dict[str, dict[str, Any]] = {}
     for entry in _role_entries(state):
+        role = str(entry["role"])
         result = entry.get("result", {})
         if isinstance(result, dict):
-            blockers.extend(f"{entry['role']}: {value}" for value in _list_values(result.get("blockers")))
+            latest_results[role] = result
+    for role, result in latest_results.items():
+        # Approval-gate blockers explain why execution paused. Once a scoped
+        # approval is consumed they are historical control-plane evidence, not
+        # unresolved work. Likewise, a successful rerun supersedes an older
+        # failed result for the same role.
+        if role == "approval-gate":
+            continue
+        if _artifact_resolves_role_blockers(role, artifacts_dir):
+            continue
+        blockers.extend(f"{role}: {value}" for value in _list_values(result.get("blockers")))
     return sorted(set(blockers))
 
 
@@ -687,6 +723,12 @@ def decide_next_role(
         and "accept_security_finding" in item["scope"].get("actions", [])
         for item in valid_grants
     )
+    budget_approved = any(
+        isinstance(item.get("scope"), dict)
+        and "resume_workflow" in item["scope"].get("actions", [])
+        and "budget exceeded" in str(item.get("reason", "")).lower()
+        for item in valid_grants
+    )
 
     if advisory and advisory not in {"continue", current_role}:
         warnings.append(f"Ignored advisory next_action={advisory!r}; deterministic routing is authoritative.")
@@ -713,7 +755,7 @@ def decide_next_role(
         )
 
     budget_blockers = _budget_blockers(state, workflows)
-    if budget_blockers:
+    if budget_blockers and not (bypass_approval or budget_approved):
         return _approval("Workflow budget exceeded; execution is awaiting approval.", warnings + budget_blockers)
 
     quality = quality_status(state, artifacts_dir)
@@ -777,7 +819,7 @@ def decide_next_role(
     if current_role == "ci-repair-agent":
         return _route("quality-runner", "CI repair completed; quality must be re-run.", warnings=warnings)
 
-    blockers = workflow_blockers(state, result)
+    blockers = workflow_blockers(state, result, artifacts_dir)
     if blockers:
         return _approval("Workflow blockers are present; execution is awaiting approval.", warnings + blockers)
 

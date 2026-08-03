@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "name": "harness_completed_run_v1",
+  "description": "A clean control case for a completed engineering run with core planning and verification evidence.",
+  "cases": [
+    {
+      "id": "completed_run_control",
+      "subject": "candidate",
+      "tags": ["golden", "clean", "agent_workspace"],
+      "expectations": {
+        "minimum_overall_score": 0.75,
+        "minimum_coverage": 0.6,
+        "required_metrics": ["planning", "code_quality", "security", "review_quality"],
+        "minimum_metric_scores": {
+          "planning": 0.9,
+          "code_quality": 0.9,
+          "security": 1.0,
+          "review_quality": 0.9
+        }
+      }
+    }
+  ]
+}

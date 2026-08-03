@@ -446,8 +446,108 @@ def test_role_and_token_budgets_route_to_approval(tmp_path: Path) -> None:
         assert result["stop"] is True
 
 
+def test_budget_approval_override_allows_checkpoint_to_continue(tmp_path: Path) -> None:
+    setup_artifacts(tmp_path)
+    state = completed_state(
+        tokens_used=300001,
+        approval_override={
+            "approval_id": "budget-approval",
+            "gate": "quality-runner",
+            "scope": {"actions": ["resume_workflow"], "gate": "quality-runner"},
+        },
+    )
+
+    result = route(tmp_path, state, "quality-runner")
+
+    assert result["next_role"] == "security-agent"
+    assert result["stop"] is False
+
+
+def test_budget_approval_grant_remains_valid_after_checkpoint(tmp_path: Path) -> None:
+    setup_artifacts(tmp_path)
+    state = completed_state(
+        tokens_used=300001,
+        approval_grants=[
+            {
+                "approval_id": "budget-approval",
+                "gate": "quality-runner",
+                "scope": {"actions": ["resume_workflow"], "gate": "quality-runner"},
+                "reason": "Workflow budget exceeded; execution is awaiting approval.",
+            }
+        ],
+    )
+
+    result = route(tmp_path, state, "security-agent")
+
+    assert result["next_role"] == "reviewer"
+    assert result["stop"] is False
+
+
 def test_workflow_blockers_prevent_publication(tmp_path: Path) -> None:
     artifacts_dir = setup_artifacts(tmp_path)
     result = route(tmp_path, completed_state(blockers=["orchestrator blocker"]), "orchestrator")
     assert result["next_role"] == "approval-gate"
     assert result["publication_allowed"] is False
+
+
+def test_resumed_role_ignores_historical_approval_and_superseded_blockers(tmp_path: Path) -> None:
+    setup_artifacts(tmp_path)
+    state = completed_state()
+    state["roles"].extend(
+        [
+            {
+                "role": "quality-runner",
+                "result": {"status": "failed", "blockers": ["old quality failure"]},
+            },
+            {
+                "role": "approval-gate",
+                "result": {"status": "awaiting_approval", "blockers": ["old budget stop"]},
+            },
+            {
+                "role": "quality-runner",
+                "result": {"status": "completed", "blockers": []},
+            },
+            {
+                "role": "implementation-agent",
+                "result": {"status": "completed", "blockers": []},
+            },
+        ]
+    )
+
+    result = route(tmp_path, state, "implementation-agent")
+
+    assert result["next_role"] == "test-generator"
+    assert result["stop"] is False
+
+
+def test_successful_verifier_artifact_supersedes_historical_role_blockers(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    artifact(
+        artifacts_dir / "semantic_conflict.json",
+        {
+            "verdict": "works",
+            "blockers": [],
+            "repair_required": False,
+        },
+    )
+    state = completed_state()
+    state["roles"].extend(
+        [
+            {
+                "role": "semantic-conflict-agent",
+                "result": {
+                    "status": "completed",
+                    "blockers": ["old missing browser evidence"],
+                },
+            },
+            {
+                "role": "implementation-agent",
+                "result": {"status": "completed", "blockers": []},
+            },
+        ]
+    )
+
+    result = route(tmp_path, state, "implementation-agent")
+
+    assert result["next_role"] == "test-generator"
+    assert result["stop"] is False

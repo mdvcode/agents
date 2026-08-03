@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -43,6 +44,14 @@ workflows:
     events = [json.loads(line) for line in traces[0].read_text(encoding="utf-8").splitlines()]
     assert events[-1]["event"] == "workflow_completed"
     assert any(event.get("step") == "ok" and event.get("returncode") == 0 for event in events)
+    otel_paths = list((tmp_path / ".agent-runs").glob("*/raw-events/otel-spans.jsonl"))
+    assert len(otel_paths) == 1
+    spans = [json.loads(line) for line in otel_paths[0].read_text(encoding="utf-8").splitlines()]
+    assert {span["name"] for span in spans} == {"ai_harness.workflow", "ai_harness.workflow.step"}
+    root = next(span for span in spans if span["name"] == "ai_harness.workflow")
+    step = next(span for span in spans if span["name"] == "ai_harness.workflow.step")
+    assert step["trace_id"] == root["trace_id"]
+    assert step["parent_span_id"] == root["span_id"]
 
 
 def test_workflow_runner_expands_run_scoped_artifacts_dir(tmp_path: Path, monkeypatch: object) -> None:
@@ -137,6 +146,58 @@ workflows:
         "python3 scripts/agent_role_runner.py --workflow sample --adapter-command "
         "'python3 scripts/adapters/codex_cli_executor.py'"
     ]
+
+
+def test_workflow_runner_passes_quoted_goal_to_agent_role_runner(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    workflows_path = tmp_path / ".agent-workflows.yaml"
+    workflows_path.write_text(
+        """
+version: 1
+workflows:
+  sample:
+    steps:
+      - name: "roles"
+        command: "python3 scripts/agent_role_runner.py --workflow sample --task-id {task_id} --goal {goal}"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run_workflow, "WORKFLOWS", workflows_path)
+    monkeypatch.setattr(run_workflow, "RUNS_DIR", tmp_path / ".agent-runs")
+    commands: list[str] = []
+
+    def fake_run_command(command: str, cwd: Path, timeout_seconds: int) -> tuple[int, str, str]:
+        commands.append(command)
+        return 0, "ok", ""
+
+    monkeypatch.setattr(run_workflow, "run_command", fake_run_command)
+    goal = "Add office photos — don't expand $(touch /tmp/pwned)?"
+
+    result = run_workflow.run_workflow(
+        "sample",
+        root=tmp_path,
+        task_id="photo-services",
+        goal=goal,
+    )
+
+    assert result == 0
+    assert len(commands) == 1
+    assert shlex.split(commands[0])[-2:] == ["--goal", goal]
+
+
+def test_workflow_runner_cli_accepts_goal(monkeypatch: object) -> None:
+    goal = "Add service background photos"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_workflow.py", "full_agent_workflow", "--goal", goal],
+    )
+
+    args = run_workflow.parse_args()
+
+    assert args.goal == goal
 
 
 def test_workflow_runner_cli_adapter_command_overrides_workflow(tmp_path: Path, monkeypatch: object) -> None:

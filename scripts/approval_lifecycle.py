@@ -288,6 +288,7 @@ def prepare_resume(run_dir: Path) -> dict[str, Any]:
             "gate": role,
             "scope": approval["approved_scope"],
             "granted_at": approval["decided_at"],
+            "reason": approval["reason"],
         }
     )
     workflow["approval_grants"] = grants

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI Harness operational observability snapshot",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "overview", "runs", "workers", "queue", "leases", "budgets", "latency", "costs", "retries", "loops", "failures", "tracing", "exceptions", "service"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "generated_at": {"type": "number"},
+    "overview": {"type": "object"},
+    "runs": {"type": "object"},
+    "workers": {"type": "object"},
+    "queue": {"type": "object"},
+    "leases": {"type": "object"},
+    "budgets": {"type": "object"},
+    "latency": {"type": "object"},
+    "costs": {"type": "object"},
+    "retries": {"type": "object"},
+    "loops": {"type": "object"},
+    "failures": {"type": "object"},
+    "tracing": {"type": "object"},
+    "exceptions": {"type": "array"},
+    "service": {"type": "object"}
+  }
+}

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -21,6 +22,11 @@ from task_queue import DEFAULT_DB, TaskQueue
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ai_harness.observability.dashboard import DASHBOARD_HTML
+
 RUNS_DIR = ROOT / ".agent-runs"
 MAX_BODY_BYTES = 1_048_576
 
@@ -58,6 +64,18 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
+    def send_html(self, status: HTTPStatus, value: str) -> None:
+        encoded = value.encode("utf-8")
+        self.send_response(status.value)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
+        self.wfile.write(encoded)
+
     def authorize(self) -> None:
         if not self.auth_token:
             return
@@ -82,9 +100,12 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         try:
+            path = urlparse(self.path).path
+            if path in {"/", "/dashboard"}:
+                self.send_html(HTTPStatus.OK, DASHBOARD_HTML)
+                return
             self.authorize()
             metrics = collect_metrics(runs_dir=self.runs_dir, db_path=self.queue.path)
-            path = urlparse(self.path).path
             if path == "/health":
                 self.send_json(HTTPStatus.OK, {"status": "ok", "service": metrics["service"]})
             elif path == "/metrics":
@@ -101,6 +122,8 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.OK, metrics["budgets"])
             elif path == "/exceptions":
                 self.send_json(HTTPStatus.OK, metrics["exceptions"])
+            elif path == "/traces":
+                self.send_json(HTTPStatus.OK, metrics["tracing"])
             else:
                 raise APIError(HTTPStatus.NOT_FOUND, "endpoint not found")
         except APIError as exc:

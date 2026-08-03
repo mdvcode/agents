@@ -9,6 +9,9 @@ description = "Policy-governed local engineering harness with a provider-neutral
 readme = "docs/index.md"
 requires-python = ">=3.11"
 dependencies = [
+  "opentelemetry-api>=1.44,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.44,<2",
+  "opentelemetry-sdk>=1.44,<2",
   "PyYAML>=6.0",
 ]
 classifiers = [
@@ -46,3 +49,9 @@ include = ["ai_harness*"]
 "share/ai-harness/schemas" = ["schemas/*.json"]
 "share/ai-harness/schemas/roles" = ["schemas/roles/*.json"]
 "share/ai-harness/.agents/prompts" = [".agents/prompts/*.md"]
+"share/ai-harness/evals" = ["evals/README.md"]
+"share/ai-harness/evals/datasets" = ["evals/datasets/*.json"]
+"share/ai-harness/evals/benchmarks" = ["evals/benchmarks/*.json"]
+"share/ai-harness/evals/golden_tasks" = ["evals/golden_tasks/*.json"]
+"share/ai-harness/evals/regressions" = ["evals/regressions/*.json"]
+"share/ai-harness/evals/rubrics" = ["evals/rubrics/*.json"]

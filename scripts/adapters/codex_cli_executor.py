@@ -524,7 +524,8 @@ def run_codex(
     result["cached_input_tokens"] = usage["cached_input_tokens"]
     result["output_tokens"] = usage["output_tokens"]
     result["reasoning_output_tokens"] = usage["reasoning_output_tokens"]
-    usage_total = usage["input_tokens"] + usage["output_tokens"]
+    uncached_input = max(usage["input_tokens"] - usage["cached_input_tokens"], 0)
+    usage_total = uncached_input + usage["output_tokens"]
     if usage_total:
         result["tokens_used"] = usage_total
     artifact_errors = write_artifacts_from_result(request, result)

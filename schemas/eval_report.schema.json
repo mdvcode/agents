@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "kind", "created_at", "rubric", "status"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"enum": ["scorecard", "evaluation_run"]},
+    "created_at": {"type": "string"},
+    "rubric": {"type": "object"},
+    "dataset": {"type": "object"},
+    "status": {"enum": ["pass", "fail", "insufficient_evidence"]},
+    "subject": {"type": "object"},
+    "overall_score": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+    "coverage": {"type": "number", "minimum": 0, "maximum": 1},
+    "minimum_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+    "metrics": {"type": "array"},
+    "required_unavailable": {"type": "array"},
+    "case_count": {"type": "integer", "minimum": 0},
+    "passed_cases": {"type": "integer", "minimum": 0},
+    "cases": {"type": "array"},
+    "blockers": {"type": "array"},
+    "warnings": {"type": "array"}
+  }
+}

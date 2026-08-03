@@ -14,6 +14,8 @@
 - None.
 
 ## Done
+- Qdrant Content Manager bonuses: thin service-layer routing, a reproducible five-service Docker Compose stack, isolated Qdrant tests, live smoke verification, and three local commits; no publication.
+- Qdrant Content Manager coding challenge: transactional PATCH, read-only consistency diagnostics, regression tests, and two local commits on `test_api_func`; no publication.
 - Context Intelligence Platform: compiled-only static knowledge sources, rule retrieval, token budgets, provenance logging, Obsidian discovery, and the MemPalace interface behind Context Engine.
 - AI Harness UX milestone: pip/pipx packaging, product CLI, local project configuration, idempotent task intake, compact status, and doctor diagnostics.
 - Step 2 operational control plane: scoped approval/resume API, crash checkpoint recovery, signed CI feedback ingestion, registered worker daemon lifecycle, universal task intake, and compact operational metrics API.

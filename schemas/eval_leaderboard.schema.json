@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "kind", "created_at", "minimum_coverage", "entry_count", "eligible_count", "entries"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "evaluation_leaderboard"},
+    "created_at": {"type": "string"},
+    "minimum_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+    "rubric_fingerprint": {"type": "string"},
+    "entry_count": {"type": "integer", "minimum": 0},
+    "eligible_count": {"type": "integer", "minimum": 0},
+    "entries": {"type": "array"}
+  },
+  "additionalProperties": false
+}

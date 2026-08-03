@@ -10,11 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from task_queue import TaskQueue, TaskRecord
-from worker_pool import WorkerOutcome, WorkflowWorkerPool, safe_payload
+from worker_pool import WorkerOutcome, WorkflowWorkerPool, safe_payload, telemetry_run_dir
 import worker_pool
 
 
-def test_three_workers_process_isolated_tasks_concurrently(tmp_path: Path) -> None:
+def test_three_workers_process_isolated_tasks_concurrently(tmp_path: Path, monkeypatch: object) -> None:
+    monkeypatch.setattr(worker_pool, "RUNS_DIR", tmp_path / ".agent-runs")
     queue = TaskQueue(tmp_path / "queue.db")
     for index in range(3):
         queue.enqueue(
@@ -53,7 +54,7 @@ def test_three_workers_process_isolated_tasks_concurrently(tmp_path: Path) -> No
     assert len(leased_workers) == 3
 
 
-def test_worker_pool_retries_to_dead_letter(tmp_path: Path) -> None:
+def test_worker_pool_retries_to_dead_letter(tmp_path: Path, monkeypatch: object) -> None:
     queue = TaskQueue(tmp_path / "queue.db")
     queue.enqueue(
         task_key="fails",
@@ -61,6 +62,7 @@ def test_worker_pool_retries_to_dead_letter(tmp_path: Path) -> None:
         max_retries=1,
     )
 
+    monkeypatch.setattr(worker_pool, "RUNS_DIR", tmp_path / ".agent-runs")
     pool = WorkflowWorkerPool(
         queue=queue,
         workers=1,
@@ -73,6 +75,10 @@ def test_worker_pool_retries_to_dead_letter(tmp_path: Path) -> None:
     record = queue.list()[0]
     assert record.status == "dead_letter"
     assert record.requires_human is True
+    spans_path = tmp_path / ".agent-runs" / f"queue-task-{record.id}" / "raw-events" / "otel-spans.jsonl"
+    spans = [json.loads(line) for line in spans_path.read_text(encoding="utf-8").splitlines()]
+    assert spans[-1]["name"] == "ai_harness.worker.task"
+    assert spans[-1]["status"] == "error"
 
 
 def test_worker_rejects_adapter_override_outside_harness_test_mode(
@@ -96,6 +102,16 @@ def test_worker_rejects_adapter_override_outside_harness_test_mode(
         assert "restricted to harness test mode" in str(exc)
     else:
         raise AssertionError("adapter override must be rejected")
+
+
+def test_worker_telemetry_rejects_run_paths_outside_run_store(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    monkeypatch.setattr(worker_pool, "RUNS_DIR", tmp_path / ".agent-runs")
+
+    assert telemetry_run_dir("safe-run") == (tmp_path / ".agent-runs" / "safe-run").resolve()
+    assert telemetry_run_dir("../outside") is None
 
 
 def test_reclaimed_run_uses_resume_command(tmp_path: Path, monkeypatch: object) -> None:

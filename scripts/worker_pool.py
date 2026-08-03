@@ -14,10 +14,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from opentelemetry.trace import Status, StatusCode
+
 from task_queue import DEFAULT_DB, TaskQueue, TaskRecord
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ai_harness.observability import TelemetryRuntime
+
 RUNS_DIR = ROOT / ".agent-runs"
 
 
@@ -31,6 +38,11 @@ class WorkerOutcome:
 
 
 TaskHandler = Callable[[TaskRecord, str], WorkerOutcome]
+
+
+def telemetry_run_dir(run_id: str) -> Path | None:
+    candidate = (RUNS_DIR / run_id).resolve()
+    return candidate if candidate.parent == RUNS_DIR.resolve() else None
 
 
 def safe_payload(record: TaskRecord) -> dict[str, str]:
@@ -144,6 +156,7 @@ class WorkflowWorkerPool:
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=TelemetryRuntime.inject_environment(dict(os.environ)),
         )
         while process.poll() is None:
             time.sleep(self.heartbeat_seconds)
@@ -195,29 +208,58 @@ class WorkflowWorkerPool:
         if not self.queue.mark_running(record.id, worker_id):
             return self.queue.get(record.id)
         self.queue.worker_heartbeat(worker_id, current_task_id=record.id)
-        try:
-            outcome = (
-                self.handler(record, worker_id)
-                if self.handler is not None
-                else self.run_workflow(record, worker_id)
-            )
-        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
-            outcome = WorkerOutcome(
-                status="failed",
-                error=str(exc),
-                exception_reason="worker handler failed",
-            )
-        finished = self.queue.finish(
-            task_id=record.id,
-            worker_id=worker_id,
-            status=outcome.status,
-            run_id=outcome.run_id,
-            error=outcome.error,
-            requires_human=outcome.requires_human,
-            exception_reason=outcome.exception_reason,
+        predicted_run_id = str(record.payload.get("run_id") or record.run_id or f"queue-task-{record.id}")
+        telemetry = TelemetryRuntime(
+            run_dir=telemetry_run_dir(predicted_run_id),
+            service_name="ai-harness-worker",
+            service_instance_id=worker_id,
         )
-        self.queue.worker_heartbeat(worker_id, current_task_id=0)
-        return finished
+        started = time.monotonic()
+        try:
+            with telemetry.span(
+                "ai_harness.worker.task",
+                {
+                    "task.id": record.id,
+                    "task.attempt": record.attempts,
+                    "worker.id": worker_id,
+                    "queue.wait_seconds": max(0, time.time() - record.created_at),
+                },
+            ) as span:
+                try:
+                    outcome = (
+                        self.handler(record, worker_id)
+                        if self.handler is not None
+                        else self.run_workflow(record, worker_id)
+                    )
+                except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+                    outcome = WorkerOutcome(
+                        status="failed",
+                        error=str(exc),
+                        exception_reason="worker handler failed",
+                    )
+                    span.set_attribute("error.type", type(exc).__name__)
+                span.set_attribute("task.outcome", outcome.status)
+                span.set_attribute("task.requires_human", outcome.requires_human)
+                if outcome.status not in {"completed", "blocked"}:
+                    span.set_status(Status(StatusCode.ERROR))
+                    telemetry.failure_counter.add(1, {"operation": "worker.task", "outcome": outcome.status})
+                telemetry.task_counter.add(1, {"outcome": outcome.status})
+                telemetry.duration_histogram.record(
+                    max(0, time.monotonic() - started), {"operation": "worker.task"}
+                )
+                finished = self.queue.finish(
+                    task_id=record.id,
+                    worker_id=worker_id,
+                    status=outcome.status,
+                    run_id=outcome.run_id,
+                    error=outcome.error,
+                    requires_human=outcome.requires_human,
+                    exception_reason=outcome.exception_reason,
+                )
+                self.queue.worker_heartbeat(worker_id, current_task_id=0)
+                return finished
+        finally:
+            telemetry.shutdown()
 
     def run_wave(self) -> list[TaskRecord]:
         with ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="agent-worker") as executor:

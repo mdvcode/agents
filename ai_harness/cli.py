@@ -304,6 +304,17 @@ def project_runs(runs_dir: Path, repository: Path) -> list[dict[str, Any]]:
         source_repository = Path(repository_value).expanduser()
         if source_repository.resolve() != repository.resolve():
             continue
+        approval = read_json_object(run_dir / "artifacts" / "approval.json")
+        verdict = read_json_object(run_dir / "artifacts" / "verdict.json")
+        verdict_blockers = verdict.get("blockers", [])
+        approval_detail = str(approval.get("reason", ""))
+        if isinstance(verdict_blockers, list) and verdict_blockers:
+            approval_detail = str(verdict_blockers[0])
+        registration_required = (
+            str(approval.get("checkpoint_role", "")) == "orchestrator"
+            and verdict.get("decision") == "await_approval"
+            and "not registered" in approval_detail.lower()
+        )
         selected.append(
             {
                 "run_id": run_dir.name,
@@ -313,9 +324,83 @@ def project_runs(runs_dir: Path, repository: Path) -> list[dict[str, Any]]:
                 "tokens_used": int(workflow.get("tokens_used", 0) or 0),
                 "branch": str(workflow.get("branch", "")),
                 "blockers": [str(item) for item in workflow.get("blockers", [])],
+                "approval": {
+                    "status": str(approval.get("status", "")),
+                    "reason": str(approval.get("reason", "")),
+                    "detail": approval_detail,
+                    "gate": str(approval.get("checkpoint_role", "")),
+                    "registration_required": registration_required,
+                },
             }
         )
     return selected
+
+
+def handle_approve(args: argparse.Namespace) -> int:
+    repository = repository_from_arg(args.repo, require_initialized=True)
+    config = load_project_config(repository)
+    if not project_is_trusted(config):
+        raise CLIError("project configuration is not locally trusted; run `agent init` again")
+    root = harness_home()
+    approval_lifecycle = load_harness_module(root, "approval_lifecycle")
+    task_queue = load_harness_module(root, "task_queue")
+    candidates = []
+    for run in project_runs(root / ".agent-runs", repository):
+        if run["status"] != "awaiting_approval":
+            continue
+        if run["approval"]["status"] != "pending":
+            continue
+        candidates.append(run)
+    if args.run_id:
+        candidates = [run for run in candidates if run["run_id"] == args.run_id]
+        if not candidates:
+            raise CLIError(f"pending approval for run {args.run_id!r} was not found")
+    elif len(candidates) > 1:
+        run_ids = ", ".join(run["run_id"] for run in candidates)
+        raise CLIError(f"multiple approvals are pending ({run_ids}); pass --run-id")
+    if not candidates:
+        raise CLIError("no pending approval was found for this project")
+    selected = candidates[0]
+    if selected["approval"]["registration_required"]:
+        raise CLIError(
+            "publication approval cannot bypass the trusted repository registry; "
+            "register the target repository before publishing"
+        )
+    run_dir = root / ".agent-runs" / selected["run_id"]
+    reason = args.reason.strip() or "Approved by the user through the agent CLI."
+    try:
+        approval = approval_lifecycle.approve_run(
+            run_dir,
+            actor=args.actor,
+            reason=reason,
+        )
+        transition, record = approval_lifecycle.resume_run(
+            run_dir,
+            queue=task_queue.TaskQueue(root / ".agent-queue" / "tasks.db"),
+        )
+    except approval_lifecycle.ApprovalError as exc:
+        raise CLIError(str(exc)) from exc
+    payload = {
+        "status": "queued",
+        "run_id": selected["run_id"],
+        "approval_id": approval["approval_id"],
+        "checkpoint_role": approval["checkpoint_role"],
+        "queue_task_id": record.id,
+        "task_id": record.payload.get("task_id", ""),
+        "repository": str(repository),
+        "execution_status": transition["workflow"]["execution_status"],
+    }
+    emit(
+        payload,
+        as_json=args.json,
+        lines=(
+            f"Approval accepted: {selected['run_id']}",
+            f"  checkpoint: {approval['checkpoint_role']}",
+            f"  continuation queue id: {record.id}",
+            "Inspect it with: agent status",
+        ),
+    )
+    return 0
 
 
 def handle_status(args: argparse.Namespace) -> int:
@@ -350,6 +435,17 @@ def handle_status(args: argparse.Namespace) -> int:
     for item in tasks[: args.limit]:
         marker = " !" if item["requires_human"] else ""
         lines.append(f"  task {item['queue_task_id']}: {item['task_id']} [{item['status']}]{marker}")
+    for run in runs[: args.limit]:
+        if run["status"] != "awaiting_approval" or run["approval"]["status"] != "pending":
+            continue
+        lines.append(
+            f"  approval {run['run_id']}: {run['approval']['detail']} "
+            f"(gate: {run['approval']['gate']})"
+        )
+        if run["approval"]["registration_required"]:
+            lines.append("    publication requires trusted repository registration")
+        else:
+            lines.append(f"    agent approve --repo {repository} --run-id {run['run_id']}")
     emit(payload, as_json=args.json, lines=lines)
     return 0
 
@@ -501,6 +597,17 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser.add_argument("--limit", type=int, choices=range(1, 101), default=10)
     status_parser.add_argument("--json", action="store_true")
     status_parser.set_defaults(handler=handle_status)
+
+    approve_parser = subparsers.add_parser(
+        "approve",
+        help="approve and resume a pending project run",
+    )
+    approve_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")
+    approve_parser.add_argument("--run-id", default="", help="specific pending run (optional when only one exists)")
+    approve_parser.add_argument("--actor", default="user")
+    approve_parser.add_argument("--reason", default="")
+    approve_parser.add_argument("--json", action="store_true")
+    approve_parser.set_defaults(handler=handle_approve)
 
     doctor_parser = subparsers.add_parser("doctor", help="diagnose the project and runtime installation")
     doctor_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "name", "minimum_coverage", "metrics"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "name": {"type": "string", "minLength": 1},
+    "description": {"type": "string"},
+    "minimum_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+    "metrics": {
+      "type": "object",
+      "minProperties": 11,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["weight", "required", "direction", "source"],
+        "properties": {
+          "weight": {"type": "number", "minimum": 0},
+          "required": {"type": "boolean"},
+          "direction": {"enum": ["higher_is_better", "lower_is_better"]},
+          "source": {"type": "string"},
+          "target": {"type": "number"},
+          "worst": {"type": "number"},
+          "unit": {"type": "string"},
+          "pricing_per_million_tokens": {
+            "type": "object",
+            "required": ["input", "cached_input", "output"],
+            "properties": {
+              "input": {"type": "number", "minimum": 0},
+              "cached_input": {"type": "number", "minimum": 0},
+              "output": {"type": "number", "minimum": 0}
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

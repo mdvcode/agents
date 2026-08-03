@@ -19,8 +19,16 @@ from repository_registry import validate_registry_data
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ai_harness.evaluation.io import EvaluationInputError
+from ai_harness.evaluation.runner import validate_dataset
+from ai_harness.evaluation.scoring import validate_rubric
+
 ARTIFACTS = ROOT / ".agent-runs" / "UNSPECIFIED" / "artifacts"
 SCHEMAS = ROOT / "schemas"
+EVALS = ROOT / "evals"
 POLICY = ROOT / ".agent-policy.yaml"
 PROJECT_PROFILES = ROOT / ".agent-project-profiles.yaml"
 AGENT_WORKFLOWS = ROOT / ".agent-workflows.yaml"
@@ -385,6 +393,89 @@ def validate_verifier_contracts() -> list[str]:
         enums = artifact.get("enums", {}) if isinstance(artifact, dict) else {}
         if enums.get("verdict") != ["works", "broken", "unavailable"]:
             errors.append(f"{role}: verifier verdict enum is not authoritative")
+    return errors
+
+
+def validate_eval_contracts() -> list[str]:
+    errors: list[str] = []
+    schema_paths = sorted(SCHEMAS.glob("eval_*.schema.json"))
+    if len(schema_paths) < 5:
+        errors.append("schemas: expected evaluation dataset, rubric, report, comparison, and leaderboard schemas")
+    for path in schema_paths:
+        try:
+            load_json(path)
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"{path.relative_to(ROOT)}: invalid JSON: {exc}")
+    inputs = {
+        "dataset": EVALS / "datasets" / "harness_completed_run_v1.json",
+        "rubric": EVALS / "rubrics" / "harness_run_v1.json",
+        "benchmark": EVALS / "benchmarks" / "milestone3_v1.json",
+        "golden_task": EVALS / "golden_tasks" / "completed_engineering_run_v1.json",
+        "regressions": EVALS / "regressions" / "harness_failure_taxonomy_v1.json",
+    }
+    loaded: dict[str, dict[str, Any]] = {}
+    for label, path in inputs.items():
+        if not path.is_file():
+            errors.append(f"{path.relative_to(ROOT)}: missing")
+            continue
+        try:
+            value = load_json(path)
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"{path.relative_to(ROOT)}: invalid JSON: {exc}")
+            continue
+        if not isinstance(value, dict):
+            errors.append(f"{path.relative_to(ROOT)}: top-level value must be an object")
+            continue
+        loaded[label] = value
+    try:
+        if "dataset" in loaded:
+            validate_dataset(loaded["dataset"])
+        if "rubric" in loaded:
+            validate_rubric(loaded["rubric"])
+    except EvaluationInputError as exc:
+        errors.append(f"evaluation contract: {exc}")
+    benchmark = loaded.get("benchmark")
+    if benchmark is not None:
+        for field in ("schema_version", "name", "dataset", "rubric", "comparison"):
+            if field not in benchmark:
+                errors.append(f"evals/benchmarks/milestone3_v1.json: missing {field!r}")
+    return errors
+
+
+def validate_observability_contracts() -> list[str]:
+    errors: list[str] = []
+    expected = {
+        "otel_span.schema.json": {"schema_version", "name", "trace_id", "span_id", "status", "attributes"},
+        "observability_snapshot.schema.json": {
+            "schema_version",
+            "generated_at",
+            "overview",
+            "runs",
+            "workers",
+            "queue",
+            "latency",
+            "costs",
+            "retries",
+            "loops",
+            "failures",
+            "tracing",
+        },
+    }
+    for filename, required_fields in expected.items():
+        path = SCHEMAS / filename
+        if not path.exists():
+            errors.append(f"schemas: missing {filename}")
+            continue
+        try:
+            schema = load_json(path)
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"schemas/{filename}: invalid JSON: {exc}")
+            continue
+        if schema.get("type") != "object":
+            errors.append(f"schemas/{filename}: top-level type must be object")
+        required = schema.get("required")
+        if not isinstance(required, list) or not required_fields.issubset(required):
+            errors.append(f"schemas/{filename}: missing required observability fields")
     return errors
 
 
@@ -850,6 +941,8 @@ def main(artifacts_dir: Path | None = None) -> int:
     if tool_policy_doc is not None and capabilities_doc is not None:
         errors.extend(validate_tool_policy_data(tool_policy_doc, capabilities_doc))
     errors.extend(validate_verifier_contracts())
+    errors.extend(validate_eval_contracts())
+    errors.extend(validate_observability_contracts())
 
     risk = loaded_artifacts.get("risk")
     verdict = loaded_artifacts.get("verdict")

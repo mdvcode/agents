@@ -65,6 +65,7 @@ def test_approval_scope_is_exact_and_consumed_once(tmp_path: Path) -> None:
     assert resumed["workflow"]["execution_status"] == "resuming"
     assert resumed["workflow"]["resume_role"] == "risk-classifier"
     assert resumed["workflow"]["approval_override"]["gate"] == "risk-classifier"
+    assert resumed["workflow"]["approval_grants"][0]["reason"] == "HIGH risk"
     with pytest.raises(ApprovalError, match="unexpired approved"):
         prepare_resume(run)
 

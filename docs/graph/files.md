@@ -32,4 +32,11 @@
 - `ai_harness/context/` -> Context Engine, static knowledge sources, retrieval protocol, rule retriever, token-budgeted builder, context logs, and MemPalace interface.
 - `scripts/context_compiler.py` -> workflow compatibility facade that writes Context Engine packages and manifests.
 - `scripts/project_memory.py` -> legacy scoped BM25 compatibility helper; not an implicit Context Engine source.
+- `evals/` -> versioned datasets, benchmarks, golden tasks, regression taxonomy, and rubrics.
+- `ai_harness/evaluation/` -> deterministic evidence collection, scoring, dataset assertions, comparison, and leaderboard logic.
+- `scripts/run_evals.py`, `scripts/score.py`, `scripts/compare_runs.py`, `scripts/leaderboard.py` -> Evaluation Framework CLI boundary.
+- `ai_harness/observability/` -> OpenTelemetry providers, sanitized JSONL span export, bounded trace reads, and dashboard shell.
+- `scripts/operational_metrics.py` -> authoritative run + scheduler aggregation for workers, queue, latency, cost coverage, retries, loops, PR time, failures, and traces.
+- `scripts/control_plane_api.py` -> authenticated operational APIs and the data-free loopback dashboard route.
+- `schemas/otel_span.schema.json`, `schemas/observability_snapshot.schema.json` -> observability evidence contracts.
 - `.agent-runs/<run-id>/context-manifests/retrieved/<role>.md` -> ephemeral retrieved chunks with provenance for one role execution.
