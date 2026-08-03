@@ -49,5 +49,11 @@ Memory candidate -> future MemPalace implementation -> `MemoryManager` lifecycle
 
 Task + repository + role + runtime -> bounded repository/Obsidian/profile/policy/skill/contract sources -> deterministic rule retrieval -> prioritized token budgets -> one Context Package + provenance log -> runtime reads the package only.
 
+## Evaluation Flow
+
+Frozen dataset + frozen rubric + explicit subject run mapping -> deterministic scorecards + evidence coverage -> dataset gates -> paired compatible comparison -> regression verdict -> coverage-aware leaderboard.
+
+Missing telemetry remains unavailable and reduces coverage. Dataset expectations stay outside the evaluated run context.
+
 ## Stop Flow
 Protected path or high risk -> update risk/verdict -> stop and request approval.

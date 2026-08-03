@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "kind", "created_at", "status", "paired_cases", "cases", "blockers"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "evaluation_comparison"},
+    "created_at": {"type": "string"},
+    "status": {"enum": ["pass", "regression"]},
+    "regression_tolerance": {"type": "number", "minimum": 0},
+    "minimum_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+    "paired_cases": {"type": "integer", "minimum": 1},
+    "aggregate_score_delta": {"type": ["number", "null"]},
+    "cases": {"type": "array"},
+    "blockers": {"type": "array"}
+  },
+  "additionalProperties": false
+}

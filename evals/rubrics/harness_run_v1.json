@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "name": "harness_run_v1",
+  "description": "Deterministic, artifact-based scoring for one AI Harness engineering run.",
+  "minimum_coverage": 0.6,
+  "metrics": {
+    "planning": {
+      "weight": 0.12,
+      "required": true,
+      "direction": "higher_is_better",
+      "source": "artifacts/plan.md"
+    },
+    "code_quality": {
+      "weight": 0.15,
+      "required": true,
+      "direction": "higher_is_better",
+      "source": "artifacts/quality.json"
+    },
+    "security": {
+      "weight": 0.15,
+      "required": true,
+      "direction": "higher_is_better",
+      "source": "artifacts/security.json"
+    },
+    "review_quality": {
+      "weight": 0.12,
+      "required": true,
+      "direction": "higher_is_better",
+      "source": "artifacts/review.json"
+    },
+    "pr_success": {
+      "weight": 0.08,
+      "required": false,
+      "direction": "higher_is_better",
+      "source": "artifacts/publication.json"
+    },
+    "repair_success": {
+      "weight": 0.08,
+      "required": false,
+      "direction": "higher_is_better",
+      "source": "workflow.json loops plus final gates"
+    },
+    "context_quality": {
+      "weight": 0.1,
+      "required": false,
+      "direction": "higher_is_better",
+      "source": "context-manifests/logs/*.jsonl"
+    },
+    "latency": {
+      "weight": 0.05,
+      "required": false,
+      "direction": "lower_is_better",
+      "target": 300000,
+      "worst": 7200000,
+      "unit": "milliseconds",
+      "source": "metrics.json duration_ms"
+    },
+    "tokens": {
+      "weight": 0.05,
+      "required": false,
+      "direction": "lower_is_better",
+      "target": 50000,
+      "worst": 300000,
+      "unit": "tokens",
+      "source": "metrics.json tokens_used"
+    },
+    "cost": {
+      "weight": 0.04,
+      "required": false,
+      "direction": "lower_is_better",
+      "target": 0.5,
+      "worst": 20.0,
+      "unit": "USD",
+      "source": "metrics.json cost_usd or rubric-specific pricing"
+    },
+    "human_interventions": {
+      "weight": 0.06,
+      "required": false,
+      "direction": "lower_is_better",
+      "target": 0,
+      "worst": 3,
+      "unit": "count",
+      "source": "workflow approvals/resumes and artifacts/approval.json"
+    }
+  }
+}

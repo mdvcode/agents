@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "name": "milestone3_v1",
+  "dataset": "evals/datasets/harness_completed_run_v1.json",
+  "rubric": "evals/rubrics/harness_run_v1.json",
+  "comparison": {
+    "minimum_coverage": 0.6,
+    "regression_tolerance": 0.02,
+    "block_on_any_metric_regression": true,
+    "require_matching_dataset_fingerprint": true,
+    "require_matching_rubric_fingerprint": true
+  },
+  "notes": [
+    "Run identical frozen cases for every model, prompt, RAG, loop, or memory variant.",
+    "Add failure cases and clean controls together so false-positive behavior remains visible."
+  ]
+}

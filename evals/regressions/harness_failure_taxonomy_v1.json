@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "name": "harness_failure_taxonomy_v1",
+  "categories": [
+    "security_regression",
+    "flawed_plan",
+    "quality_gate_failure",
+    "review_miss",
+    "publication_failure",
+    "failed_error_recovery",
+    "agent_looping",
+    "context_explosion",
+    "silent_tool_error",
+    "response_truncation",
+    "task_evasion",
+    "missing_capability_awareness",
+    "telemetry_gap"
+  ],
+  "controls": [
+    {
+      "id": "clean_completed_run",
+      "expected_category": "none",
+      "purpose": "Measure false positives and prevent every run from being labeled as a failure."
+    },
+    {
+      "id": "missing_required_artifact",
+      "expected_category": "telemetry_gap",
+      "purpose": "Ensure missing evidence lowers coverage instead of silently passing."
+    },
+    {
+      "id": "candidate_metric_drop",
+      "expected_category": "quality_gate_failure",
+      "purpose": "Ensure paired comparison catches a regression beyond tolerance."
+    }
+  ]
+}

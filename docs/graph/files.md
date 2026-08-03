@@ -32,4 +32,7 @@
 - `ai_harness/context/` -> Context Engine, static knowledge sources, retrieval protocol, rule retriever, token-budgeted builder, context logs, and MemPalace interface.
 - `scripts/context_compiler.py` -> workflow compatibility facade that writes Context Engine packages and manifests.
 - `scripts/project_memory.py` -> legacy scoped BM25 compatibility helper; not an implicit Context Engine source.
+- `evals/` -> versioned datasets, benchmarks, golden tasks, regression taxonomy, and rubrics.
+- `ai_harness/evaluation/` -> deterministic evidence collection, scoring, dataset assertions, comparison, and leaderboard logic.
+- `scripts/run_evals.py`, `scripts/score.py`, `scripts/compare_runs.py`, `scripts/leaderboard.py` -> Evaluation Framework CLI boundary.
 - `.agent-runs/<run-id>/context-manifests/retrieved/<role>.md` -> ephemeral retrieved chunks with provenance for one role execution.
