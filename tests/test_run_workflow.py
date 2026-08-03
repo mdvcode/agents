@@ -44,6 +44,14 @@ workflows:
     events = [json.loads(line) for line in traces[0].read_text(encoding="utf-8").splitlines()]
     assert events[-1]["event"] == "workflow_completed"
     assert any(event.get("step") == "ok" and event.get("returncode") == 0 for event in events)
+    otel_paths = list((tmp_path / ".agent-runs").glob("*/raw-events/otel-spans.jsonl"))
+    assert len(otel_paths) == 1
+    spans = [json.loads(line) for line in otel_paths[0].read_text(encoding="utf-8").splitlines()]
+    assert {span["name"] for span in spans} == {"ai_harness.workflow", "ai_harness.workflow.step"}
+    root = next(span for span in spans if span["name"] == "ai_harness.workflow")
+    step = next(span for span in spans if span["name"] == "ai_harness.workflow.step")
+    assert step["trace_id"] == root["trace_id"]
+    assert step["parent_span_id"] == root["span_id"]
 
 
 def test_workflow_runner_expands_run_scoped_artifacts_dir(tmp_path: Path, monkeypatch: object) -> None:

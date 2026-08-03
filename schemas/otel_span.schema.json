@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI Harness sanitized OpenTelemetry span",
+  "type": "object",
+  "required": ["schema_version", "name", "trace_id", "span_id", "parent_span_id", "start_time_unix_nano", "end_time_unix_nano", "duration_ms", "status", "attributes", "events"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "name": {"type": "string", "maxLength": 128},
+    "trace_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "span_id": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+    "parent_span_id": {"type": "string", "pattern": "^$|^[0-9a-f]{16}$"},
+    "start_time_unix_nano": {"type": "integer", "minimum": 0},
+    "end_time_unix_nano": {"type": "integer", "minimum": 0},
+    "duration_ms": {"type": "number", "minimum": 0},
+    "status": {"enum": ["unset", "ok", "error"]},
+    "attributes": {"type": "object"},
+    "events": {"type": "array", "maxItems": 32}
+  },
+  "additionalProperties": false
+}

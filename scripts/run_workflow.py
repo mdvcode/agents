@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import yaml
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -26,6 +28,11 @@ from run_state import RunLayout, find_completed_run, record_failure, task_finger
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ai_harness.observability import TelemetryRuntime
+
 WORKFLOWS = ROOT / ".agent-workflows.yaml"
 RUNS_DIR = ROOT / ".agent-runs"
 DEFAULT_TIMEOUT_SECONDS = 300
@@ -180,6 +187,48 @@ def run_workflow(
     artifacts_dir = layout.artifacts
     budgets = workflow_budgets(workflow)
     started = time.monotonic()
+    telemetry = TelemetryRuntime(
+        run_dir=run_dir,
+        service_name="ai-harness-workflow",
+        service_instance_id=run_id,
+    )
+    root_span = telemetry.tracer.start_span(
+        "ai_harness.workflow",
+        context=telemetry.extracted_context(),
+        attributes={
+            "workflow.name": workflow_name,
+            "run.id": run_id,
+            "task.id": task_id,
+            "workflow.max_iterations": max_iterations,
+            "workflow.max_retries": max_retries,
+            "workflow.resume": resume,
+            "workflow.dry_run": dry_run,
+        },
+    )
+    root_context = trace.set_span_in_context(root_span)
+    total_retries = 0
+    iterations_completed = 0
+
+    def finish(result_code: int, outcome: str, *, error_type: str = "") -> int:
+        duration = max(0, time.monotonic() - started)
+        root_span.set_attribute("workflow.outcome", outcome)
+        root_span.set_attribute("workflow.iterations", iterations_completed)
+        root_span.set_attribute("workflow.retries", total_retries)
+        root_span.set_attribute("workflow.duration_seconds", duration)
+        if error_type:
+            root_span.set_attribute("error.type", error_type)
+            root_span.set_status(Status(StatusCode.ERROR))
+            telemetry.failure_counter.add(1, {"operation": "workflow", "error.type": error_type})
+        else:
+            root_span.set_status(Status(StatusCode.OK))
+        telemetry.loop_counter.add(iterations_completed, {"workflow": workflow_name})
+        telemetry.retry_counter.add(total_retries, {"workflow": workflow_name})
+        telemetry.duration_histogram.record(duration, {"operation": "workflow"})
+        telemetry.task_counter.add(1, {"outcome": outcome})
+        root_span.end()
+        telemetry.shutdown()
+        return result_code
+
     workflow_state_path = layout.workflow
     if not workflow_state_path.exists():
         workflow_state_path.write_text(
@@ -219,7 +268,9 @@ def run_workflow(
         },
     )
     for iteration in range(1, max_iterations + 1):
+        iterations_completed = iteration
         append_trace(layout, {"time": datetime.now(timezone.utc).isoformat(), "event": "iteration_started", "iteration": iteration})
+        root_span.add_event("workflow.iteration", {"iteration": iteration})
         for step in steps:
             if time.monotonic() - started > budgets["max_duration_seconds"]:
                 append_trace(
@@ -231,7 +282,7 @@ def run_workflow(
                     },
                 )
                 print(str(run_dir))
-                return 1
+                return finish(1, "awaiting_approval")
             name = str(step.get("name", "step"))
             command = str(step.get("command", ""))
             command = (
@@ -272,9 +323,28 @@ def run_workflow(
             if resume and command.startswith("python3 scripts/agent_role_runner.py") and "--resume" not in command:
                 command = command + " --resume"
             for attempt in range(1, max_retries + 2):
-                returncode, stdout, stderr = run_command(command, root, workflow_timeout_seconds)
+                if attempt > 1:
+                    total_retries += 1
+                    root_span.add_event("workflow.retry", {"step.name": name, "attempt": attempt})
+                with telemetry.span(
+                    "ai_harness.workflow.step",
+                    {
+                        "step.name": name,
+                        "step.attempt": attempt,
+                        "workflow.iteration": iteration,
+                    },
+                    context=root_context,
+                ) as step_span:
+                    step_started = time.monotonic()
+                    returncode, stdout, stderr = run_command(command, root, workflow_timeout_seconds)
+                    step_span.set_attribute("step.return_code", returncode)
+                    step_span.set_attribute("step.duration_seconds", max(0, time.monotonic() - step_started))
+                    if returncode != 0:
+                        step_span.set_status(Status(StatusCode.ERROR))
                 result = StepResult(name, command, attempt, returncode, stdout, stderr)
-                append_trace(layout, result.as_json())
+                result_event = result.as_json()
+                result_event["iteration"] = iteration
+                append_trace(layout, result_event)
                 if returncode == 0:
                     break
                 if attempt <= max_retries:
@@ -297,7 +367,7 @@ def run_workflow(
                     details=[stderr or stdout or f"exit {returncode}"],
                 )
                 print(str(run_dir))
-                return returncode
+                return finish(returncode, "failed", error_type="WorkflowStepFailure")
             state_data = json.loads(workflow_state_path.read_text(encoding="utf-8")) if workflow_state_path.exists() else {}
             if isinstance(state_data, dict) and state_data.get("execution_status") == "awaiting_approval":
                 append_trace(
@@ -309,10 +379,10 @@ def run_workflow(
                     },
                 )
                 print(str(run_dir))
-                return 1
+                return finish(1, "awaiting_approval")
     append_trace(layout, {"time": datetime.now(timezone.utc).isoformat(), "event": "workflow_completed"})
     print(str(run_dir))
-    return 0
+    return finish(0, "completed")
 
 
 def parse_args() -> argparse.Namespace:

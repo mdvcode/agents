@@ -55,5 +55,11 @@ Frozen dataset + frozen rubric + explicit subject run mapping -> deterministic s
 
 Missing telemetry remains unavailable and reduces coverage. Dataset expectations stay outside the evaluated run context.
 
+## Observability Flow
+
+Queue task -> worker task span -> W3C trace-context injection -> workflow span -> step/retry/iteration spans -> sanitized run-scoped JSONL + optional OTLP/HTTP exporter.
+
+Authoritative run artifacts + scheduler database + bounded recent spans -> operational snapshot -> authenticated JSON API -> data-free loopback dashboard shell. Telemetry delivery failure never changes workflow outcome.
+
 ## Stop Flow
 Protected path or high risk -> update risk/verdict -> stop and request approval.

@@ -14,6 +14,7 @@
 - None.
 
 ## Done
+- Observability verification: 42 focused tests and 205-test repository suite passed with one opt-in smoke skipped; contract, security, wheel, diff, authenticated desktop dashboard, responsive 390 px layout, and console checks passed.
 - Evaluation Framework verification: 7 focused behavior tests, 31 eval/validator/packaging tests, wheel inspection, CLI smoke, security scan, and 201-test repository suite passed; one opt-in real Codex smoke remained skipped.
 - Step 2 focused tests cover route authority, bounded loop progress, verifier contracts, worktree publication identity, queue leases/retries/dead letters, worker concurrency, exception filtering, tool policy, and evidence evaluation.
 - Regression coverage proves CRITICAL security hard-blocks with structured state, MEDIUM security requests approval, and Issue Intake never invokes an LLM adapter.

@@ -6,6 +6,7 @@ This repository is the local operating base for agents working across supported 
 - `docs/onboarding.md`: how a new agent should enter the workspace.
 - `docs/agent-system.md`: current agent analysis and improvement plan.
 - `docs/evaluation-framework.md`: versioned eval datasets, run scoring, comparisons, coverage, and leaderboard workflow.
+- `docs/observability.md`: OpenTelemetry traces and metrics, operational snapshot, privacy boundaries, and loopback dashboard.
 - `docs/cli.md`: install and use the `agent` product CLI from any project.
 - `docs/git-and-logs.md`: git, logs, docs, and artifact expectations.
 - `docs/issues/README.md`: per-GitHub-issue history and branch tracking.
@@ -47,7 +48,7 @@ This repository is the local operating base for agents working across supported 
 - `make queue-worker`: process queued workflows with three leased workers.
 - `make worker-service-start|restart|status|health|stop`: operate the registered worker daemon.
 - `make approve-run|resume-run|reject-run RUN_ID=...`: perform scoped supervised-autonomy transitions.
-- `make control-plane`: serve the loopback control API; `make metrics` prints the same compact operational state.
+- `make control-plane` or `make dashboard`: serve the loopback control API and dashboard; `make metrics` prints the same compact operational state.
 - `make list-exceptions`: show runs and queue items requiring a human without transcripts.
 - `make step2-verify RUN_ID=<run-id> QUEUE_DB=<path>`: verify real concurrent Step 2 acceptance evidence.
 - `make eval-score EVAL_RUN_DIR=<path> EVAL_OUTPUT=<path>`: score one authoritative Harness run.
@@ -68,6 +69,7 @@ This repository is the local operating base for agents working across supported 
 - `.agent-runs/<run-id>/context-manifests/`: scoped role context.
 - `.agent-runs/<run-id>/role-results/`: role checkpoints.
 - `.agent-runs/<run-id>/raw-events/`: raw executor JSONL and usage evidence.
+- `.agent-runs/<run-id>/raw-events/otel-spans.jsonl`: bounded, sanitized OpenTelemetry span evidence.
 - `.agent-runs/<run-id>/artifacts/`: owned plan, risk, quality, security, review, verdict, and publication outputs.
 - `.agent-runs/<run-id>/metrics.json`: per-role duration and token usage.
 - `.agent-runs/<run-id>/errors.jsonl`: structured failures and approval stops.

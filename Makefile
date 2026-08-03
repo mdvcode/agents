@@ -1,6 +1,6 @@
 CODEX_CLI ?= $(shell if [ -x /Applications/ChatGPT.app/Contents/Resources/codex ]; then printf /Applications/ChatGPT.app/Contents/Resources/codex; elif [ -x "$$HOME/Applications/ChatGPT.app/Contents/Resources/codex" ]; then printf "$$HOME/Applications/ChatGPT.app/Contents/Resources/codex"; else command -v codex 2>/dev/null || printf codex; fi)
 
-.PHONY: check security validate-artifacts runtime-preflight codex-preflight codex-smoke step1-verify step2-verify eval-score eval-run eval-compare eval-leaderboard queue-worker worker-service-start worker-service-restart worker-service-status worker-service-health worker-service-stop control-plane metrics approve-run resume-run reject-run list-exceptions publish-dry-run publish agent-status
+.PHONY: check security validate-artifacts runtime-preflight codex-preflight codex-smoke step1-verify step2-verify eval-score eval-run eval-compare eval-leaderboard queue-worker worker-service-start worker-service-restart worker-service-status worker-service-health worker-service-stop control-plane dashboard metrics approve-run resume-run reject-run list-exceptions publish-dry-run publish agent-status
 
 RUN_ID ?=
 STEP1_MANIFEST ?=
@@ -96,6 +96,8 @@ worker-service-stop:
 
 control-plane:
 	python3 scripts/control_plane_api.py --db "$(QUEUE_DB)"
+
+dashboard: control-plane
 
 metrics:
 	python3 scripts/operational_metrics.py --db "$(QUEUE_DB)"

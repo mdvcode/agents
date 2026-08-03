@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import sys
 import threading
+import time
+from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
@@ -82,11 +84,66 @@ def test_metrics_cover_runs_workers_queue_leases_budgets_and_exceptions(tmp_path
 
     metrics = collect_metrics(runs_dir=runs, db_path=queue.path)
 
-    assert set(metrics) >= {"runs", "workers", "queue", "leases", "budgets", "exceptions"}
+    assert set(metrics) >= {
+        "runs", "workers", "queue", "leases", "budgets", "exceptions",
+        "overview", "latency", "costs", "retries", "loops", "failures", "tracing",
+    }
     assert metrics["runs"]["counts"]["awaiting_approval"] == 1
     assert metrics["queue"]["counts"]["queued"] == 1
     assert metrics["budgets"]["tokens_used"] == 10
     assert any(item["run_id"] == "api-run" for item in metrics["exceptions"])
+
+
+def test_metrics_derive_latency_cost_retries_loops_pr_time_and_failures(tmp_path: Path) -> None:
+    runs = tmp_path / ".agent-runs"
+    run = runs / "observed"
+    started = datetime.fromtimestamp(time.time() - 120, tz=timezone.utc).isoformat()
+    write_json(
+        run / "workflow.json",
+        {
+            "task_id": "observed",
+            "project": "agent_workspace",
+            "execution_status": "completed",
+            "started_at": started,
+            "elapsed_seconds": 12,
+            "tokens_used": 50,
+            "loops": {"quality_repair": {"iterations": 2}},
+        },
+    )
+    write_json(run / "metrics.json", {"duration_ms": 12_000, "cost_usd": 0.25})
+    write_json(run / "artifacts" / "publication.json", {"pr_created_or_updated": True})
+    (run / "errors.jsonl").write_text('{"code":"KNOWN_FAILURE"}\n', encoding="utf-8")
+    runner = run / "raw-events" / "workflow-runner.jsonl"
+    runner.parent.mkdir(parents=True, exist_ok=True)
+    runner.write_text(
+        '\n'.join(
+            [
+                '{"event":"iteration_started","iteration":1}',
+                '{"step":"quality","attempt":1,"returncode":1}',
+                '{"step":"quality","attempt":2,"returncode":0}'
+            ]
+        ) + '\n',
+        encoding="utf-8",
+    )
+    queue = TaskQueue(tmp_path / "queue.db")
+    task = queue.enqueue(task_key="retry", payload={"task_id": "retry", "repository": str(tmp_path)}, max_retries=1)
+    claimed = queue.claim(worker_id="worker", lease_seconds=30)
+    assert claimed is not None
+    queue.mark_running(task.id, "worker")
+    queue.finish(task_id=task.id, worker_id="worker", status="failed", error="redacted")
+    claimed = queue.claim(worker_id="worker", lease_seconds=30)
+    assert claimed is not None
+    queue.mark_running(task.id, "worker")
+    queue.finish(task_id=task.id, worker_id="worker", status="completed")
+
+    metrics = collect_metrics(runs_dir=runs, db_path=queue.path)
+
+    assert metrics["costs"] == {"known_usd": 0.25, "known_runs": 1, "unknown_runs": 0, "coverage": 1.0}
+    assert metrics["retries"]["total"] == 2
+    assert metrics["loops"]["total_iterations"] == 3
+    assert metrics["failures"]["run_failures"] == 1
+    assert metrics["latency"]["pr_time_seconds"]["samples"] == 1
+    assert metrics["latency"]["queue_wait_seconds"]["samples"] == 1
 
 
 def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) -> None:
@@ -114,6 +171,12 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         else:
             raise AssertionError("metrics API must require its configured token")
 
+        with urlopen(f"{base}/dashboard", timeout=5) as response:
+            dashboard = response.read().decode("utf-8")
+            assert response.headers["Content-Security-Policy"]
+        assert "Outer loop, visible." in dashboard
+        assert "api-run" not in dashboard
+
         approved = api_request(
             f"{base}/runs/api-run/approve",
             access_key,
@@ -132,6 +195,7 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
             },
         )
         metrics = api_request(f"{base}/metrics", access_key)
+        traces = api_request(f"{base}/traces", access_key)
     finally:
         server.shutdown()
         server.server_close()
@@ -142,3 +206,4 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
     assert resumed["queue_task"]["run_id"] == "api-run"
     assert task["envelope"]["source"] == "api"
     assert metrics["queue"]["counts"]["queued"] == 2
+    assert traces["count"] == 0

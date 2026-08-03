@@ -442,6 +442,43 @@ def validate_eval_contracts() -> list[str]:
     return errors
 
 
+def validate_observability_contracts() -> list[str]:
+    errors: list[str] = []
+    expected = {
+        "otel_span.schema.json": {"schema_version", "name", "trace_id", "span_id", "status", "attributes"},
+        "observability_snapshot.schema.json": {
+            "schema_version",
+            "generated_at",
+            "overview",
+            "runs",
+            "workers",
+            "queue",
+            "latency",
+            "costs",
+            "retries",
+            "loops",
+            "failures",
+            "tracing",
+        },
+    }
+    for filename, required_fields in expected.items():
+        path = SCHEMAS / filename
+        if not path.exists():
+            errors.append(f"schemas: missing {filename}")
+            continue
+        try:
+            schema = load_json(path)
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"schemas/{filename}: invalid JSON: {exc}")
+            continue
+        if schema.get("type") != "object":
+            errors.append(f"schemas/{filename}: top-level type must be object")
+        required = schema.get("required")
+        if not isinstance(required, list) or not required_fields.issubset(required):
+            errors.append(f"schemas/{filename}: missing required observability fields")
+    return errors
+
+
 def validate_role_execution_contracts(contracts_doc: Any) -> list[str]:
     if not isinstance(contracts_doc, dict):
         return [".agent-role-contracts.yaml: top-level value must be an object"]
@@ -905,6 +942,7 @@ def main(artifacts_dir: Path | None = None) -> int:
         errors.extend(validate_tool_policy_data(tool_policy_doc, capabilities_doc))
     errors.extend(validate_verifier_contracts())
     errors.extend(validate_eval_contracts())
+    errors.extend(validate_observability_contracts())
 
     risk = loaded_artifacts.get("risk")
     verdict = loaded_artifacts.get("verdict")

@@ -20,6 +20,7 @@ Unlike `artifacts/`, this directory is not cleared between tasks. Agents update 
 - `decisions/2026-07-19-ai-harness-ux.md`: installable `agent` CLI, project-local onboarding, and the boundary between local execution identity and central publication authority.
 - `decisions/2026-07-19-context-intelligence-platform.md`: compiled-only role context, swappable retrieval, token budgets, context logs, and deferred MemPalace storage.
 - `decisions/2026-08-03-evaluation-framework.md`: frozen eval inputs, deterministic run scoring, explicit evidence coverage, compatible comparisons, and clean controls.
+- `decisions/2026-08-03-observability-platform.md`: outer-loop tracing, operational metrics, sanitized local evidence, optional OTLP export, and loopback dashboard.
 - `contradictions.md`: claims or practices that need reconciliation.
 
 ## Update Rules
