@@ -14,6 +14,7 @@
 - None.
 
 ## Done
+- Milestone E2 Production Evaluation Corpus and CI Regression Gate: 30 deterministic cases, 20 golden tasks, 12 reviewed negative mutations, specialized safety scorers, frozen baseline, experiment manifest, and CI gate.
 - Milestone 3 Observability: OpenTelemetry worker/workflow/step traces, queue and run aggregates, cost coverage, retries, loops, failures, PR time, and a verified loopback dashboard.
 - Milestone 3 Evaluation Framework: versioned datasets and rubrics, deterministic run scoring with explicit evidence coverage, paired regression comparison, and leaderboard generation.
 - Feature board created.

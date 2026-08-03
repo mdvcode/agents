@@ -16,6 +16,8 @@ def test_pyproject_exposes_installable_agent_command_and_runtime_resources() -> 
     data_files = document["tool"]["setuptools"]["data-files"]
     assert "share/ai-harness/scripts" in data_files
     assert "share/ai-harness/schemas" in data_files
+    assert "share/ai-harness/evals/baselines" in data_files
+    assert "share/ai-harness/evals/experiments" in data_files
     assert "share/ai-harness/.agents/prompts" in data_files
     root_files = data_files["share/ai-harness"]
     assert ".agent-repositories.yaml" not in root_files

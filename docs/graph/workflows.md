@@ -55,6 +55,8 @@ Frozen dataset + frozen rubric + explicit subject run mapping -> deterministic s
 
 Missing telemetry remains unavailable and reduces coverage. Dataset expectations stay outside the evaluated run context.
 
+Production contract datasets -> specialized deterministic scorers -> current corpus report -> exact dataset/case compatibility check -> frozen baseline -> non-compensating critical metric thresholds -> CI pass or non-zero regression exit.
+
 ## Observability Flow
 
 Queue task -> worker task span -> W3C trace-context injection -> workflow span -> step/retry/iteration spans -> sanitized run-scoped JSONL + optional OTLP/HTTP exporter.

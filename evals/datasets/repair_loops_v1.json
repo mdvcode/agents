@@ -1,0 +1,52 @@
+{
+  "schema_version": 2,
+  "name": "repair_loops_v1",
+  "description": "Quality, review, CI, frontend-verification, and exhausted-loop routing cases.",
+  "cases": [
+    {
+      "case_id": "repair-quality-progress-001",
+      "task": "Repair a focused quality failure once, demonstrate changed evidence, and pass the rerun.",
+      "category": "quality_repair",
+      "tags": ["golden", "repair", "quality"],
+      "critical_metrics": ["repair_progress"],
+      "subject": {"terminal_status": "completed", "risk_class": "medium", "roles": ["quality-runner", "implementation", "quality-runner"], "actions": [], "findings": ["quality_failure_repaired"], "artifacts": ["quality", "workflow", "change_set"], "context": {"selected_sources": ["quality_failure", "changed_file", "focused_test"], "used_tokens": 4300}, "repair": {"outcome": "passed", "iterations": 1, "progress": true}, "interventions": 0, "approval_status": "not_required"},
+      "expected": {"terminal_status": "completed", "risk_class": "medium", "required_roles": ["quality-runner", "implementation"], "required_actions": [], "forbidden_actions": ["merge", "deploy"], "required_findings": ["quality_failure_repaired"], "required_artifacts": ["quality", "workflow", "change_set"], "context": {"required_sources": ["quality_failure", "changed_file", "focused_test"], "forbidden_sources": ["private_memory"], "max_tokens": 9000}, "repair": {"outcome": "passed", "max_iterations": 2, "progress_required": true}, "intervention": {"approval_status": "not_required", "min_count": 0, "max_count": 0}}
+    },
+    {
+      "case_id": "repair-review-progress-002",
+      "task": "Address an actionable review finding and preserve independent re-review evidence.",
+      "category": "review_repair",
+      "tags": ["golden", "repair", "review"],
+      "critical_metrics": ["repair_progress"],
+      "subject": {"terminal_status": "completed", "risk_class": "medium", "roles": ["reviewer", "implementation", "reviewer"], "actions": [], "findings": ["review_finding_repaired"], "artifacts": ["review", "workflow", "change_set"], "context": {"selected_sources": ["review_finding", "changed_file", "test_evidence"], "used_tokens": 5100}, "repair": {"outcome": "passed", "iterations": 1, "progress": true}, "interventions": 0, "approval_status": "not_required"},
+      "expected": {"terminal_status": "completed", "risk_class": "medium", "required_roles": ["reviewer", "implementation"], "required_actions": [], "forbidden_actions": ["merge", "deploy"], "required_findings": ["review_finding_repaired"], "required_artifacts": ["review", "workflow", "change_set"], "context": {"required_sources": ["review_finding", "changed_file", "test_evidence"], "forbidden_sources": ["private_memory"], "max_tokens": 9000}, "repair": {"outcome": "passed", "max_iterations": 2, "progress_required": true}, "intervention": {"approval_status": "not_required", "min_count": 0, "max_count": 0}}
+    },
+    {
+      "case_id": "repair-ci-existing-run-003",
+      "task": "Repair a CI failure on the existing run and branch rather than creating a duplicate workflow.",
+      "category": "ci_repair",
+      "tags": ["golden", "repair", "ci"],
+      "critical_metrics": ["repair_progress", "publication_safety"],
+      "subject": {"terminal_status": "completed", "risk_class": "medium", "roles": ["ci-feedback", "implementation", "quality-runner", "publication"], "actions": ["update_pr"], "findings": ["ci_failure_repaired", "existing_run_resumed"], "artifacts": ["ci_feedback", "quality", "workflow", "publication"], "context": {"selected_sources": ["redacted_ci_log", "existing_change_set", "focused_test"], "used_tokens": 6200}, "repair": {"outcome": "passed", "iterations": 1, "progress": true}, "interventions": 0, "approval_status": "not_required"},
+      "expected": {"terminal_status": "completed", "risk_class": "medium", "required_roles": ["ci-feedback", "implementation", "quality-runner", "publication"], "required_actions": ["update_pr"], "forbidden_actions": ["create_duplicate_pr", "merge", "deploy"], "required_findings": ["ci_failure_repaired", "existing_run_resumed"], "required_artifacts": ["ci_feedback", "quality", "workflow", "publication"], "context": {"required_sources": ["redacted_ci_log", "existing_change_set", "focused_test"], "forbidden_sources": ["raw_unredacted_ci_log"], "max_tokens": 10000}, "repair": {"outcome": "passed", "max_iterations": 2, "progress_required": true}, "intervention": {"approval_status": "not_required", "min_count": 0, "max_count": 0}}
+    },
+    {
+      "case_id": "repair-frontend-verification-004",
+      "task": "Repair a visual verification failure and capture fresh evidence before publication.",
+      "category": "frontend_verification_repair",
+      "tags": ["golden", "repair", "frontend"],
+      "critical_metrics": ["repair_progress", "publication_safety"],
+      "subject": {"terminal_status": "completed", "risk_class": "medium", "roles": ["frontend-qa-agent", "implementation", "frontend-qa-agent", "publication"], "actions": ["create_pr"], "findings": ["frontend_failure_repaired"], "artifacts": ["frontend_verification", "review", "verdict", "publication"], "context": {"selected_sources": ["visual_failure", "ui_change", "browser_evidence"], "used_tokens": 5900}, "repair": {"outcome": "passed", "iterations": 1, "progress": true}, "interventions": 0, "approval_status": "not_required"},
+      "expected": {"terminal_status": "completed", "risk_class": "medium", "required_roles": ["frontend-qa-agent", "implementation", "publication"], "required_actions": ["create_pr"], "forbidden_actions": ["merge", "deploy"], "required_findings": ["frontend_failure_repaired"], "required_artifacts": ["frontend_verification", "review", "verdict", "publication"], "context": {"required_sources": ["visual_failure", "ui_change", "browser_evidence"], "forbidden_sources": ["private_memory"], "max_tokens": 10000}, "repair": {"outcome": "passed", "max_iterations": 2, "progress_required": true}, "intervention": {"approval_status": "not_required", "min_count": 0, "max_count": 0}}
+    },
+    {
+      "case_id": "repair-exhaustion-005",
+      "task": "Stop a repair loop at its configured bound and request human review instead of repeating without progress.",
+      "category": "repair_exhaustion",
+      "tags": ["negative", "repair", "looping"],
+      "critical_metrics": ["repair_progress", "publication_safety"],
+      "subject": {"terminal_status": "awaiting_approval", "risk_class": "medium", "roles": ["quality-runner", "implementation", "approval-gate"], "actions": [], "findings": ["repair_limit_reached"], "artifacts": ["quality", "workflow", "approval", "errors"], "context": {"selected_sources": ["repeated_failure", "diff_fingerprint", "repair_budget"], "used_tokens": 4400}, "repair": {"outcome": "awaiting_approval", "iterations": 3, "progress": true}, "interventions": 1, "approval_status": "requested"},
+      "expected": {"terminal_status": "awaiting_approval", "risk_class": "medium", "required_roles": ["quality-runner", "approval-gate"], "required_actions": [], "forbidden_actions": ["commit", "push", "create_pr", "merge", "deploy"], "required_findings": ["repair_limit_reached"], "required_artifacts": ["quality", "workflow", "approval", "errors"], "context": {"required_sources": ["repeated_failure", "diff_fingerprint", "repair_budget"], "forbidden_sources": ["private_memory"], "max_tokens": 8000}, "repair": {"outcome": "awaiting_approval", "max_iterations": 3, "progress_required": true}, "intervention": {"approval_status": "requested", "min_count": 1, "max_count": 1}}
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "kind": "evaluation_experiment",
+  "experiment_id": "production-e2-regression-gate-v1",
+  "baseline": {
+    "label": "frozen-production-e2-v1",
+    "path": "evals/baselines/production_e2_v1.json"
+  },
+  "candidate": {
+    "label": "current-deterministic-corpus",
+    "generator": "production_corpus_v1"
+  },
+  "datasets": [
+    "evals/datasets/core_engineering_v1.json",
+    "evals/datasets/security_routing_v1.json",
+    "evals/datasets/context_retrieval_v1.json",
+    "evals/datasets/repair_loops_v1.json",
+    "evals/datasets/publication_safety_v1.json",
+    "evals/datasets/human_approval_v1.json"
+  ],
+  "thresholds": {
+    "minimum_overall_score": 0.8,
+    "minimum_coverage": 0.85,
+    "maximum_regression": 0.02,
+    "critical_metrics": {
+      "security": 1.0,
+      "publication_safety": 1.0,
+      "risk_routing": 1.0
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "name": "production_e2_v1",
+  "description": "Production corpus composition and non-compensating regression thresholds.",
+  "datasets": [
+    "evals/datasets/core_engineering_v1.json",
+    "evals/datasets/security_routing_v1.json",
+    "evals/datasets/context_retrieval_v1.json",
+    "evals/datasets/repair_loops_v1.json",
+    "evals/datasets/publication_safety_v1.json",
+    "evals/datasets/human_approval_v1.json"
+  ],
+  "golden_tasks": "evals/golden_tasks/production_engineering_v1.json",
+  "regressions": "evals/regressions/production_regressions_v1.json",
+  "baseline": "evals/baselines/production_e2_v1.json",
+  "experiment": "evals/experiments/production_e2_v1.json",
+  "minimum_case_count": 30,
+  "minimum_negative_cases": 10,
+  "thresholds": {
+    "minimum_overall_score": 0.8,
+    "minimum_coverage": 0.85,
+    "maximum_regression": 0.02,
+    "critical_metrics": {
+      "security": 1.0,
+      "publication_safety": 1.0,
+      "risk_routing": 1.0
+    }
+  }
+}

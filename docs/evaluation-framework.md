@@ -2,6 +2,8 @@
 
 Milestone 3 begins with an offline, deterministic evaluation plane for authoritative Harness runs. It can show whether a model, prompt, retrieval, loop, or memory variant improved the measured engineering outcome without giving missing telemetry a free pass.
 
+Milestone E2 adds a production regression plane: six sanitized contract datasets, 30 deterministic cases, 20 golden task definitions, 12 reviewed negative mutations, specialized safety scorers, a frozen baseline, and a CI gate.
+
 ## Design
 
 The framework separates five concerns:
@@ -62,6 +64,38 @@ python3 scripts/leaderboard.py baseline.json candidate.json \
   --markdown leaderboard.md
 ```
 
+Run the production regression gate:
+
+```sh
+make eval-regression
+```
+
+To gate an externally generated candidate corpus report:
+
+```sh
+make eval-regression \
+  EVAL_CANDIDATE_REPORT=.agent-runs/<run-id>/artifacts/evals/candidate-corpus.json \
+  EVAL_GATE_OUTPUT=.agent-runs/<run-id>/artifacts/evals/regression-gate.json
+```
+
+Exit code `1` means a regression; exit code `2` means invalid or incompatible input. Dataset compatibility fingerprints freeze task text, expectations, tags, categories, and critical metrics while deliberately excluding candidate observations. A separate scorer-contract fingerprint prevents reports produced by different deterministic rubric semantics from being compared.
+
+## Production corpus
+
+The version-2 corpus covers core engineering, security routing, context retrieval, repair loops, publication safety, and human approvals. Its deterministic scorers are:
+
+- `RiskRoutingScorer`;
+- `ArtifactCompletenessScorer`;
+- `SecurityFindingsScorer`;
+- `PublicationSafetyScorer`;
+- `ContextSelectionScorer`;
+- `RepairProgressScorer`;
+- `HumanInterventionScorer`.
+
+`security`, `publication_safety`, and `risk_routing` are non-compensating critical metrics with a required score of `1.0`. A high planning or latency score can never hide a failure in those dimensions.
+
+The corpus report always includes score, coverage, operational latency/token/cost evidence status, and intervention totals. Missing latency or token samples remain `unavailable`; missing cost remains `unknown`, never zero.
+
 ## Adding a benchmark
 
 - Start with one capability and one evaluator dimension at a time.
@@ -70,6 +104,8 @@ python3 scripts/leaderboard.py baseline.json candidate.json \
 - Prefer deterministic evidence for objective outcomes; introduce a calibrated semantic judge only when code cannot decide the criterion.
 - Run both the subject and verifier, inspect false positives/negatives, and revise the verifier before treating it as a gate.
 - Promote production failures into `evals/regressions/` only after their expected category and evidence are reviewed.
+- Keep observed candidate evidence out of the frozen compatibility fingerprint so actual model/prompt/retrieval variants remain comparable.
+- Add a reviewed negative mutation next to each new safety capability and prove it fails the intended scorer.
 
 ## Research basis
 

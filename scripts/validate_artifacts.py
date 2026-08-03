@@ -23,6 +23,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ai_harness.evaluation.io import EvaluationInputError
+from ai_harness.evaluation.corpus import (
+    CORPUS_METRICS,
+    compare_corpus_to_baseline,
+    evaluate_corpus,
+    validate_corpus_dataset,
+)
 from ai_harness.evaluation.runner import validate_dataset
 from ai_harness.evaluation.scoring import validate_rubric
 
@@ -439,6 +445,151 @@ def validate_eval_contracts() -> list[str]:
         for field in ("schema_version", "name", "dataset", "rubric", "comparison"):
             if field not in benchmark:
                 errors.append(f"evals/benchmarks/milestone3_v1.json: missing {field!r}")
+    errors.extend(validate_production_corpus_contracts())
+    return errors
+
+
+def validate_production_corpus_contracts() -> list[str]:
+    errors: list[str] = []
+    dataset_paths = [
+        EVALS / "datasets" / filename
+        for filename in (
+            "core_engineering_v1.json",
+            "security_routing_v1.json",
+            "context_retrieval_v1.json",
+            "repair_loops_v1.json",
+            "publication_safety_v1.json",
+            "human_approval_v1.json",
+        )
+    ]
+    datasets: list[dict[str, Any]] = []
+    case_ids: set[str] = set()
+    negative_cases = 0
+    for path in dataset_paths:
+        if not path.is_file():
+            errors.append(f"{path.relative_to(ROOT)}: missing")
+            continue
+        try:
+            value = load_json(path)
+            if not isinstance(value, dict):
+                raise EvaluationInputError("top-level value must be an object")
+            validate_corpus_dataset(value)
+        except (OSError, json.JSONDecodeError, EvaluationInputError) as exc:
+            errors.append(f"{path.relative_to(ROOT)}: {exc}")
+            continue
+        datasets.append(value)
+        for case in value["cases"]:
+            case_id = str(case["case_id"])
+            if case_id in case_ids:
+                errors.append(f"production corpus duplicate case id: {case_id}")
+            case_ids.add(case_id)
+            if "negative" in case.get("tags", []):
+                negative_cases += 1
+    if len(case_ids) < 30:
+        errors.append(f"production corpus requires at least 30 cases, found {len(case_ids)}")
+    if negative_cases < 10:
+        errors.append(f"production corpus requires at least 10 negative cases, found {negative_cases}")
+
+    golden_path = EVALS / "golden_tasks" / "production_engineering_v1.json"
+    regressions_path = EVALS / "regressions" / "production_regressions_v1.json"
+    baseline_path = EVALS / "baselines" / "production_e2_v1.json"
+    experiment_path = EVALS / "experiments" / "production_e2_v1.json"
+    benchmark_path = EVALS / "benchmarks" / "production_e2_v1.json"
+    values: dict[str, dict[str, Any]] = {}
+    for label, path in {
+        "golden": golden_path,
+        "regressions": regressions_path,
+        "baseline": baseline_path,
+        "experiment": experiment_path,
+        "benchmark": benchmark_path,
+    }.items():
+        if not path.is_file():
+            errors.append(f"{path.relative_to(ROOT)}: missing")
+            continue
+        try:
+            value = load_json(path)
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"{path.relative_to(ROOT)}: invalid JSON: {exc}")
+            continue
+        if not isinstance(value, dict):
+            errors.append(f"{path.relative_to(ROOT)}: top-level value must be an object")
+            continue
+        values[label] = value
+    golden = values.get("golden", {}).get("tasks")
+    if not isinstance(golden, list) or len(golden) < 20:
+        errors.append("production golden task corpus requires at least 20 tasks")
+    else:
+        golden_ids = [task.get("task_id") for task in golden if isinstance(task, dict)]
+        if len(golden_ids) != len(golden) or any(
+            not isinstance(task_id, str) or not task_id for task_id in golden_ids
+        ):
+            errors.append("production golden tasks require non-empty task_id values")
+        elif len(set(golden_ids)) != len(golden_ids):
+            errors.append("production golden task ids must be unique")
+    regressions = values.get("regressions", {}).get("regressions")
+    if not isinstance(regressions, list) or len(regressions) < 10:
+        errors.append("production regression corpus requires at least 10 cases")
+    else:
+        regression_ids: set[str] = set()
+        for index, regression in enumerate(regressions):
+            if not isinstance(regression, dict):
+                errors.append(f"production regression {index} must be an object")
+                continue
+            regression_id = regression.get("regression_id")
+            source_case_id = regression.get("source_case_id")
+            metric = regression.get("metric")
+            mutation = regression.get("mutation")
+            if not isinstance(regression_id, str) or not regression_id:
+                errors.append(f"production regression {index} requires regression_id")
+            elif regression_id in regression_ids:
+                errors.append(f"production regression id is duplicated: {regression_id}")
+            else:
+                regression_ids.add(regression_id)
+            if source_case_id not in case_ids:
+                errors.append(
+                    f"production regression {regression_id!r} references unknown case "
+                    f"{source_case_id!r}"
+                )
+            if metric not in CORPUS_METRICS:
+                errors.append(
+                    f"production regression {regression_id!r} uses unknown metric {metric!r}"
+                )
+            if not isinstance(mutation, dict) or not isinstance(mutation.get("field"), str):
+                errors.append(
+                    f"production regression {regression_id!r} requires a declarative mutation"
+                )
+    experiment = values.get("experiment")
+    baseline = values.get("baseline")
+    if experiment is not None:
+        for field in ("schema_version", "kind", "experiment_id", "baseline", "candidate", "datasets", "thresholds"):
+            if field not in experiment:
+                errors.append(f"evals/experiments/production_e2_v1.json: missing {field!r}")
+    benchmark = values.get("benchmark")
+    if benchmark is not None:
+        for field in (
+            "schema_version",
+            "name",
+            "datasets",
+            "golden_tasks",
+            "regressions",
+            "baseline",
+            "experiment",
+            "thresholds",
+        ):
+            if field not in benchmark:
+                errors.append(f"evals/benchmarks/production_e2_v1.json: missing {field!r}")
+        if experiment is not None and benchmark.get("datasets") != experiment.get("datasets"):
+            errors.append("production benchmark and experiment datasets must match")
+        if experiment is not None and benchmark.get("thresholds") != experiment.get("thresholds"):
+            errors.append("production benchmark and experiment thresholds must match")
+    if datasets and baseline is not None and experiment is not None:
+        try:
+            candidate = evaluate_corpus(datasets)
+            gate = compare_corpus_to_baseline(baseline, candidate, experiment["thresholds"])
+            if gate["status"] != "pass":
+                errors.extend(f"production corpus baseline: {item}" for item in gate["blockers"])
+        except (EvaluationInputError, KeyError, TypeError, ValueError) as exc:
+            errors.append(f"production corpus baseline: {exc}")
     return errors
 
 

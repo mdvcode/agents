@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "kind", "created_at", "experiment_id", "status", "baseline_fingerprint", "candidate_fingerprint", "case_count", "overall_delta", "coverage", "metrics", "blockers"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "evaluation_regression_gate"},
+    "created_at": {"type": "string"},
+    "experiment_id": {"type": "string"},
+    "status": {"enum": ["pass", "regression"]},
+    "baseline_fingerprint": {"type": "string"},
+    "candidate_fingerprint": {"type": "string"},
+    "case_count": {"type": "integer", "minimum": 1},
+    "overall_delta": {"type": "number"},
+    "coverage": {"type": "number", "minimum": 0, "maximum": 1},
+    "metrics": {"type": "array"},
+    "blockers": {"type": "array"}
+  },
+  "additionalProperties": false
+}

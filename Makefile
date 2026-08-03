@@ -1,6 +1,6 @@
 CODEX_CLI ?= $(shell if [ -x /Applications/ChatGPT.app/Contents/Resources/codex ]; then printf /Applications/ChatGPT.app/Contents/Resources/codex; elif [ -x "$$HOME/Applications/ChatGPT.app/Contents/Resources/codex" ]; then printf "$$HOME/Applications/ChatGPT.app/Contents/Resources/codex"; else command -v codex 2>/dev/null || printf codex; fi)
 
-.PHONY: check security validate-artifacts runtime-preflight codex-preflight codex-smoke step1-verify step2-verify eval-score eval-run eval-compare eval-leaderboard queue-worker worker-service-start worker-service-restart worker-service-status worker-service-health worker-service-stop control-plane dashboard metrics approve-run resume-run reject-run list-exceptions publish-dry-run publish agent-status
+.PHONY: check security validate-artifacts runtime-preflight codex-preflight codex-smoke step1-verify step2-verify eval-score eval-run eval-compare eval-leaderboard eval-regression queue-worker worker-service-start worker-service-restart worker-service-status worker-service-health worker-service-stop control-plane dashboard metrics approve-run resume-run reject-run list-exceptions publish-dry-run publish agent-status
 
 RUN_ID ?=
 STEP1_MANIFEST ?=
@@ -15,6 +15,9 @@ EVAL_BASELINE ?=
 EVAL_CANDIDATE ?=
 EVAL_REPORTS ?=
 EVAL_OUTPUT ?=
+EVAL_EXPERIMENT ?= evals/experiments/production_e2_v1.json
+EVAL_CANDIDATE_REPORT ?=
+EVAL_GATE_OUTPUT ?=
 
 check: validate-artifacts security
 	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests
@@ -75,6 +78,11 @@ eval-leaderboard:
 	@test -n "$(EVAL_REPORTS)" || (echo "EVAL_REPORTS is required" >&2; exit 2)
 	@test -n "$(EVAL_OUTPUT)" || (echo "EVAL_OUTPUT is required" >&2; exit 2)
 	python3 scripts/leaderboard.py $(EVAL_REPORTS) --output "$(EVAL_OUTPUT)"
+
+eval-regression:
+	python3 scripts/eval_regression.py --manifest "$(EVAL_EXPERIMENT)" \
+		$(if $(EVAL_CANDIDATE_REPORT),--candidate "$(EVAL_CANDIDATE_REPORT)",) \
+		$(if $(EVAL_GATE_OUTPUT),--output "$(EVAL_GATE_OUTPUT)",)
 
 queue-worker:
 	python3 scripts/worker_pool.py --db "$(QUEUE_DB)" --workers 3
