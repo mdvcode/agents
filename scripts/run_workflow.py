@@ -134,6 +134,7 @@ def run_workflow(
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     run_id: str = "",
     task_id: str = "task",
+    goal: str = "",
     project: str = "",
     repository: Path | None = None,
     branch: str = "",
@@ -149,11 +150,12 @@ def run_workflow(
         print(f"unknown workflow: {workflow_name}")
         return 2
     project_value = project or "agent_workspace"
+    goal_value = goal or task_id
     branch_value = branch or f"issue/{task_id}"
     repository_value = (repository or root).resolve()
     fingerprint = task_fingerprint(
         task_id=task_id,
-        goal=task_id,
+        goal=goal_value,
         repository=repository_value,
         branch=branch_value,
         base_branch=base_branch,
@@ -186,6 +188,7 @@ def run_workflow(
                     "run_id": run_id,
                     "workflow": workflow_name,
                     "task_id": task_id,
+                    "goal": goal_value,
                     "execution_status": "running",
                     "roles": [],
                     "loops": {
@@ -236,6 +239,7 @@ def run_workflow(
                 .replace("{run_dir}", quote_placeholder(run_dir))
                 .replace("{artifacts_dir}", quote_placeholder(artifacts_dir))
                 .replace("{task_id}", quote_placeholder(task_id))
+                .replace("{goal}", quote_placeholder(goal_value))
                 .replace("{project}", quote_placeholder(project_value))
                 .replace("{repository}", quote_placeholder(repository_value))
                 .replace("{branch}", quote_placeholder(branch_value))
@@ -318,6 +322,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--run-id", default="")
     parser.add_argument("--task-id", default="task")
+    parser.add_argument("--goal", default="")
     parser.add_argument("--project", default="agent_workspace")
     parser.add_argument("--repo", type=Path, default=None)
     parser.add_argument("--branch", default="")
@@ -337,6 +342,7 @@ def main() -> int:
         timeout_seconds=args.timeout_seconds,
         run_id=args.run_id,
         task_id=args.task_id,
+        goal=args.goal,
         project=args.project,
         repository=args.repo,
         branch=args.branch,

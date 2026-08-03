@@ -224,7 +224,10 @@ print(json.dumps({"type": "turn.completed", "usage": {
     assert result["status"] == "completed", result
     assert result["summary"] == "planner done"
     assert result["thread_id"] == "thread-test"
-    assert result["tokens_used"] == 14
+    assert result["tokens_used"] == 12
+    assert result["input_tokens"] == 10
+    assert result["cached_input_tokens"] == 2
+    assert result["output_tokens"] == 4
     assert (tmp_path / "artifacts" / "plan.md").read_text(encoding="utf-8") == "# Plan\n"
 
 

@@ -8,7 +8,7 @@ workflows:
       max_duration_seconds: 7200
       max_tokens: 300000
     runtime_provider: codex-cli
-    executor: "python3 scripts/agent_role_runner.py --workflow full_agent_workflow --run-id {run_id} --task-id {task_id} --project {project} --repo {repository} --branch {branch} --base-branch {base_branch} --artifacts-dir {artifacts_dir} --create-worktree --runtime-provider {runtime_provider}"
+    executor: "python3 scripts/agent_role_runner.py --workflow full_agent_workflow --run-id {run_id} --task-id {task_id} --goal {goal} --project {project} --repo {repository} --branch {branch} --base-branch {base_branch} --artifacts-dir {artifacts_dir} --create-worktree --runtime-provider {runtime_provider}"
     max_iterations: 1
     timeout_seconds: 7200
     retry:
@@ -17,7 +17,7 @@ workflows:
     trace_store: ".agent-runs/<run-id>/raw-events/workflow.jsonl"
     steps:
       - name: "agent_role_chain"
-        command: "python3 scripts/agent_role_runner.py --workflow full_agent_workflow --run-id {run_id} --task-id {task_id} --project {project} --repo {repository} --branch {branch} --base-branch {base_branch} --artifacts-dir {artifacts_dir} --create-worktree --runtime-provider {runtime_provider}"
+        command: "python3 scripts/agent_role_runner.py --workflow full_agent_workflow --run-id {run_id} --task-id {task_id} --goal {goal} --project {project} --repo {repository} --branch {branch} --base-branch {base_branch} --artifacts-dir {artifacts_dir} --create-worktree --runtime-provider {runtime_provider}"
   publish_pr:
     description: "Validate, stage an allowlisted change set, commit, push, and create or update a PR when policy gates allow it."
     budgets:

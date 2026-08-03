@@ -160,6 +160,51 @@ def add_local_origin(repo: Path) -> None:
     subprocess.run(["git", "push", "-u", "origin", "main"], cwd=repo, check=True, capture_output=True)
 
 
+def test_role_result_accepts_free_form_advisory_next_action() -> None:
+    result = {
+        "status": "completed",
+        "next_action": "Inspect the branch baseline before implementation.",
+        "summary": "Planning completed.",
+        "artifacts_created": ["plan.md"],
+        "blockers": [],
+        "warnings": [],
+        "tokens_used": 1,
+    }
+
+    assert agent_role_runner.validate_role_result(result, "planner") == []
+
+
+def test_role_budget_tokens_excludes_cached_input() -> None:
+    result = {
+        "tokens_used": 782_548,
+        "input_tokens": 772_746,
+        "cached_input_tokens": 721_920,
+        "output_tokens": 9_802,
+    }
+
+    assert agent_role_runner.role_budget_tokens(result) == 60_628
+
+
+def test_resume_production_runtime_reloads_trusted_command() -> None:
+    stored = {
+        "provider": "codex-cli",
+        "production": True,
+        "command": "python3 scripts/adapters/codex_cli_executor.py",
+    }
+
+    assert agent_role_runner.resume_runtime_command(stored) == ""
+
+
+def test_resume_fixture_runtime_reuses_stored_command() -> None:
+    stored = {
+        "provider": "test-subprocess",
+        "production": False,
+        "command": "python fake_adapter.py",
+    }
+
+    assert agent_role_runner.resume_runtime_command(stored) == "python fake_adapter.py"
+
+
 def test_agent_role_runner_preflights_configured_runtime_before_roles(tmp_path: Path, monkeypatch: object) -> None:
     subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
@@ -406,6 +451,46 @@ def test_frontend_qa_preflight_marks_evidence_unavailable(tmp_path: Path, monkey
     assert artifact["evidence_required"] is True
     assert artifact["evidence_collected"] is False
     assert artifact["blockers"]
+
+
+def test_frontend_qa_preflight_preserves_valid_external_evidence(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    monkeypatch.delenv("AGENT_BROWSER_AVAILABLE", raising=False)
+    artifacts = tmp_path / "artifacts"
+    screenshot = artifacts / "frontend-evidence" / "desktop.png"
+    screenshot.parent.mkdir(parents=True)
+    screenshot.write_bytes(b"png")
+    payload = {
+        "verdict": "works",
+        "expected": ["cards are readable"],
+        "observed": ["cards are readable"],
+        "evidence": ["desktop and mobile interaction evidence"],
+        "blockers": [],
+        "repair_required": False,
+        "evidence_required": True,
+        "evidence_collected": True,
+        "screenshots": ["frontend-evidence/desktop.png"],
+        "console_errors": [],
+        "network_errors": [],
+        "local_url": "http://127.0.0.1:4173/#leistungen",
+        "dev_server": {"command": "python3 -m http.server 4173", "status": "stopped"},
+        "next_action": "continue",
+    }
+    (artifacts / "frontend_qa.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    result = agent_role_runner.preflight_role_execution(
+        role="frontend-qa-agent",
+        project_profile="nextjs_web",
+        artifacts_dir=artifacts,
+        dry_run=True,
+    )
+
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["artifacts_created"] == []
+    assert json.loads((artifacts / "frontend_qa.json").read_text(encoding="utf-8")) == payload
 
 
 def test_frontend_verifier_works_requires_real_run_scoped_evidence(tmp_path: Path) -> None:

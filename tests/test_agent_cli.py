@@ -138,6 +138,53 @@ def test_agent_status_is_project_scoped_and_read_only(
     }
 
 
+def test_agent_approve_resumes_the_only_pending_project_run(
+    tmp_path: Path,
+    monkeypatch: object,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    approval_lifecycle = cli.load_harness_module(state_root, "approval_lifecycle")
+    run_dir = state_root / ".agent-runs" / "queue-task-4"
+    (run_dir / "artifacts").mkdir(parents=True)
+    workflow = {
+        "run_id": "queue-task-4",
+        "task_id": "photo-cards",
+        "goal": "Add photo cards",
+        "project": "nextjs_web",
+        "repository": str(repository),
+        "branch": "tast/photo-cards",
+        "base_branch": "main",
+        "execution_status": "awaiting_approval",
+        "last_route": {"next_role": "quality-runner", "reason": "Approval required."},
+        "roles": [
+            {
+                "role": "quality-runner",
+                "result": {"status": "completed", "blockers": []},
+            }
+        ],
+    }
+    (run_dir / "workflow.json").write_text(json.dumps(workflow), encoding="utf-8")
+    approval_lifecycle.request_approval(run_dir, reason="Approval required.")
+
+    assert cli.main(["approve", "--repo", str(repository), "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["status"] == "queued"
+    assert result["run_id"] == "queue-task-4"
+    assert result["checkpoint_role"] == "quality-runner"
+    approval = json.loads((run_dir / "artifacts" / "approval.json").read_text(encoding="utf-8"))
+    resumed = json.loads((run_dir / "workflow.json").read_text(encoding="utf-8"))
+    assert approval["status"] == "consumed"
+    assert resumed["execution_status"] == "resuming"
+    assert resumed["resume_role"] == "quality-runner"
+
+
 def test_agent_task_rejects_default_branch_before_queue_mutation(
     tmp_path: Path,
     monkeypatch: object,

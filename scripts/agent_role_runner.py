@@ -147,6 +147,32 @@ def artifact_result(summary: str, artifacts_created: list[str], next_action: str
     }
 
 
+def role_budget_tokens(result: dict[str, Any]) -> int:
+    """Return incremental token usage, excluding input served from cache."""
+    input_tokens = result.get("input_tokens")
+    cached_input_tokens = result.get("cached_input_tokens")
+    output_tokens = result.get("output_tokens")
+    if all(isinstance(value, int) for value in (input_tokens, cached_input_tokens, output_tokens)):
+        return max(input_tokens - cached_input_tokens, 0) + output_tokens
+    tokens_used = result.get("tokens_used", 0)
+    return int(tokens_used) if isinstance(tokens_used, (int, float)) else 0
+
+
+def resume_runtime_command(
+    stored_runtime: dict[str, Any],
+    *,
+    runtime_command: str = "",
+    adapter_command: str = "",
+) -> str:
+    """Reuse fixture commands only; production runtimes must reload trusted config."""
+    explicit = runtime_command or adapter_command
+    if explicit:
+        return explicit
+    if stored_runtime.get("production") is True or stored_runtime.get("provider") == "codex-cli":
+        return ""
+    return str(stored_runtime.get("command", ""))
+
+
 def awaiting_approval_result(summary: str, blockers: list[str]) -> dict[str, Any]:
     return {
         "status": "awaiting_approval",
@@ -559,6 +585,22 @@ def build_role_request(
 
 
 def frontend_qa_unavailable_result(artifacts_dir: Path, warnings: list[str]) -> dict[str, Any]:
+    existing_artifact = artifacts_dir / "frontend_qa.json"
+    if existing_artifact.exists():
+        try:
+            existing = load_json(existing_artifact)
+        except (OSError, json.JSONDecodeError, ValueError):
+            existing = {}
+        if (
+            existing.get("verdict") == "works"
+            and not validate_verifier_artifact("frontend-qa-agent", artifacts_dir)
+        ):
+            result = completed_result(
+                "Existing run-scoped frontend QA evidence remains valid.",
+                "continue",
+            )
+            result["artifacts_created"] = []
+            return result
     write_json(
         artifacts_dir / "frontend_qa.json",
         {
@@ -871,6 +913,11 @@ def run_roles(
     raw_dir = layout.raw_events
     if resume:
         state = existing
+        state["tokens_used"] = sum(
+            role_budget_tokens(item.get("result", {}))
+            for item in state.get("roles", [])
+            if isinstance(item, dict) and isinstance(item.get("result"), dict)
+        )
         project_profile = str(state.get("project_profile", project_profile_for(project)))
         worktree = Path(str(state.get("worktree", ""))).resolve()
         effective_branch = str(state.get("branch", branch))
@@ -882,7 +929,11 @@ def run_roles(
         if not stored_provider and stored_runtime.get("kind") == "codex_cli":
             stored_provider = "codex-cli"
         selected_provider = runtime_provider or stored_provider
-        selected_command = runtime_command or adapter_command or str(stored_runtime.get("command", ""))
+        selected_command = resume_runtime_command(
+            stored_runtime,
+            runtime_command=runtime_command,
+            adapter_command=adapter_command,
+        )
         setup_errors = []
         if not repository.is_dir() or not worktree.is_dir():
             setup_errors.append("resume repository or task worktree is missing")
@@ -1208,7 +1259,7 @@ def run_roles(
 
         state["role_count"] = len(state["roles"])
         state["tokens_used"] = sum(
-            int(item.get("result", {}).get("tokens_used", 0))
+            role_budget_tokens(item.get("result", {}))
             for item in state["roles"]
             if isinstance(item.get("result"), dict)
         )
