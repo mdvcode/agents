@@ -29,6 +29,9 @@ jobs:
       - name: Validate artifacts
         run: make validate-artifacts
 
+      - name: Run production evaluation regression gate
+        run: make eval-regression
+
       - name: Run tests
         run: python -m pytest
 

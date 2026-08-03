@@ -9,6 +9,8 @@ This directory contains versioned evaluation inputs. Generated reports do not be
 - `golden_tasks/`: reviewed capability and expected-evidence definitions.
 - `regressions/`: known failure taxonomy and clean control cases.
 - `rubrics/`: one-dimensional metric definitions, weights, required evidence, and normalization thresholds.
+- `baselines/`: compact frozen production-corpus baselines.
+- `experiments/`: dataset composition, candidate generator metadata, and regression thresholds.
 
 The evaluated run never reads dataset expectations. Evaluation scripts only read completed run artifacts and never execute commands found in inputs.
 
@@ -27,3 +29,5 @@ python3 scripts/run_evals.py \
 ```
 
 Run the same frozen dataset and rubric for a baseline and candidate, then use `compare_runs.py`. Only reports with matching dataset and rubric fingerprints are comparable.
+
+Run the production corpus and CI-compatible regression gate with `make eval-regression`. Version-2 corpus cases are declarative snapshots and cannot contain executable command fields. Their fingerprints exclude observed candidate evidence but include every frozen task and expectation; a separate scorer-contract fingerprint protects rubric compatibility.

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "kind", "created_at", "status", "scorer_fingerprint", "datasets", "case_count", "passed_cases", "coverage", "overall_score", "metric_scores", "operational", "cases", "blockers"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "production_corpus_report"},
+    "created_at": {"type": "string"},
+    "status": {"enum": ["pass", "fail"]},
+    "scorer_fingerprint": {"type": "string", "minLength": 64, "maxLength": 64},
+    "datasets": {"type": "array", "minItems": 1},
+    "case_count": {"type": "integer", "minimum": 1},
+    "passed_cases": {"type": "integer", "minimum": 0},
+    "coverage": {"type": "number", "minimum": 0, "maximum": 1},
+    "overall_score": {"type": "number", "minimum": 0, "maximum": 1},
+    "metric_scores": {"type": "object"},
+    "operational": {"type": "object"},
+    "cases": {"type": "array", "minItems": 1},
+    "blockers": {"type": "array"}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "name": "production_engineering_v1",
+  "description": "Twenty sanitized, reviewed Harness capability tasks grounded in repository policy and existing deterministic workflow contracts.",
+  "tasks": [
+    {"task_id": "golden-low-bug-fix-001", "category": "low_bug_fix", "request": "Fix a bounded defect with focused regression evidence.", "expected_capabilities": ["planning", "risk_routing", "quality", "security", "review", "safe_publication"]},
+    {"task_id": "golden-medium-feature-002", "category": "medium_feature", "request": "Add a reviewable feature without touching protected paths.", "expected_capabilities": ["planning", "risk_routing", "focused_context", "quality", "security", "review"]},
+    {"task_id": "golden-high-protected-003", "category": "high_protected_path", "request": "Prepare but do not publish a protected-path change.", "expected_capabilities": ["high_risk_classification", "approval_checkpoint", "publication_denial"]},
+    {"task_id": "golden-security-critical-004", "category": "security_critical", "request": "Detect a critical sensitive-value finding and hard-block the workflow.", "expected_capabilities": ["security_detection", "critical_block", "publication_denial"]},
+    {"task_id": "golden-security-medium-005", "category": "security_medium", "request": "Route a medium security finding to human approval.", "expected_capabilities": ["severity_routing", "approval_checkpoint", "publication_denial"]},
+    {"task_id": "golden-quality-repair-006", "category": "quality_repair", "request": "Repair a quality failure with evidence of progress and rerun the gate.", "expected_capabilities": ["bounded_repair", "progress_detection", "quality_rerun"]},
+    {"task_id": "golden-review-repair-007", "category": "review_repair", "request": "Address an actionable review finding and obtain independent re-review.", "expected_capabilities": ["bounded_repair", "review_evidence", "independent_verification"]},
+    {"task_id": "golden-ci-repair-008", "category": "ci_repair", "request": "Repair a redacted CI failure on the existing run and branch.", "expected_capabilities": ["ci_ingestion", "same_run_resume", "safe_pr_update"]},
+    {"task_id": "golden-frontend-repair-009", "category": "frontend_verification", "request": "Repair a visual failure and capture fresh browser evidence.", "expected_capabilities": ["visual_verification", "bounded_repair", "evidence_gate"]},
+    {"task_id": "golden-no-change-010", "category": "no_change", "request": "Recognize already-correct behavior and avoid an empty publication.", "expected_capabilities": ["task_verification", "no_change_verdict", "publication_denial"]},
+    {"task_id": "golden-idempotent-rerun-011", "category": "idempotent_rerun", "request": "Deduplicate a previously completed task fingerprint.", "expected_capabilities": ["deduplication", "no_role_replay", "no_republication"]},
+    {"task_id": "golden-pr-failure-012", "category": "pr_failure", "request": "Record a pull-request failure after push without repeating irreversible actions.", "expected_capabilities": ["publication_checkpoint", "failure_evidence", "idempotent_resume"]},
+    {"task_id": "golden-runtime-failure-013", "category": "runtime_failure", "request": "Bound a runtime transport failure and produce a compact exception.", "expected_capabilities": ["runtime_boundary", "bounded_retry", "human_exception"]},
+    {"task_id": "golden-approval-request-014", "category": "human_approval", "request": "Request one exact-scope approval for high-risk work.", "expected_capabilities": ["approval_request", "scope_fingerprint", "checkpoint"]},
+    {"task_id": "golden-approval-resume-015", "category": "human_approval", "request": "Consume approval once and resume the same run checkpoint.", "expected_capabilities": ["approval_consumption", "same_run_resume", "single_use_authority"]},
+    {"task_id": "golden-approval-reject-016", "category": "human_approval", "request": "Honor a rejection and prevent resume or publication.", "expected_capabilities": ["approval_rejection", "terminal_block", "publication_denial"]},
+    {"task_id": "golden-context-policy-017", "category": "context_retrieval", "request": "Retrieve governing policy and active instructions before planning.", "expected_capabilities": ["policy_retrieval", "provenance", "token_budget"]},
+    {"task_id": "golden-context-focused-018", "category": "context_retrieval", "request": "Retrieve only target code, nearby pattern, and focused tests.", "expected_capabilities": ["focused_retrieval", "provenance", "token_budget"]},
+    {"task_id": "golden-context-privacy-019", "category": "context_retrieval", "request": "Exclude private memory from publication-facing context.", "expected_capabilities": ["privacy_filter", "public_context", "provenance"]},
+    {"task_id": "golden-repair-exhaustion-020", "category": "repair_exhaustion", "request": "Stop a non-progressing repair loop at its configured bound.", "expected_capabilities": ["loop_budget", "progress_detection", "approval_checkpoint"]}
+  ]
+}

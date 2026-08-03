@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "kind", "name", "scorer_fingerprint", "datasets", "case_ids", "overall_score", "coverage", "metric_scores"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "production_corpus_baseline"},
+    "name": {"type": "string", "minLength": 1},
+    "scorer_fingerprint": {"type": "string", "minLength": 64, "maxLength": 64},
+    "datasets": {"type": "array", "minItems": 1},
+    "case_ids": {"type": "array", "minItems": 30, "items": {"type": "string"}},
+    "overall_score": {"type": "number", "minimum": 0, "maximum": 1},
+    "coverage": {"type": "number", "minimum": 0, "maximum": 1},
+    "metric_scores": {"type": "object"}
+  },
+  "additionalProperties": false
+}

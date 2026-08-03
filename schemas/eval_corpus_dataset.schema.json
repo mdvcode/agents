@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "name", "cases"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "name": {"type": "string", "minLength": 1},
+    "description": {"type": "string"},
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["case_id", "task", "category", "tags", "critical_metrics", "subject", "expected"],
+        "properties": {
+          "case_id": {"type": "string", "minLength": 1},
+          "task": {"type": "string", "minLength": 1},
+          "category": {"type": "string", "minLength": 1},
+          "tags": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "critical_metrics": {"type": "array", "items": {"enum": ["risk_routing", "artifact_completeness", "security", "publication_safety", "context_selection", "repair_progress", "human_intervention"]}},
+          "subject": {
+            "type": "object",
+            "required": ["terminal_status", "risk_class", "roles", "actions", "findings", "artifacts", "context", "repair", "interventions", "approval_status"],
+            "properties": {
+              "terminal_status": {"type": "string"},
+              "risk_class": {"enum": ["low", "medium", "high"]},
+              "roles": {"type": "array", "items": {"type": "string"}},
+              "actions": {"type": "array", "items": {"type": "string"}},
+              "findings": {"type": "array", "items": {"type": "string"}},
+              "artifacts": {"type": "array", "items": {"type": "string"}},
+              "context": {
+                "type": "object",
+                "required": ["selected_sources", "used_tokens"],
+                "properties": {
+                  "selected_sources": {"type": "array", "items": {"type": "string"}},
+                  "used_tokens": {"type": "integer", "minimum": 0}
+                },
+                "additionalProperties": false
+              },
+              "repair": {
+                "type": "object",
+                "required": ["outcome", "iterations", "progress"],
+                "properties": {
+                  "outcome": {"type": "string"},
+                  "iterations": {"type": "integer", "minimum": 0},
+                  "progress": {"type": "boolean"}
+                },
+                "additionalProperties": false
+              },
+              "interventions": {"type": "integer", "minimum": 0},
+              "approval_status": {"type": "string"},
+              "latency_ms": {"type": "number", "minimum": 0},
+              "tokens": {"type": "integer", "minimum": 0},
+              "cost_usd": {"type": "number", "minimum": 0}
+            },
+            "additionalProperties": false
+          },
+          "expected": {
+            "type": "object",
+            "required": ["terminal_status", "risk_class", "required_roles", "required_actions", "forbidden_actions", "required_findings", "required_artifacts", "context", "repair", "intervention"],
+            "properties": {
+              "terminal_status": {"type": "string"},
+              "risk_class": {"enum": ["low", "medium", "high"]},
+              "required_roles": {"type": "array", "items": {"type": "string"}},
+              "required_actions": {"type": "array", "items": {"type": "string"}},
+              "forbidden_actions": {"type": "array", "items": {"type": "string"}},
+              "required_findings": {"type": "array", "items": {"type": "string"}},
+              "required_artifacts": {"type": "array", "items": {"type": "string"}},
+              "context": {
+                "type": "object",
+                "required": ["required_sources", "forbidden_sources", "max_tokens"],
+                "properties": {
+                  "required_sources": {"type": "array", "items": {"type": "string"}},
+                  "forbidden_sources": {"type": "array", "items": {"type": "string"}},
+                  "max_tokens": {"type": "integer", "minimum": 1}
+                },
+                "additionalProperties": false
+              },
+              "repair": {
+                "type": "object",
+                "required": ["outcome", "max_iterations", "progress_required"],
+                "properties": {
+                  "outcome": {"type": "string"},
+                  "max_iterations": {"type": "integer", "minimum": 0},
+                  "progress_required": {"type": "boolean"}
+                },
+                "additionalProperties": false
+              },
+              "intervention": {
+                "type": "object",
+                "required": ["approval_status", "min_count", "max_count"],
+                "properties": {
+                  "approval_status": {"type": "string"},
+                  "min_count": {"type": "integer", "minimum": 0},
+                  "max_count": {"type": "integer", "minimum": 0}
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

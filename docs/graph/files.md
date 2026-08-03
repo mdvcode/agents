@@ -35,6 +35,8 @@
 - `evals/` -> versioned datasets, benchmarks, golden tasks, regression taxonomy, and rubrics.
 - `ai_harness/evaluation/` -> deterministic evidence collection, scoring, dataset assertions, comparison, and leaderboard logic.
 - `scripts/run_evals.py`, `scripts/score.py`, `scripts/compare_runs.py`, `scripts/leaderboard.py` -> Evaluation Framework CLI boundary.
+- `ai_harness/evaluation/corpus.py`, `scripts/eval_regression.py` -> production corpus scorers, candidate-independent fingerprints, frozen-baseline comparison, and CI gate.
+- `evals/baselines/`, `evals/experiments/` -> reviewed baseline evidence and explicit experiment thresholds.
 - `ai_harness/observability/` -> OpenTelemetry providers, sanitized JSONL span export, bounded trace reads, and dashboard shell.
 - `scripts/operational_metrics.py` -> authoritative run + scheduler aggregation for workers, queue, latency, cost coverage, retries, loops, PR time, failures, and traces.
 - `scripts/control_plane_api.py` -> authenticated operational APIs and the data-free loopback dashboard route.

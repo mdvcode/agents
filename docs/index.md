@@ -5,7 +5,7 @@ This repository is the local operating base for agents working across supported 
 ## Start Here
 - `docs/onboarding.md`: how a new agent should enter the workspace.
 - `docs/agent-system.md`: current agent analysis and improvement plan.
-- `docs/evaluation-framework.md`: versioned eval datasets, run scoring, comparisons, coverage, and leaderboard workflow.
+- `docs/evaluation-framework.md`: versioned run scoring, 30-case production corpus, frozen comparisons, CI regression gate, coverage, and leaderboard workflow.
 - `docs/observability.md`: OpenTelemetry traces and metrics, operational snapshot, privacy boundaries, and loopback dashboard.
 - `docs/cli.md`: install and use the `agent` product CLI from any project.
 - `docs/git-and-logs.md`: git, logs, docs, and artifact expectations.
@@ -52,6 +52,7 @@ This repository is the local operating base for agents working across supported 
 - `make list-exceptions`: show runs and queue items requiring a human without transcripts.
 - `make step2-verify RUN_ID=<run-id> QUEUE_DB=<path>`: verify real concurrent Step 2 acceptance evidence.
 - `make eval-score EVAL_RUN_DIR=<path> EVAL_OUTPUT=<path>`: score one authoritative Harness run.
+- `make eval-regression`: evaluate the frozen 30-case production corpus and fail on critical or incompatible regressions.
 
 ## Product CLI
 
