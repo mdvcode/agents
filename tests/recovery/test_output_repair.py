@@ -62,6 +62,8 @@ def test_codex_executor_repairs_invalid_structured_output_in_place(tmp_path: Pat
     prompts: list[str] = []
 
     def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if args[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(args, 1, "", "not a git repository")
         prompt = str(kwargs["input"])
         prompts.append(prompt)
         result_path = Path(args[args.index("--output-last-message") + 1])

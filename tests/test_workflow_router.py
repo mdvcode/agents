@@ -440,7 +440,7 @@ def test_invalid_required_artifact_keeps_publication_unreachable(tmp_path: Path)
 
 def test_role_and_token_budgets_route_to_approval(tmp_path: Path) -> None:
     artifacts_dir = setup_artifacts(tmp_path)
-    for state in (completed_state(role_count=41), completed_state(tokens_used=300001)):
+    for state in (completed_state(role_count=41), completed_state(tokens_used=1500001)):
         result = route(tmp_path, state, "reviewer")
         assert result["next_role"] == "approval-gate"
         assert result["stop"] is True
