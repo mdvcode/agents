@@ -14,9 +14,41 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = ROOT / ".agent-queue" / "tasks.db"
-ACTIVE_STATUSES = {"leased", "running"}
-FINAL_STATUSES = {"completed", "blocked", "dead_letter"}
-ALL_STATUSES = {"queued", *ACTIVE_STATUSES, *FINAL_STATUSES}
+ACTIVE_STATUSES = {"claimed", "leased", "running"}
+RECOVERABLE_STATUSES = {"queued", "retry_wait", "repairing", "resuming"}
+FINAL_STATUSES = {"completed", "blocked", "dead_letter", "failed", "cancelled"}
+ALL_STATUSES = {*RECOVERABLE_STATUSES, *ACTIVE_STATUSES, "awaiting_approval", *FINAL_STATUSES}
+
+TASKS_TABLE_SQL = """
+CREATE TABLE {table} (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_key TEXT NOT NULL UNIQUE,
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN (
+        'queued','claimed','leased','running','retry_wait','repairing','resuming',
+        'awaiting_approval','completed','blocked','dead_letter','failed','cancelled'
+    )),
+    priority INTEGER NOT NULL DEFAULT 0,
+    run_id TEXT NOT NULL DEFAULT '',
+    worker_id TEXT NOT NULL DEFAULT '',
+    lease_expires_at REAL NOT NULL DEFAULT 0,
+    heartbeat_at REAL NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_retries INTEGER NOT NULL DEFAULT 2,
+    available_at REAL NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    last_error TEXT NOT NULL DEFAULT '',
+    requires_human INTEGER NOT NULL DEFAULT 0,
+    exception_reason TEXT NOT NULL DEFAULT '',
+    failure_kind TEXT NOT NULL DEFAULT '',
+    recovery_action TEXT NOT NULL DEFAULT '',
+    next_attempt_at REAL NOT NULL DEFAULT 0,
+    resume_checkpoint TEXT NOT NULL DEFAULT '',
+    recovery_attempts INTEGER NOT NULL DEFAULT 0,
+    last_failure_id TEXT NOT NULL DEFAULT ''
+)
+"""
 
 
 @dataclass(frozen=True)
@@ -38,6 +70,12 @@ class TaskRecord:
     last_error: str
     requires_human: bool
     exception_reason: str
+    failure_kind: str
+    recovery_action: str
+    next_attempt_at: float
+    resume_checkpoint: str
+    recovery_attempts: int
+    last_failure_id: str
 
 
 @dataclass(frozen=True)
@@ -71,30 +109,8 @@ class TaskQueue:
     def initialize(self) -> None:
         with self.connect() as connection:
             connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS tasks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_key TEXT NOT NULL UNIQUE,
-                    payload_json TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK(status IN ('queued','leased','running','completed','blocked','dead_letter')),
-                    priority INTEGER NOT NULL DEFAULT 0,
-                    run_id TEXT NOT NULL DEFAULT '',
-                    worker_id TEXT NOT NULL DEFAULT '',
-                    lease_expires_at REAL NOT NULL DEFAULT 0,
-                    heartbeat_at REAL NOT NULL DEFAULT 0,
-                    attempts INTEGER NOT NULL DEFAULT 0,
-                    max_retries INTEGER NOT NULL DEFAULT 2,
-                    available_at REAL NOT NULL,
-                    created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL,
-                    last_error TEXT NOT NULL DEFAULT '',
-                    requires_human INTEGER NOT NULL DEFAULT 0,
-                    exception_reason TEXT NOT NULL DEFAULT ''
-                );
-                CREATE INDEX IF NOT EXISTS tasks_claim_idx
-                    ON tasks(status, available_at, priority DESC, id);
-                CREATE INDEX IF NOT EXISTS tasks_lease_idx
-                    ON tasks(status, lease_expires_at);
+                TASKS_TABLE_SQL.format(table="IF NOT EXISTS tasks")
+                + """;
                 CREATE TABLE IF NOT EXISTS task_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     task_id INTEGER NOT NULL REFERENCES tasks(id),
@@ -118,6 +134,60 @@ class TaskQueue:
                 CREATE INDEX IF NOT EXISTS workers_heartbeat_idx ON workers(status, heartbeat_at);
                 """
             )
+            self._migrate_tasks_table(connection)
+            connection.executescript(
+                """
+                CREATE INDEX IF NOT EXISTS tasks_claim_idx
+                    ON tasks(status, available_at, priority DESC, id);
+                CREATE INDEX IF NOT EXISTS tasks_lease_idx
+                    ON tasks(status, lease_expires_at);
+                CREATE INDEX IF NOT EXISTS tasks_recovery_idx
+                    ON tasks(status, next_attempt_at, recovery_attempts);
+                """
+            )
+
+    @staticmethod
+    def _migrate_tasks_table(connection: sqlite3.Connection) -> None:
+        row = connection.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'").fetchone()
+        sql = str(row["sql"] if row is not None else "")
+        columns = {str(item["name"]) for item in connection.execute("PRAGMA table_info(tasks)").fetchall()}
+        required = {
+            "failure_kind",
+            "recovery_action",
+            "next_attempt_at",
+            "resume_checkpoint",
+            "recovery_attempts",
+            "last_failure_id",
+        }
+        if "retry_wait" in sql and required <= columns:
+            return
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("PRAGMA legacy_alter_table = ON")
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            connection.execute("ALTER TABLE tasks RENAME TO tasks_legacy")
+            connection.execute(TASKS_TABLE_SQL.format(table="tasks"))
+            connection.execute(
+                """
+                INSERT INTO tasks(
+                    id,task_key,payload_json,status,priority,run_id,worker_id,lease_expires_at,
+                    heartbeat_at,attempts,max_retries,available_at,created_at,updated_at,last_error,
+                    requires_human,exception_reason
+                )
+                SELECT id,task_key,payload_json,status,priority,run_id,worker_id,lease_expires_at,
+                    heartbeat_at,attempts,max_retries,available_at,created_at,updated_at,last_error,
+                    requires_human,exception_reason
+                FROM tasks_legacy
+                """
+            )
+            connection.execute("DROP TABLE tasks_legacy")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.execute("PRAGMA legacy_alter_table = OFF")
+            connection.execute("PRAGMA foreign_keys = ON")
 
     @staticmethod
     def record(row: sqlite3.Row) -> TaskRecord:
@@ -142,6 +212,12 @@ class TaskQueue:
             last_error=str(row["last_error"]),
             requires_human=bool(row["requires_human"]),
             exception_reason=str(row["exception_reason"]),
+            failure_kind=str(row["failure_kind"]),
+            recovery_action=str(row["recovery_action"]),
+            next_attempt_at=float(row["next_attempt_at"]),
+            resume_checkpoint=str(row["resume_checkpoint"]),
+            recovery_attempts=int(row["recovery_attempts"]),
+            last_failure_id=str(row["last_failure_id"]),
         )
 
     @staticmethod
@@ -194,22 +270,60 @@ class TaskQueue:
 
     def reclaim_expired(self, connection: sqlite3.Connection, now: float) -> None:
         rows = connection.execute(
-            "SELECT * FROM tasks WHERE status IN ('leased','running') AND lease_expires_at < ?",
+            "SELECT * FROM tasks WHERE status IN ('claimed','leased','running') AND lease_expires_at < ?",
             (now,),
         ).fetchall()
         for row in rows:
-            exhausted = int(row["attempts"]) >= int(row["max_retries"]) + 1
-            status = "dead_letter" if exhausted else "queued"
+            exhausted = int(row["recovery_attempts"]) >= int(row["max_retries"])
+            status = "dead_letter" if exhausted else ("resuming" if str(row["run_id"]) else "retry_wait")
             reason = "worker lease expired after retry limit" if exhausted else "worker lease expired"
+            failure_id = ""
+            run_dir = ROOT / ".agent-runs" / str(row["run_id"])
+            if str(row["run_id"]) and run_dir.is_dir():
+                try:
+                    from ai_harness.recovery.models import FailureRecord, persist_failure
+
+                    failure = FailureRecord.create(
+                        run_id=str(row["run_id"]),
+                        task_id=str(json.loads(str(row["payload_json"])).get("task_id", row["id"])),
+                        role="worker",
+                        stage="lease_recovery",
+                        kind="runtime_failure",
+                        error_type="LeaseExpired",
+                        message=reason,
+                        retryable=not exhausted,
+                        repairable=False,
+                        attempt=int(row["recovery_attempts"]) + 1,
+                        max_attempts=max(1, int(row["max_retries"]) + 1),
+                        checkpoint="last_safe_checkpoint",
+                    )
+                    persist_failure(run_dir, failure)
+                    failure_id = failure.failure_id
+                except (OSError, ValueError, json.JSONDecodeError):
+                    failure_id = ""
             connection.execute(
                 """
                 UPDATE tasks SET status=?, worker_id='', lease_expires_at=0, heartbeat_at=0,
-                    available_at=?, updated_at=?, last_error=?, requires_human=?, exception_reason=?
+                    available_at=?, next_attempt_at=?, updated_at=?, last_error=?, requires_human=?, exception_reason=?,
+                    failure_kind='runtime_failure', recovery_action=?, recovery_attempts=recovery_attempts+1,
+                    resume_checkpoint=CASE WHEN run_id!='' THEN 'last_safe_checkpoint' ELSE resume_checkpoint END,
+                    last_failure_id=?
                 WHERE id=?
                 """,
-                (status, now, now, reason, int(exhausted), reason if exhausted else "", int(row["id"])),
+                (
+                    status,
+                    now,
+                    now,
+                    now,
+                    reason,
+                    int(exhausted),
+                    reason if exhausted else "",
+                    "dead_letter" if exhausted else ("resume" if str(row["run_id"]) else "retry"),
+                    failure_id,
+                    int(row["id"]),
+                ),
             )
-            event = "lease_expired_resume" if status == "queued" and str(row["run_id"]) else status
+            event = "lease_expired_resume" if status == "resuming" else status
             self.event(
                 connection,
                 int(row["id"]),
@@ -228,7 +342,7 @@ class TaskQueue:
             row = connection.execute(
                 """
                 SELECT * FROM tasks
-                WHERE status='queued' AND available_at <= ?
+                WHERE status IN ('queued','retry_wait','repairing','resuming') AND available_at <= ?
                 ORDER BY priority DESC, id ASC LIMIT 1
                 """,
                 (now,),
@@ -239,9 +353,9 @@ class TaskQueue:
             task_id = int(row["id"])
             connection.execute(
                 """
-                UPDATE tasks SET status='leased', worker_id=?, lease_expires_at=?, heartbeat_at=?,
+                UPDATE tasks SET status='claimed', worker_id=?, lease_expires_at=?, heartbeat_at=?,
                     attempts=attempts+1, updated_at=?, requires_human=0, exception_reason=''
-                WHERE id=? AND status='queued'
+                WHERE id=? AND status IN ('queued','retry_wait','repairing','resuming')
                 """,
                 (worker_id, now + lease_seconds, now, now, task_id),
             )
@@ -254,7 +368,7 @@ class TaskQueue:
         now = time.time()
         with self.connect() as connection:
             cursor = connection.execute(
-                "UPDATE tasks SET status='running', updated_at=? WHERE id=? AND worker_id=? AND status='leased' AND lease_expires_at>=?",
+                "UPDATE tasks SET status='running', updated_at=? WHERE id=? AND worker_id=? AND status IN ('claimed','leased') AND lease_expires_at>=?",
                 (now, task_id, worker_id, now),
             )
             if cursor.rowcount:
@@ -267,7 +381,7 @@ class TaskQueue:
             cursor = connection.execute(
                 """
                 UPDATE tasks SET heartbeat_at=?, lease_expires_at=?, updated_at=?
-                WHERE id=? AND worker_id=? AND status IN ('leased','running') AND lease_expires_at>=?
+                WHERE id=? AND worker_id=? AND status IN ('claimed','leased','running') AND lease_expires_at>=?
                 """,
                 (now, now + lease_seconds, now, task_id, worker_id, now),
             )
@@ -282,7 +396,7 @@ class TaskQueue:
             cursor = connection.execute(
                 """
                 UPDATE tasks SET run_id=?,updated_at=?
-                WHERE id=? AND worker_id=? AND status IN ('leased','running')
+                WHERE id=? AND worker_id=? AND status IN ('claimed','leased','running')
                 """,
                 (run_id, time.time(), task_id, worker_id),
             )
@@ -298,30 +412,33 @@ class TaskQueue:
         error: str = "",
         requires_human: bool = False,
         exception_reason: str = "",
-        retry_delay_seconds: int = 0,
+        terminal_failure: bool = False,
     ) -> TaskRecord:
-        if status not in {"completed", "blocked", "failed"}:
+        if status not in {"completed", "blocked", "awaiting_approval", "dead_letter", "failed", "cancelled"}:
             raise ValueError(f"unsupported finish status: {status}")
         now = time.time()
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT * FROM tasks WHERE id=? AND worker_id=? AND status IN ('leased','running')",
+                "SELECT * FROM tasks WHERE id=? AND worker_id=? AND status IN ('claimed','leased','running')",
                 (task_id, worker_id),
             ).fetchone()
             if row is None:
                 connection.rollback()
                 raise RuntimeError("worker does not own an active task lease")
             final_status = status
-            human = requires_human or status == "blocked"
+            human = requires_human or status in {"blocked", "awaiting_approval", "dead_letter", "failed"}
             reason = exception_reason
             available_at = now
-            if status == "failed":
-                if int(row["attempts"]) <= int(row["max_retries"]):
-                    final_status = "queued"
-                    available_at = now + max(0, retry_delay_seconds)
+            if status == "failed" and not terminal_failure:
+                if int(row["recovery_attempts"]) < int(row["max_retries"]):
+                    final_status = "retry_wait"
                     human = False
                     reason = ""
+                    connection.execute(
+                        "UPDATE tasks SET recovery_attempts=recovery_attempts+1,failure_kind='runtime_failure',recovery_action='retry',next_attempt_at=? WHERE id=?",
+                        (now, task_id),
+                    )
                 else:
                     final_status = "dead_letter"
                     human = True
@@ -338,6 +455,162 @@ class TaskQueue:
             finished = connection.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             connection.commit()
             return self.record(finished)
+
+    def requeue(
+        self,
+        *,
+        task_id: int,
+        worker_id: str,
+        run_id: str,
+        status: str,
+        available_after: float,
+        preserve_attempt_state: bool = True,
+        failure_kind: str = "",
+        recovery_action: str = "",
+        resume_checkpoint: str = "",
+        failure_id: str = "",
+        error: str = "",
+    ) -> TaskRecord:
+        if status not in {"queued", "retry_wait", "repairing", "resuming"}:
+            raise ValueError(f"unsupported recoverable status: {status}")
+        now = time.time()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE id=? AND worker_id=? AND status IN ('claimed','leased','running')",
+                (task_id, worker_id),
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                raise RuntimeError("worker does not own an active task lease")
+            attempts = int(row["attempts"]) if preserve_attempt_state else 0
+            connection.execute(
+                """
+                UPDATE tasks SET status=?,run_id=?,worker_id='',lease_expires_at=0,heartbeat_at=0,
+                    attempts=?,available_at=?,next_attempt_at=?,updated_at=?,last_error=?,requires_human=0,
+                    exception_reason='',failure_kind=?,recovery_action=?,resume_checkpoint=?,
+                    recovery_attempts=recovery_attempts+1,last_failure_id=?
+                WHERE id=?
+                """,
+                (
+                    status,
+                    run_id or str(row["run_id"]),
+                    attempts,
+                    max(now, available_after),
+                    max(now, available_after),
+                    now,
+                    error,
+                    failure_kind,
+                    recovery_action,
+                    resume_checkpoint,
+                    failure_id,
+                    task_id,
+                ),
+            )
+            self.event(
+                connection,
+                task_id,
+                status,
+                worker_id,
+                {"failure_kind": failure_kind, "recovery_action": recovery_action, "failure_id": failure_id},
+                now,
+            )
+            updated = connection.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            connection.commit()
+            return self.record(updated)
+
+    def schedule_retry(self, **kwargs: Any) -> TaskRecord:
+        return self.requeue(status="retry_wait", **kwargs)
+
+    def mark_repairing(self, **kwargs: Any) -> TaskRecord:
+        return self.requeue(status="repairing", **kwargs)
+
+    def mark_resuming(self, **kwargs: Any) -> TaskRecord:
+        return self.requeue(status="resuming", **kwargs)
+
+    def move_to_dead_letter(
+        self,
+        *,
+        task_id: int,
+        worker_id: str,
+        run_id: str = "",
+        error: str = "",
+        failure_kind: str = "",
+        failure_id: str = "",
+    ) -> TaskRecord:
+        now = time.time()
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE id=? AND worker_id=? AND status IN ('claimed','leased','running')",
+                (task_id, worker_id),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("worker does not own an active task lease")
+            connection.execute(
+                """
+                UPDATE tasks SET status='dead_letter',run_id=?,worker_id='',lease_expires_at=0,heartbeat_at=0,
+                    updated_at=?,last_error=?,requires_human=1,exception_reason=?,failure_kind=?,
+                    recovery_action='dead_letter',recovery_attempts=recovery_attempts+1,last_failure_id=?
+                WHERE id=?
+                """,
+                (run_id or str(row["run_id"]), now, error, error or "recovery budget exhausted", failure_kind, failure_id, task_id),
+            )
+            self.event(connection, task_id, "dead_letter", worker_id, {"failure_id": failure_id}, now)
+            updated = connection.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            return self.record(updated)
+
+    def list_recoverable(self) -> list[TaskRecord]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM tasks WHERE status IN ('queued','retry_wait','repairing','resuming') ORDER BY available_at,id"
+            ).fetchall()
+            return [self.record(row) for row in rows]
+
+    def recover_run(self, run_id: str, *, action: str) -> TaskRecord:
+        status = {"retry": "retry_wait", "resume": "resuming"}.get(action)
+        if status is None:
+            raise ValueError("action must be retry or resume")
+        now = time.time()
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM tasks WHERE run_id=? ORDER BY id DESC LIMIT 1", (run_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"queue task for run {run_id!r} was not found")
+            current_status = str(row["status"])
+            if current_status in ACTIVE_STATUSES:
+                raise ValueError("cannot recover a task with an active lease")
+            if current_status in {"awaiting_approval", "blocked"}:
+                raise ValueError("approval-gated tasks must continue through the approval lifecycle")
+            if current_status in {"completed", "cancelled"}:
+                raise ValueError(f"cannot recover a terminal {current_status} task")
+            connection.execute(
+                """
+                UPDATE tasks SET status=?,available_at=?,next_attempt_at=?,updated_at=?,requires_human=0,
+                    exception_reason='',recovery_action=?,recovery_attempts=0 WHERE id=?
+                """,
+                (status, now, now, now, action, int(row["id"])),
+            )
+            self.event(connection, int(row["id"]), status, details={"manual": True, "action": action}, now=now)
+            updated = connection.execute("SELECT * FROM tasks WHERE id=?", (int(row["id"]),)).fetchone()
+            return self.record(updated)
+
+    def abort_run(self, run_id: str) -> TaskRecord:
+        now = time.time()
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM tasks WHERE run_id=? ORDER BY id DESC LIMIT 1", (run_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"queue task for run {run_id!r} was not found")
+            current_status = str(row["status"])
+            if current_status in ACTIVE_STATUSES:
+                raise ValueError("cannot abort a task with an active lease")
+            if current_status in {"completed", "cancelled"}:
+                raise ValueError(f"cannot abort a terminal {current_status} task")
+            connection.execute(
+                "UPDATE tasks SET status='cancelled',updated_at=?,requires_human=0,recovery_action='' WHERE id=?",
+                (now, int(row["id"])),
+            )
+            self.event(connection, int(row["id"]), "cancelled", details={"manual": True}, now=now)
+            updated = connection.execute("SELECT * FROM tasks WHERE id=?", (int(row["id"]),)).fetchone()
+            return self.record(updated)
 
     def get(self, task_id: int) -> TaskRecord | None:
         with self.connect() as connection:
@@ -365,7 +638,7 @@ class TaskQueue:
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT * FROM tasks WHERE status IN ('leased','running')
+                SELECT * FROM tasks WHERE status IN ('claimed','leased','running')
                 AND (lease_expires_at < ? OR heartbeat_at < ?)
                 ORDER BY id
                 """,

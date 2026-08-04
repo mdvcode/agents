@@ -22,6 +22,12 @@ from runtime_contracts import (
 from runtimes.base import RuntimeDescriptor
 
 
+def recovery_blocked(summary: str, blockers: list[str], *, kind: str, error_type: str) -> dict[str, Any]:
+    result = blocked_result(summary, blockers)
+    result["_failure"] = {"kind": kind, "error_type": error_type, "message": summary}
+    return result
+
+
 class SubprocessRuntime:
     def __init__(
         self,
@@ -75,24 +81,44 @@ class SubprocessRuntime:
                 timeout=effective_timeout,
             )
         except FileNotFoundError as exc:
-            return blocked_result("Runtime adapter command is missing.", [str(exc)])
+            return recovery_blocked("Runtime adapter command is missing.", [str(exc)], kind="tool_failure", error_type="FileNotFoundError")
         except subprocess.TimeoutExpired as exc:
             self._write_raw(task, started, 124, exc.stdout or "", exc.stderr or "")
-            return blocked_result("Runtime adapter command timed out.", [f"timeout after {effective_timeout} seconds"])
+            return recovery_blocked(
+                "Runtime adapter command timed out.",
+                [f"timeout after {effective_timeout} seconds"],
+                kind="transient",
+                error_type="TimeoutExpired",
+            )
         except PermissionError as exc:
-            return blocked_result("Runtime adapter command is not executable.", [str(exc)])
+            return recovery_blocked("Runtime adapter command is not executable.", [str(exc)], kind="tool_failure", error_type="PermissionError")
 
         self._write_raw(task, started, completed.returncode, completed.stdout, completed.stderr)
         duration_ms = int((time.monotonic() - started_monotonic) * 1000)
         if completed.returncode != 0:
             output = (completed.stderr or completed.stdout).strip()
-            return blocked_result("Runtime adapter command failed.", [output or f"exit {completed.returncode}"])
+            return recovery_blocked(
+                "Runtime adapter command failed.",
+                [output or f"exit {completed.returncode}"],
+                kind="runtime_failure",
+                error_type="RuntimeProcessFailure",
+            )
         try:
             result = json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
-            return blocked_result("Runtime adapter returned malformed JSON.", [f"{exc.msg} at line {exc.lineno}"])
+            return recovery_blocked(
+                "Runtime adapter returned malformed JSON.",
+                [f"{exc.msg} at line {exc.lineno}"],
+                kind="invalid_output",
+                error_type="InvalidStructuredOutput",
+            )
         if not isinstance(result, dict):
-            return blocked_result("Runtime adapter returned a non-object JSON value.", ["role result must be an object"])
+            return recovery_blocked(
+                "Runtime adapter returned a non-object JSON value.",
+                ["role result must be an object"],
+                kind="invalid_output",
+                error_type="InvalidStructuredOutput",
+            )
         result.setdefault("duration_ms", duration_ms)
         result_schema = load_json(SCHEMAS / "role_result.schema.json")
         output_contract = task.get("output_contract")
@@ -102,7 +128,16 @@ class SubprocessRuntime:
             except (OSError, json.JSONDecodeError, ContractError) as exc:
                 return blocked_result("Role output contract could not be loaded.", [str(exc)])
         errors = validate_contract(result, result_schema, "role_result")
-        return blocked_result("Runtime adapter result failed schema validation.", errors) if errors else result
+        return (
+            recovery_blocked(
+                "Runtime adapter result failed schema validation.",
+                errors,
+                kind="invalid_output",
+                error_type="InvalidStructuredOutput",
+            )
+            if errors
+            else result
+        )
 
     @staticmethod
     def _boundary_errors(

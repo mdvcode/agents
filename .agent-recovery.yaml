@@ -1,0 +1,37 @@
+version: 1
+task_recovery:
+  max_total_recovery_attempts: 8
+  max_resume_attempts: 3
+  max_consecutive_failures: 5
+  max_recovery_duration_seconds: 1800
+failure_classes:
+  transient:
+    action: retry
+    max_attempts: 3
+    backoff_seconds: [2, 5, 15]
+  runtime_failure:
+    action: retry_then_resume
+    max_attempts: 3
+    backoff_seconds: [3, 10, 30]
+  invalid_output:
+    action: output_repair
+    max_attempts: 2
+  tool_failure:
+    action: retry_then_approval
+    max_attempts: 2
+    backoff_seconds: [3, 10]
+  verification_failure:
+    action: existing_repair_loop
+    max_attempts: 3
+  policy_block:
+    action: approval
+    max_attempts: 1
+  human_input_required:
+    action: approval
+    max_attempts: 1
+  internal_error:
+    action: resume_then_dead_letter
+    max_attempts: 1
+  unrecoverable:
+    action: dead_letter
+    max_attempts: 1

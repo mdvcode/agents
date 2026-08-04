@@ -57,6 +57,21 @@ agent status --json
 
 Status is read-only, project-scoped, and compact. It shows queue, run, and worker-service states without role transcripts, source contents, credentials, or raw events. If the worker service is not running, tasks remain visibly queued; the CLI does not start a daemon as a hidden side effect.
 
+Recovery state includes the current role, failure class, selected action, attempt budget, resume checkpoint, and next retry timing.
+
+## Inspect and control recovery
+
+```sh
+agent failures
+agent failures --run-id <run-id> --json
+agent dead-letters
+agent retry <run-id>
+agent resume <run-id>
+agent abort <run-id>
+```
+
+`retry` and `resume` enqueue the existing run and preserve its task worktree. They reject an active lease. An approval-gated run must use `agent approve`, which consumes its exact scoped grant once. `abort` marks a non-active run and queue task `cancelled`; it does not delete the run evidence or worktree.
+
 ## Diagnose installation
 
 ```sh

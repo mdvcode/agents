@@ -371,7 +371,8 @@ print(json.dumps({
         dry_run=True,
     )
 
-    assert state["execution_status"] == "awaiting_approval"
+    assert state["execution_status"] == "repairing"
+    assert state["failure_kind"] == "invalid_output"
     assert any(
         checkpoint["role"] == "planner"
         and checkpoint["result"]["summary"] == "Role artifact validation failed."
@@ -549,7 +550,8 @@ print(json.dumps({
         create_task_worktree=True,
     )
 
-    assert state["execution_status"] == "awaiting_approval"
+    assert state["execution_status"] == "repairing"
+    assert state["failure_kind"] == "invalid_output"
     assert state["runtime"]["provider"] == "codex-cli"
     assert state["runtime"]["api_required"] is False
     assert [item["role"] for item in state["roles"]][:8] == [

@@ -106,6 +106,7 @@ class PublicationResult:
     run_dir: str = ""
     task_id: str = ""
     input_fingerprint: str = ""
+    idempotency_key: str = ""
     pr_comment_posted: bool = False
     command_results: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -132,6 +133,7 @@ class PublicationResult:
             "run_dir": self.run_dir,
             "pr_comment_posted": self.pr_comment_posted,
             "input_fingerprint": self.input_fingerprint,
+            "idempotency_key": self.idempotency_key,
             "command_results": self.command_results,
             "warnings": self.warnings,
             "errors": self.errors,
@@ -1144,6 +1146,7 @@ class Publisher:
         if layout.artifacts.resolve() != self.artifacts:
             raise ValueError("publication artifacts must belong to the authoritative run directory")
         publication.run_dir = str(layout.root)
+        publication.idempotency_key = f"{publication.run_id}:publication"
         publication.target_repository = str(target_repo.resolve())
         return layout.root
 

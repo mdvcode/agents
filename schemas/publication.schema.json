@@ -56,6 +56,7 @@
     "dry_run": "bool",
     "run_dir": "str",
     "input_fingerprint": "str",
+    "idempotency_key": "str",
     "pr_comment_posted": "bool",
     "command_results": "list",
     "warnings": "list",

@@ -34,6 +34,19 @@ from runtime_contracts import (  # noqa: E402
 from check_codex_runtime import configured_codex_base_command  # noqa: E402
 
 
+MAX_OUTPUT_REPAIR_ATTEMPTS = 2
+
+
+def failure_result(summary: str, blockers: list[str], *, kind: str, error_type: str) -> dict[str, Any]:
+    result = blocked_result(summary, blockers)
+    result["_failure"] = {
+        "kind": kind,
+        "error_type": error_type,
+        "message": summary,
+    }
+    return result
+
+
 def safe_artifact_name(value: Any) -> bool:
     if not isinstance(value, str) or not value:
         return False
@@ -372,9 +385,15 @@ def parse_jsonl_events(raw_stdout: str) -> tuple[str, dict[str, int], list[str]]
     return thread_id, usage, errors
 
 
-def write_raw_stream(request: dict[str, Any], manifest: dict[str, Any], raw_stdout: str) -> Path:
+def write_raw_stream(
+    request: dict[str, Any],
+    manifest: dict[str, Any],
+    raw_stdout: str,
+    *,
+    suffix: str = "",
+) -> Path:
     role = str(request["role"]).replace("/", "-")
-    path = raw_outputs_dir(request, manifest) / f"{role}.jsonl"
+    path = raw_outputs_dir(request, manifest) / f"{role}{suffix}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(raw_stdout, encoding="utf-8")
     return path
@@ -538,29 +557,113 @@ def run_codex(
             env=env,
         )
     except FileNotFoundError as exc:
-        return blocked_result("Codex CLI command is missing.", [str(exc)])
+        return failure_result("Codex CLI command is missing.", [str(exc)], kind="tool_failure", error_type="FileNotFoundError")
     except PermissionError as exc:
-        return blocked_result("Codex CLI command is not executable.", [str(exc)])
+        return failure_result("Codex CLI command is not executable.", [str(exc)], kind="tool_failure", error_type="PermissionError")
     except subprocess.TimeoutExpired:
-        return blocked_result("Codex CLI command timed out.", [f"timeout after {timeout_seconds} seconds"])
+        return failure_result(
+            "Codex CLI command timed out.",
+            [f"timeout after {timeout_seconds} seconds"],
+            kind="transient",
+            error_type="TimeoutExpired",
+        )
     duration_ms = int((time.monotonic() - started) * 1000)
     write_raw_stream(request, manifest, completed.stdout)
     thread_id, usage, event_errors = parse_jsonl_events(completed.stdout)
     if completed.returncode != 0:
         output = (completed.stderr or completed.stdout).strip()
-        return blocked_result("Codex CLI command failed.", [output or f"exit {completed.returncode}"])
+        return failure_result(
+            "Codex CLI command failed.",
+            [output or f"exit {completed.returncode}"],
+            kind="runtime_failure",
+            error_type="RuntimeProcessFailure",
+        )
     if event_errors:
-        return blocked_result("Codex CLI emitted failure events.", event_errors)
+        return failure_result(
+            "Codex CLI emitted failure events.",
+            event_errors,
+            kind="runtime_failure",
+            error_type="RuntimeEventFailure",
+        )
     if before_snapshot and git_snapshot(repository) != before_snapshot:
-        return blocked_result(
+        return failure_result(
             "Read-only role changed repository contents.",
             ["git snapshot changed while sandbox was expected to be read-only"],
+            kind="policy_block",
+            error_type="ReadOnlyViolation",
         )
     try:
         result_stdout = result_path.read_text(encoding="utf-8")
     except OSError:
         result_stdout = completed.stdout
     result = parse_role_result(result_stdout, output_contract, duration_ms)
+    invalid_output = result.get("summary") in {
+        "Codex CLI returned malformed JSON.",
+        "Codex CLI returned a non-object JSON value.",
+        "Codex CLI result failed schema validation.",
+    }
+    original_output = result_stdout
+    if invalid_output:
+        validation_errors = [str(item) for item in result.get("blockers", [])]
+        standard_schema = standard_role_result_schema(output_contract)
+        for repair_attempt in range(1, MAX_OUTPUT_REPAIR_ATTEMPTS + 1):
+            repair_path = raw_outputs_dir(request, manifest) / f"{str(request['role']).replace('/', '-')}-repair-{repair_attempt}-result.json"
+            repair_command = list(command)
+            repair_command[repair_command.index("--sandbox") + 1] = "read-only"
+            repair_command[repair_command.index("--output-last-message") + 1] = str(repair_path)
+            repair_prompt = "\n".join(
+                [
+                    "Original structured output:",
+                    original_output,
+                    "Schema:",
+                    json.dumps(standard_schema, ensure_ascii=False, sort_keys=True),
+                    "Validation errors:",
+                    json.dumps(validation_errors, ensure_ascii=False),
+                ]
+            )
+            try:
+                repaired = subprocess.run(
+                    repair_command,
+                    input=repair_prompt,
+                    cwd=repository,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=timeout_seconds,
+                    env=env,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                validation_errors = [f"output repair runtime failed: {type(exc).__name__}"]
+                continue
+            write_raw_stream(request, manifest, repaired.stdout, suffix=f"-repair-{repair_attempt}")
+            if repaired.returncode != 0:
+                validation_errors = [f"output repair exited {repaired.returncode}"]
+                continue
+            try:
+                repaired_output = repair_path.read_text(encoding="utf-8")
+            except OSError:
+                repaired_output = repaired.stdout
+            candidate = parse_role_result(repaired_output, output_contract, duration_ms)
+            if candidate.get("summary") not in {
+                "Codex CLI returned malformed JSON.",
+                "Codex CLI returned a non-object JSON value.",
+                "Codex CLI result failed schema validation.",
+            }:
+                result = candidate
+                warnings = list(result.get("warnings", []))
+                warnings.append(f"Structured output repaired after {repair_attempt} validation-only attempt(s).")
+                result["warnings"] = warnings
+                result["output_repair_attempts"] = repair_attempt
+                break
+            validation_errors = [str(item) for item in candidate.get("blockers", [])]
+        else:
+            result = failure_result(
+                "Structured output repair budget exhausted.",
+                validation_errors,
+                kind="invalid_output",
+                error_type="InvalidStructuredOutput",
+            )
+            result["_failure"]["repair_attempts"] = MAX_OUTPUT_REPAIR_ATTEMPTS
     if thread_id:
         result["thread_id"] = thread_id
     result["input_tokens"] = usage["input_tokens"]
@@ -577,11 +680,21 @@ def run_codex(
     write_deterministic_artifacts(request, result)
     artifact_errors.extend(validate_artifact_ownership(request, result))
     if artifact_errors:
-        return blocked_result("Codex CLI returned invalid artifacts.", artifact_errors)
+        return failure_result(
+            "Codex CLI returned invalid artifacts.",
+            artifact_errors,
+            kind="invalid_output",
+            error_type="InvalidArtifactOutput",
+        )
     if result.get("status") == "completed":
         artifact_errors = validate_expected_artifacts(request)
         if artifact_errors:
-            return blocked_result("Codex CLI completed without required artifacts.", artifact_errors)
+            return failure_result(
+                "Codex CLI completed without required artifacts.",
+                artifact_errors,
+                kind="invalid_output",
+                error_type="MissingOwnedArtifact",
+            )
     return result
 
 

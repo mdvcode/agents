@@ -22,6 +22,7 @@ Unlike `artifacts/`, this directory is not cleared between tasks. Agents update 
 - `decisions/2026-08-03-evaluation-framework.md`: frozen eval inputs, deterministic run scoring, explicit evidence coverage, compatible comparisons, and clean controls.
 - `decisions/2026-08-03-observability-platform.md`: outer-loop tracing, operational metrics, sanitized local evidence, optional OTLP export, and loopback dashboard.
 - `decisions/2026-08-03-production-evaluation-corpus.md`: version-2 deterministic corpus, candidate-independent fingerprints, non-compensating critical metrics, frozen baseline, and CI gate.
+- `decisions/2026-08-04-unified-task-recovery.md`: failure records, bounded retry/repair/resume, same-run checkpoints, queue recovery states, worker isolation, and idempotent continuation.
 - `contradictions.md`: claims or practices that need reconciliation.
 
 ## Update Rules

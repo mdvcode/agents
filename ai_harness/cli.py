@@ -282,6 +282,12 @@ def project_tasks(db_path: Path, repository: Path) -> list[dict[str, Any]]:
                 "run_id": str(row["run_id"]),
                 "requires_human": bool(row["requires_human"]),
                 "exception_reason": str(row["exception_reason"]),
+                "failure_kind": str(row["failure_kind"]) if "failure_kind" in row.keys() else "",
+                "recovery_action": str(row["recovery_action"]) if "recovery_action" in row.keys() else "",
+                "next_attempt_at": float(row["next_attempt_at"]) if "next_attempt_at" in row.keys() else 0.0,
+                "resume_checkpoint": str(row["resume_checkpoint"]) if "resume_checkpoint" in row.keys() else "",
+                "recovery_attempts": int(row["recovery_attempts"]) if "recovery_attempts" in row.keys() else 0,
+                "last_failure_id": str(row["last_failure_id"]) if "last_failure_id" in row.keys() else "",
                 "updated_at": float(row["updated_at"]),
             }
         )
@@ -306,6 +312,7 @@ def project_runs(runs_dir: Path, repository: Path) -> list[dict[str, Any]]:
             continue
         approval = read_json_object(run_dir / "artifacts" / "approval.json")
         verdict = read_json_object(run_dir / "artifacts" / "verdict.json")
+        current_failure = read_json_object(run_dir / "failures" / f"{workflow.get('failure_id', '')}.json")
         verdict_blockers = verdict.get("blockers", [])
         approval_detail = str(approval.get("reason", ""))
         if isinstance(verdict_blockers, list) and verdict_blockers:
@@ -324,6 +331,15 @@ def project_runs(runs_dir: Path, repository: Path) -> list[dict[str, Any]]:
                 "tokens_used": int(workflow.get("tokens_used", 0) or 0),
                 "branch": str(workflow.get("branch", "")),
                 "blockers": [str(item) for item in workflow.get("blockers", [])],
+                "current_role": str(workflow.get("current_role", "")),
+                "failure_id": str(workflow.get("failure_id", "")),
+                "failure_kind": str(workflow.get("failure_kind", "")),
+                "recovery_action": str(workflow.get("recovery_action", "")),
+                "recovery_reason": str(workflow.get("recovery_reason", "")),
+                "resume_from": str(workflow.get("resume_from", "")),
+                "retry_after_seconds": int(workflow.get("retry_after_seconds", 0) or 0),
+                "failure_attempt": int(current_failure.get("attempt", 0) or 0),
+                "failure_max_attempts": int(current_failure.get("max_attempts", 0) or 0),
                 "approval": {
                     "status": str(approval.get("status", "")),
                     "reason": str(approval.get("reason", "")),
@@ -435,7 +451,19 @@ def handle_status(args: argparse.Namespace) -> int:
     for item in tasks[: args.limit]:
         marker = " !" if item["requires_human"] else ""
         lines.append(f"  task {item['queue_task_id']}: {item['task_id']} [{item['status']}]{marker}")
+        if item["failure_kind"]:
+            lines.append(
+                f"    failure: {item['failure_kind']}; action: {item['recovery_action'] or 'none'}; "
+                f"attempt: {item['recovery_attempts']}; checkpoint: {item['resume_checkpoint'] or 'none'}"
+            )
     for run in runs[: args.limit]:
+        if run["status"] in {"retry_wait", "repairing", "resuming", "dead_letter", "failed"}:
+            lines.append(
+                f"  run {run['run_id']}: {run['status']} role={run['current_role'] or 'unknown'} "
+                f"failure={run['failure_kind'] or 'unknown'} action={run['recovery_action'] or 'none'} "
+                f"attempt={run['failure_attempt']}/{run['failure_max_attempts']} "
+                f"checkpoint={run['resume_from'] or 'none'}"
+            )
         if run["status"] != "awaiting_approval" or run["approval"]["status"] != "pending":
             continue
         lines.append(
@@ -447,6 +475,104 @@ def handle_status(args: argparse.Namespace) -> int:
         else:
             lines.append(f"    agent approve --repo {repository} --run-id {run['run_id']}")
     emit(payload, as_json=args.json, lines=lines)
+    return 0
+
+
+def failure_records(run_dir: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for path in sorted((run_dir / "failures").glob("*.json")) if (run_dir / "failures").is_dir() else []:
+        value = read_json_object(path)
+        if value:
+            records.append(value)
+    return records
+
+
+def handle_failures(args: argparse.Namespace) -> int:
+    repository = repository_from_arg(args.repo, require_initialized=True)
+    root = harness_home()
+    runs = project_runs(root / ".agent-runs", repository)
+    if args.run_id:
+        runs = [run for run in runs if run["run_id"] == args.run_id]
+    items = [
+        failure
+        for run in runs
+        for failure in failure_records(root / ".agent-runs" / run["run_id"])
+    ]
+    payload = {"count": len(items), "items": items}
+    lines = [f"Failures: {len(items)}"]
+    for item in items[-args.limit :]:
+        lines.append(
+            f"  {item.get('run_id', '')}: {item.get('kind', '')}/{item.get('error_type', '')} "
+            f"attempt {item.get('attempt', 0)}/{item.get('max_attempts', 0)} at {item.get('role', '') or item.get('stage', '')}"
+        )
+    emit(payload, as_json=args.json, lines=lines)
+    return 0
+
+
+def handle_dead_letters(args: argparse.Namespace) -> int:
+    repository = repository_from_arg(args.repo, require_initialized=True)
+    root = harness_home()
+    items = [item for item in project_tasks(root / ".agent-queue" / "tasks.db", repository) if item["status"] == "dead_letter"]
+    emit(
+        {"count": len(items), "items": items[: args.limit]},
+        as_json=args.json,
+        lines=(
+            f"Dead letters: {len(items)}",
+            *(f"  {item['run_id'] or item['task_id']}: {item['exception_reason'] or item['failure_kind']}" for item in items[: args.limit]),
+        ),
+    )
+    return 0
+
+
+def handle_recovery_command(args: argparse.Namespace) -> int:
+    repository = repository_from_arg(args.repo, require_initialized=True)
+    root = harness_home()
+    matching = [run for run in project_runs(root / ".agent-runs", repository) if run["run_id"] == args.run_id]
+    if not matching:
+        raise CLIError(f"run {args.run_id!r} was not found for this project")
+    run_dir = root / ".agent-runs" / args.run_id
+    workflow_path = run_dir / "workflow.json"
+    workflow = read_json_object(workflow_path)
+    if args.command in {"retry", "resume"} and workflow.get("execution_status") == "awaiting_approval":
+        raise CLIError("an awaiting_approval run must be continued with `agent approve`")
+    task_queue = load_harness_module(root, "task_queue")
+    queue = task_queue.TaskQueue(root / ".agent-queue" / "tasks.db")
+    try:
+        if args.command == "abort":
+            record = queue.abort_run(args.run_id)
+            workflow["execution_status"] = "cancelled"
+            workflow["recovery_action"] = ""
+        else:
+            record = queue.recover_run(args.run_id, action=args.command)
+            workflow["execution_status"] = "retry_wait" if args.command == "retry" else "resuming"
+            workflow["recovery_action"] = args.command
+            recovery = workflow.get("recovery", {})
+            if not isinstance(recovery, dict):
+                recovery = {}
+            recovery.update(
+                {
+                    "attempts": 0,
+                    "consecutive_failures": 0,
+                    "resume_attempts": 0,
+                    "elapsed_seconds": 0,
+                    "started_at": datetime.now(timezone.utc).timestamp(),
+                    "attempts_by_kind": {},
+                }
+            )
+            workflow["recovery"] = recovery
+            workflow["manual_recovery_count"] = int(workflow.get("manual_recovery_count", 0) or 0) + 1
+            if args.command == "resume" and not workflow.get("resume_role"):
+                workflow["resume_role"] = workflow.get("current_role", "")
+        temporary = workflow_path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(workflow, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        temporary.replace(workflow_path)
+    except (ValueError, RuntimeError) as exc:
+        raise CLIError(str(exc)) from exc
+    emit(
+        {"status": record.status, "run_id": args.run_id, "queue_task_id": record.id, "action": args.command},
+        as_json=args.json,
+        lines=(f"Run {args.run_id}: {record.status}", f"  action: {args.command}"),
+    )
     return 0
 
 
@@ -597,6 +723,26 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser.add_argument("--limit", type=int, choices=range(1, 101), default=10)
     status_parser.add_argument("--json", action="store_true")
     status_parser.set_defaults(handler=handle_status)
+
+    failures_parser = subparsers.add_parser("failures", help="list structured task failures")
+    failures_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")
+    failures_parser.add_argument("--run-id", default="")
+    failures_parser.add_argument("--limit", type=int, choices=range(1, 501), default=50)
+    failures_parser.add_argument("--json", action="store_true")
+    failures_parser.set_defaults(handler=handle_failures)
+
+    dead_parser = subparsers.add_parser("dead-letters", help="list tasks whose recovery budget is exhausted")
+    dead_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")
+    dead_parser.add_argument("--limit", type=int, choices=range(1, 501), default=50)
+    dead_parser.add_argument("--json", action="store_true")
+    dead_parser.set_defaults(handler=handle_dead_letters)
+
+    for recovery_command in ("retry", "resume", "abort"):
+        recovery_parser = subparsers.add_parser(recovery_command, help=f"{recovery_command} an existing run")
+        recovery_parser.add_argument("run_id")
+        recovery_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")
+        recovery_parser.add_argument("--json", action="store_true")
+        recovery_parser.set_defaults(handler=handle_recovery_command)
 
     approve_parser = subparsers.add_parser(
         "approve",

@@ -1,0 +1,5 @@
+{
+  "required": ["failure_id", "run_id", "task_id", "role", "stage", "kind", "error_type", "message", "retryable", "repairable", "attempt", "max_attempts", "checkpoint", "created_at", "metadata"],
+  "enums": {"kind": ["transient", "runtime_failure", "invalid_output", "tool_failure", "verification_failure", "policy_block", "human_input_required", "internal_error", "unrecoverable"]},
+  "types": {"failure_id": "str", "run_id": "str", "task_id": "str", "role": "str", "stage": "str", "kind": "str", "error_type": "str", "message": "str", "retryable": "bool", "repairable": "bool", "attempt": "int", "max_attempts": "int", "checkpoint": "str", "created_at": "str", "metadata": "dict"}
+}

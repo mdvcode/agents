@@ -33,6 +33,7 @@ include = ["ai_harness*"]
   ".agent-artifact-owners.yaml",
   ".agent-policy.yaml",
   ".agent-project-profiles.yaml",
+  ".agent-recovery.yaml",
   ".agent-role-capabilities.yaml",
   ".agent-role-contracts.yaml",
   ".agent-routing.yaml",

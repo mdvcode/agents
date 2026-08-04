@@ -145,6 +145,13 @@ class TelemetryRuntime:
         self.retry_counter = self.meter.create_counter("ai_harness.retries", unit="{retry}")
         self.loop_counter = self.meter.create_counter("ai_harness.loops", unit="{iteration}")
         self.failure_counter = self.meter.create_counter("ai_harness.failures", unit="{failure}")
+        self.recovery_attempts_total = self.meter.create_counter("recovery_attempts_total", unit="{attempt}")
+        self.recovery_success_total = self.meter.create_counter("recovery_success_total", unit="{recovery}")
+        self.recovery_exhausted_total = self.meter.create_counter("recovery_exhausted_total", unit="{task}")
+        self.task_retries_total = self.meter.create_counter("task_retries_total", unit="{retry}")
+        self.output_repairs_total = self.meter.create_counter("output_repairs_total", unit="{repair}")
+        self.resume_success_total = self.meter.create_counter("resume_success_total", unit="{resume}")
+        self.worker_crashes_total = self.meter.create_counter("worker_crashes_total", unit="{crash}")
         self.duration_histogram = self.meter.create_histogram(
             "ai_harness.duration", unit="s", description="Harness operation latency"
         )

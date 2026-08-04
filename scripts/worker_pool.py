@@ -9,8 +9,9 @@ import os
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -24,6 +25,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ai_harness.observability import TelemetryRuntime
+from ai_harness.recovery import RecoveryCoordinator, classify_failure, load_recovery_policy
+from ai_harness.recovery.models import persist_failure, sanitized_message
 
 RUNS_DIR = ROOT / ".agent-runs"
 
@@ -33,8 +36,13 @@ class WorkerOutcome:
     status: str
     run_id: str = ""
     error: str = ""
+    failure_kind: str = ""
+    recovery_action: str = ""
+    retry_after_seconds: int = 0
     requires_human: bool = False
     exception_reason: str = ""
+    failure_id: str = ""
+    resume_checkpoint: str = ""
 
 
 TaskHandler = Callable[[TaskRecord, str], WorkerOutcome]
@@ -43,6 +51,22 @@ TaskHandler = Callable[[TaskRecord, str], WorkerOutcome]
 def telemetry_run_dir(run_id: str) -> Path | None:
     candidate = (RUNS_DIR / run_id).resolve()
     return candidate if candidate.parent == RUNS_DIR.resolve() else None
+
+
+def safe_telemetry_shutdown(telemetry: TelemetryRuntime | None) -> None:
+    if telemetry is None:
+        return
+    try:
+        telemetry.shutdown()
+    except Exception:
+        return
+
+
+def safe_worker_heartbeat(queue: TaskQueue, worker_id: str, current_task_id: int = 0) -> None:
+    try:
+        queue.worker_heartbeat(worker_id, current_task_id=current_task_id)
+    except Exception:
+        return
 
 
 def safe_payload(record: TaskRecord) -> dict[str, str]:
@@ -139,7 +163,7 @@ class WorkflowWorkerPool:
             except json.JSONDecodeError:
                 workflow = {}
             status = workflow.get("execution_status") if isinstance(workflow, dict) else ""
-            if status in {"resuming", "running"}:
+            if status in {"retry_wait", "repairing", "resuming", "role_pending", "role_running", "role_output_received", "role_validating", "running"}:
                 command.append("--resume")
             elif status == "awaiting_approval":
                 return WorkerOutcome(
@@ -183,6 +207,22 @@ class WorkflowWorkerPool:
         execution_status = str(workflow.get("execution_status", ""))
         if process.returncode == 0 and execution_status == "completed":
             return WorkerOutcome(status="completed", run_id=run_id)
+        if execution_status in {"retry_wait", "repairing", "resuming"}:
+            action = {
+                "retry_wait": "retry",
+                "repairing": "repair",
+                "resuming": "resume",
+            }[execution_status]
+            return WorkerOutcome(
+                status=execution_status,
+                run_id=run_id,
+                error=(stderr or stdout).strip(),
+                failure_kind=str(workflow.get("failure_kind", "")),
+                recovery_action=action,
+                retry_after_seconds=int(workflow.get("retry_after_seconds", 0) or 0),
+                failure_id=str(workflow.get("failure_id", "")),
+                resume_checkpoint=str(workflow.get("resume_from", "")),
+            )
         if execution_status in {"awaiting_approval", "blocked"}:
             blockers = workflow.get("blockers", [])
             reason = "; ".join(str(item) for item in blockers) if isinstance(blockers, list) else execution_status
@@ -192,79 +232,247 @@ class WorkflowWorkerPool:
                 error=(stderr or stdout).strip(),
                 requires_human=True,
                 exception_reason=reason or execution_status,
+                recovery_action="approval" if execution_status == "awaiting_approval" else "",
             )
-        return WorkerOutcome(
-            status="failed",
+        if execution_status == "dead_letter" or process.returncode == 30:
+            return WorkerOutcome(
+                status="dead_letter",
+                run_id=run_id,
+                error=(stderr or stdout).strip(),
+                failure_kind=str(workflow.get("failure_kind", "")),
+                recovery_action="dead_letter",
+                requires_human=True,
+                exception_reason=str(workflow.get("recovery_reason", "recovery budget exhausted")),
+                failure_id=str(workflow.get("failure_id", "")),
+            )
+        if execution_status == "failed" or process.returncode in {40, 50}:
+            return WorkerOutcome(
+                status="failed",
+                run_id=run_id,
+                error=(stderr or stdout).strip(),
+                failure_kind=str(workflow.get("failure_kind", "unrecoverable")),
+                recovery_action="fail",
+                requires_human=True,
+                exception_reason=str(workflow.get("recovery_reason", "unrecoverable workflow failure")),
+                failure_id=str(workflow.get("failure_id", "")),
+            )
+        return self._recovery_outcome(
+            record,
+            RuntimeError((stderr or stdout or f"workflow exit {process.returncode}").strip()),
             run_id=run_id,
-            error=(stderr or stdout or f"workflow exit {process.returncode}").strip(),
-            exception_reason="workflow execution failed",
+            process_returncode=process.returncode,
+        )
+
+    def _recovery_outcome(
+        self,
+        record: TaskRecord,
+        exception: Exception,
+        *,
+        run_id: str = "",
+        process_returncode: int | None = None,
+    ) -> WorkerOutcome:
+        effective_run_id = run_id or str(record.payload.get("run_id") or record.run_id or f"queue-task-{record.id}")
+        run_dir = telemetry_run_dir(effective_run_id)
+        state: dict[str, object] = {"run_id": effective_run_id, "task_id": str(record.payload.get("task_id", record.id))}
+        if run_dir is not None:
+            workflow_path = run_dir / "workflow.json"
+            try:
+                loaded = json.loads(workflow_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    state.update(loaded)
+            except (OSError, json.JSONDecodeError):
+                pass
+        policy = load_recovery_policy()
+        preliminary = classify_failure(
+            exception,
+            process_returncode,
+            state,
+            run_id=effective_run_id,
+            task_id=str(record.payload.get("task_id", record.id)),
+            role=str(state.get("current_role", "worker")),
+            stage="worker_execute",
+        )
+        configured = policy.for_kind(preliminary.kind)
+        attempt = record.recovery_attempts + 1
+        failure = classify_failure(
+            exception,
+            process_returncode,
+            state,
+            run_id=effective_run_id,
+            task_id=str(record.payload.get("task_id", record.id)),
+            role=str(state.get("current_role", "worker")),
+            stage="worker_execute",
+            attempt=attempt,
+            max_attempts=configured.max_attempts,
+            checkpoint=str(state.get("resume_from", "before_worker_execute")),
+        )
+        decision = RecoveryCoordinator().decide(failure, state, policy)
+        if run_dir is not None:
+            run_dir.mkdir(parents=True, exist_ok=True)
+            persist_failure(run_dir, failure)
+        return WorkerOutcome(
+            status=decision.next_status,
+            run_id=effective_run_id,
+            error=failure.message,
+            failure_kind=failure.kind,
+            recovery_action=decision.action,
+            retry_after_seconds=decision.delay_seconds,
+            requires_human=decision.requires_human,
+            exception_reason=decision.reason,
+            failure_id=failure.failure_id,
+            resume_checkpoint=failure.checkpoint,
+        )
+
+    def _invoke_handler(self, record: TaskRecord, worker_id: str) -> WorkerOutcome:
+        try:
+            outcome = self.handler(record, worker_id) if self.handler is not None else self.run_workflow(record, worker_id)
+        except Exception as exc:
+            return self._recovery_outcome(record, exc)
+        if outcome.status == "failed" and not outcome.recovery_action:
+            return self._recovery_outcome(record, RuntimeError(outcome.error or outcome.exception_reason or "worker handler failed"), run_id=outcome.run_id)
+        return outcome
+
+    def _finish_outcome(self, record: TaskRecord, worker_id: str, outcome: WorkerOutcome) -> TaskRecord:
+        available_after = time.time() + max(0, outcome.retry_after_seconds)
+        common = {
+            "task_id": record.id,
+            "worker_id": worker_id,
+            "run_id": outcome.run_id,
+            "available_after": available_after,
+            "preserve_attempt_state": True,
+            "failure_kind": outcome.failure_kind,
+            "recovery_action": outcome.recovery_action,
+            "resume_checkpoint": outcome.resume_checkpoint,
+            "failure_id": outcome.failure_id,
+            "error": outcome.error,
+        }
+        if outcome.recovery_action == "retry":
+            return self.queue.schedule_retry(**common)
+        if outcome.recovery_action == "repair":
+            return self.queue.mark_repairing(**common)
+        if outcome.recovery_action == "resume":
+            return self.queue.mark_resuming(**common)
+        if outcome.recovery_action == "dead_letter" or outcome.status == "dead_letter":
+            return self.queue.move_to_dead_letter(
+                task_id=record.id,
+                worker_id=worker_id,
+                run_id=outcome.run_id,
+                error=outcome.error or outcome.exception_reason,
+                failure_kind=outcome.failure_kind,
+                failure_id=outcome.failure_id,
+            )
+        status = "awaiting_approval" if outcome.recovery_action == "approval" else outcome.status
+        return self.queue.finish(
+            task_id=record.id,
+            worker_id=worker_id,
+            status=status,
+            run_id=outcome.run_id,
+            error=outcome.error,
+            requires_human=outcome.requires_human,
+            exception_reason=outcome.exception_reason,
+            terminal_failure=outcome.recovery_action == "fail",
         )
 
     def process_one(self, worker_number: int) -> TaskRecord | None:
         worker_id = f"{self.worker_prefix}-{worker_number}"
-        record = self.queue.claim(worker_id=worker_id, lease_seconds=self.lease_seconds)
-        if record is None:
-            return None
-        if not self.queue.mark_running(record.id, worker_id):
-            return self.queue.get(record.id)
-        self.queue.worker_heartbeat(worker_id, current_task_id=record.id)
-        predicted_run_id = str(record.payload.get("run_id") or record.run_id or f"queue-task-{record.id}")
-        telemetry = TelemetryRuntime(
-            run_dir=telemetry_run_dir(predicted_run_id),
-            service_name="ai-harness-worker",
-            service_instance_id=worker_id,
-        )
+        record: TaskRecord | None = None
+        telemetry: TelemetryRuntime | None = None
         started = time.monotonic()
         try:
-            with telemetry.span(
-                "ai_harness.worker.task",
-                {
-                    "task.id": record.id,
-                    "task.attempt": record.attempts,
-                    "worker.id": worker_id,
-                    "queue.wait_seconds": max(0, time.time() - record.created_at),
-                },
-            ) as span:
+            record = self.queue.claim(worker_id=worker_id, lease_seconds=self.lease_seconds)
+            if record is None:
+                return None
+            if not self.queue.mark_running(record.id, worker_id):
+                return self.queue.get(record.id)
+            safe_worker_heartbeat(self.queue, worker_id, record.id)
+            predicted_run_id = str(record.payload.get("run_id") or record.run_id or f"queue-task-{record.id}")
+            try:
+                telemetry = TelemetryRuntime(
+                    run_dir=telemetry_run_dir(predicted_run_id),
+                    service_name="ai-harness-worker",
+                    service_instance_id=worker_id,
+                )
+            except Exception:
+                telemetry = None
+            outcome: WorkerOutcome | None = None
+            if telemetry is not None:
                 try:
-                    outcome = (
-                        self.handler(record, worker_id)
-                        if self.handler is not None
-                        else self.run_workflow(record, worker_id)
-                    )
-                except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
-                    outcome = WorkerOutcome(
-                        status="failed",
-                        error=str(exc),
-                        exception_reason="worker handler failed",
-                    )
-                    span.set_attribute("error.type", type(exc).__name__)
-                span.set_attribute("task.outcome", outcome.status)
-                span.set_attribute("task.requires_human", outcome.requires_human)
-                if outcome.status not in {"completed", "blocked"}:
-                    span.set_status(Status(StatusCode.ERROR))
-                    telemetry.failure_counter.add(1, {"operation": "worker.task", "outcome": outcome.status})
-                telemetry.task_counter.add(1, {"outcome": outcome.status})
-                telemetry.duration_histogram.record(
-                    max(0, time.monotonic() - started), {"operation": "worker.task"}
-                )
-                finished = self.queue.finish(
-                    task_id=record.id,
-                    worker_id=worker_id,
-                    status=outcome.status,
-                    run_id=outcome.run_id,
-                    error=outcome.error,
-                    requires_human=outcome.requires_human,
-                    exception_reason=outcome.exception_reason,
-                )
-                self.queue.worker_heartbeat(worker_id, current_task_id=0)
-                return finished
+                    with telemetry.span(
+                        "ai_harness.worker.task",
+                        {
+                            "task.id": record.id,
+                            "task.attempt": record.attempts,
+                            "worker.id": worker_id,
+                            "queue.wait_seconds": max(0, time.time() - record.created_at),
+                        },
+                    ) as span:
+                        outcome = self._invoke_handler(record, worker_id)
+                        span.set_attribute("task.outcome", outcome.status)
+                        span.set_attribute("task.requires_human", outcome.requires_human)
+                        if outcome.status not in {"completed", "blocked", "awaiting_approval"}:
+                            span.set_status(Status(StatusCode.ERROR))
+                except Exception:
+                    pass
+            if outcome is None:
+                outcome = self._invoke_handler(record, worker_id)
+            if telemetry is not None:
+                try:
+                    if outcome.status not in {"completed", "blocked", "awaiting_approval"}:
+                        telemetry.failure_counter.add(1, {"operation": "worker.task", "outcome": outcome.status})
+                    telemetry.task_counter.add(1, {"outcome": outcome.status})
+                    telemetry.duration_histogram.record(max(0, time.monotonic() - started), {"operation": "worker.task"})
+                except Exception:
+                    pass
+            return self._finish_outcome(record, worker_id, outcome)
+        except Exception as exc:
+            if record is None:
+                self.record_pool_failure(worker_number, exc)
+                return None
+            try:
+                outcome = self._recovery_outcome(record, exc)
+                return self._finish_outcome(record, worker_id, outcome)
+            except Exception as nested:
+                self.record_pool_failure(worker_number, nested)
+                return self.queue.get(record.id)
         finally:
-            telemetry.shutdown()
+            safe_telemetry_shutdown(telemetry)
+            safe_worker_heartbeat(self.queue, worker_id, 0)
+
+    def record_pool_failure(self, worker_number: int, exception: Exception) -> None:
+        path = self.queue.path.parent / "worker-pool-errors.jsonl"
+        try:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(
+                        {
+                            "time": datetime.now(timezone.utc).isoformat(),
+                            "worker_number": worker_number,
+                            "error_type": type(exception).__name__,
+                            "message": sanitized_message(exception),
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+        except OSError:
+            return
 
     def run_wave(self) -> list[TaskRecord]:
         with ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="agent-worker") as executor:
-            results = list(executor.map(self.process_one, range(1, self.workers + 1)))
-        return [record for record in results if record is not None]
+            futures: dict[Future[TaskRecord | None], int] = {
+                executor.submit(self.process_one, number): number for number in range(1, self.workers + 1)
+            }
+            records: list[TaskRecord] = []
+            for future in as_completed(futures):
+                worker_number = futures[future]
+                try:
+                    record = future.result()
+                except Exception as exc:
+                    self.record_pool_failure(worker_number, exc)
+                    continue
+                if record is not None:
+                    records.append(record)
+        return records
 
     def drain(self) -> list[TaskRecord]:
         processed: list[TaskRecord] = []

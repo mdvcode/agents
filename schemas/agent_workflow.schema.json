@@ -15,7 +15,7 @@
     "base_branch_sha_after"
   ],
   "enums": {
-    "execution_status": ["planned", "running", "resuming", "completed", "blocked", "failed", "awaiting_approval"]
+    "execution_status": ["planned", "created", "running", "role_pending", "role_running", "role_output_received", "role_validating", "role_completed", "retry_wait", "repairing", "resuming", "awaiting_approval", "completed", "blocked", "dead_letter", "failed", "cancelled"]
   },
   "types": {
     "run_id": "str",
@@ -36,7 +36,16 @@
     "resumed_at": "str",
     "approval_override": "dict",
     "approval_grants": "list",
-    "ci_feedback_pending": "bool"
+    "ci_feedback_pending": "bool",
+    "current_role": "str",
+    "resume_from": "str",
+    "failure_id": "str",
+    "failure_kind": "str",
+    "recovery_action": "str",
+    "recovery_reason": "str",
+    "retry_after_seconds": "int",
+    "recovery": "dict",
+    "manual_recovery_count": "int"
   },
   "object_required": {
     "loops": ["quality_repair", "review_repair", "ci_repair", "frontend_verification_repair"],

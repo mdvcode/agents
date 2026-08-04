@@ -56,7 +56,8 @@ def test_failures_retry_then_enter_dead_letter(tmp_path: Path) -> None:
         status="failed",
         error="first failure",
     )
-    assert retried.status == "queued"
+    assert retried.status == "retry_wait"
+    assert retried.recovery_action == "retry"
 
     second = queue.claim(worker_id="worker-2")
     assert second is not None
