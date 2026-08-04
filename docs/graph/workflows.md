@@ -23,6 +23,10 @@ Approval required -> run-scoped request and checkpoint fingerprint -> exact-scop
 
 Worker process dies -> heartbeat stops -> lease expires -> task requeued with existing run id -> replacement worker detects running/resuming workflow -> `--resume` from checkpoint.
 
+Role/runtime/tool failure -> deterministic `FailureRecord` -> `.agent-recovery.yaml` decision -> `retry_wait`, `repairing`, `resuming`, `awaiting_approval`, `dead_letter`, or terminal `failed` -> same queue task/run/worktree continues when recoverable.
+
+Role checkpoint sequence -> `role_pending` -> `role_running` -> `role_output_received` -> `role_validating` -> `role_completed`. Resume repeats execution only from pending/running, replays cached validation from output-received/validating, and advances after completed.
+
 GitHub Actions failure -> HMAC-verified webhook -> governed failed-log read -> secret redaction -> run-scoped CI feedback -> existing run/branch queued at CI repair -> quality and publication update the existing PR.
 
 The queue coordinates tasks; it never replaces `.agent-runs/<run-id>/` as the authoritative state of a task.

@@ -114,6 +114,38 @@ workflows:
     assert calls == [17]
 
 
+def test_timeout_creates_failure_record_and_returns_retryable_exit(tmp_path: Path, monkeypatch: object) -> None:
+    workflows_path = tmp_path / ".agent-workflows.yaml"
+    workflows_path.write_text(
+        """
+version: 1
+workflows:
+  sample:
+    max_iterations: 1
+    steps:
+      - name: "implementation-agent"
+        command: "codex-role"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run_workflow, "WORKFLOWS", workflows_path)
+    monkeypatch.setattr(run_workflow, "RUNS_DIR", tmp_path / ".agent-runs")
+    monkeypatch.setattr(
+        run_workflow,
+        "run_command",
+        lambda _command, _cwd, _timeout: (124, "", "command timed out"),
+    )
+
+    result = run_workflow.run_workflow("sample", root=tmp_path, run_id="run-timeout", task_id="task-timeout")
+
+    assert result == run_workflow.EXIT_RETRYABLE_FAILURE
+    state = json.loads((tmp_path / ".agent-runs" / "run-timeout" / "workflow.json").read_text(encoding="utf-8"))
+    assert state["execution_status"] == "retry_wait"
+    assert state["failure_kind"] == "transient"
+    assert state["resume_role"] == "implementation-agent"
+    assert len(list((tmp_path / ".agent-runs" / "run-timeout" / "failures").glob("*.json"))) == 1
+
+
 def test_workflow_runner_passes_adapter_command_from_workflow(tmp_path: Path, monkeypatch: object) -> None:
     workflows_path = tmp_path / ".agent-workflows.yaml"
     workflows_path.write_text(
@@ -200,6 +232,13 @@ def test_workflow_runner_cli_accepts_goal(monkeypatch: object) -> None:
     assert args.goal == goal
 
 
+def test_unknown_workflow_uses_invalid_harness_state_exit(tmp_path: Path, monkeypatch: object) -> None:
+    workflows_path = tmp_path / ".agent-workflows.yaml"
+    workflows_path.write_text("version: 1\nworkflows: {}\n", encoding="utf-8")
+    monkeypatch.setattr(run_workflow, "WORKFLOWS", workflows_path)
+    assert run_workflow.run_workflow("missing", root=tmp_path) == run_workflow.EXIT_INVALID_HARNESS_STATE
+
+
 def test_workflow_runner_cli_adapter_command_overrides_workflow(tmp_path: Path, monkeypatch: object) -> None:
     workflows_path = tmp_path / ".agent-workflows.yaml"
     workflows_path.write_text(
@@ -270,3 +309,4 @@ workflows:
     monkeypatch.setattr(run_workflow, "RUNS_DIR", runs)
     assert run_workflow.run_workflow("sample", root=tmp_path, task_id="same-task") == 0
     assert sorted(path.name for path in runs.iterdir()) == ["completed"]
+

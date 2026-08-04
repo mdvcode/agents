@@ -44,7 +44,7 @@ roles:
     tools:
       - filesystem_read
       - shell
-    filesystem: artifacts_write
+    filesystem: evidence_write
   security-agent:
     tools:
       - filesystem_read

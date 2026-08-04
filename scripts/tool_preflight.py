@@ -107,7 +107,10 @@ def role_tool_preflight(
         for command in profile_required_commands(project_profile, "quality_commands"):
             token = first_command_token(command)
             if token and not executable_available(token):
-                blockers.append(f"quality required command is unavailable: {token}")
+                warnings.append(
+                    f"quality command is not directly available on PATH: {token}; "
+                    "the quality role must try the repository-managed environment or record not_run"
+                )
 
     if role == "security-agent":
         for command in profile_required_commands(project_profile, "security_commands"):

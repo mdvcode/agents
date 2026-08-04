@@ -10,6 +10,7 @@ Produce a concise human-readable final report and return the owned run-scoped `r
 - Summarize security results.
 - Summarize the final verdict.
 - Summarize the next actions.
+- Include a `Harness improvement notes` section when `system-improvement-notes.md` is present in the run directory above `artifacts_dir`.
 
 ## Project profile
 Selected profile:

@@ -145,6 +145,13 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
         "workflow_iterations": workflow_iterations,
         "repair_loop_iterations": repair_loop_iterations,
         "workflow_retries": workflow_retries,
+        "recovery_attempts": int(
+            workflow.get("recovery", {}).get("attempts", 0)
+            if isinstance(workflow.get("recovery"), dict)
+            else 0
+        ),
+        "resume_count": int(workflow.get("resume_count", 0) or 0),
+        "failure_kind": str(workflow.get("failure_kind", "")),
         "failure_count": len(errors) or sum(event.get("event") == "workflow_failed" for event in runner_events),
         "pr_time_seconds": pr_time_seconds,
         "budgets": {
@@ -202,8 +209,8 @@ def collect_metrics(
     workflow_retries = sum(int(run["workflow_retries"]) for run in runs)
     total_failures = sum(int(run["failure_count"]) for run in runs) + sum(task.status == "dead_letter" for task in tasks)
     active_workers = sum(item.status in {"starting", "healthy", "draining"} for item in workers)
-    active_tasks = sum(item.status in {"leased", "running"} for item in tasks)
-    queue_depth = sum(item.status == "queued" for item in tasks)
+    active_tasks = sum(item.status in {"claimed", "leased", "running"} for item in tasks)
+    queue_depth = sum(item.status in {"queued", "retry_wait", "repairing", "resuming"} for item in tasks)
     completed_24h = sum(item.status == "completed" and item.updated_at >= now - 86_400 for item in tasks)
     from ai_harness.observability.store import trace_summary
 
@@ -242,7 +249,7 @@ def collect_metrics(
                     "expired": item.lease_expires_at < now,
                 }
                 for item in tasks
-                if item.status in {"leased", "running"}
+                if item.status in {"claimed", "leased", "running"}
             ]
         },
         "budgets": {
@@ -277,6 +284,16 @@ def collect_metrics(
             "run_failures": sum(int(run["failure_count"]) for run in runs),
             "dead_letters": sum(task.status == "dead_letter" for task in tasks),
             "by_run_status": dict(Counter(str(run["status"]) for run in runs if run["status"] in {"failed", "blocked"})),
+        },
+        "recovery": {
+            "recovery_attempts_total": sum(item.recovery_attempts for item in tasks),
+            "recovery_success_total": sum(run["status"] == "completed" and int(run["recovery_attempts"]) > 0 for run in runs),
+            "recovery_exhausted_total": sum(item.status == "dead_letter" for item in tasks),
+            "task_retries_total": sum(item.recovery_action == "retry" for item in tasks),
+            "output_repairs_total": sum(run["failure_kind"] == "invalid_output" for run in runs),
+            "resume_success_total": sum(run["status"] == "completed" and int(run["resume_count"]) > 0 for run in runs),
+            "worker_crashes_total": sum(event["event"] == "lease_expired_resume" for event in events),
+            "actions": dict(Counter(item.recovery_action for item in tasks if item.recovery_action)),
         },
         "tracing": tracing,
         "exceptions": [asdict(item) for item in exceptions],

@@ -30,6 +30,7 @@ from repository_registry import RepositoryRecord, find_by_remote
 from run_state import RunLayout
 from tool_governance import audit_tool_call, authorize_tool_call
 from workflow_router import required_gate_roles
+from ai_harness.recovery.idempotency import branch_pushed, commit_sha_for_marker, pr_exists
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -106,6 +107,7 @@ class PublicationResult:
     run_dir: str = ""
     task_id: str = ""
     input_fingerprint: str = ""
+    idempotency_key: str = ""
     pr_comment_posted: bool = False
     command_results: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -132,6 +134,7 @@ class PublicationResult:
             "run_dir": self.run_dir,
             "pr_comment_posted": self.pr_comment_posted,
             "input_fingerprint": self.input_fingerprint,
+            "idempotency_key": self.idempotency_key,
             "command_results": self.command_results,
             "warnings": self.warnings,
             "errors": self.errors,
@@ -1023,14 +1026,48 @@ class Publisher:
         result = self.run_command(["git", "diff", "--cached", "--quiet"], cwd=target_repo)
         return result.returncode == 1
 
-    def commit(self, target_repo: Path, message: str) -> tuple[bool, str, str]:
-        commit_result = self.run_command(["git", "commit", "-m", message], cwd=target_repo)
+    def commit(self, target_repo: Path, message: str, idempotency_key: str = "") -> tuple[bool, str, str]:
+        commit_message = message
+        if idempotency_key:
+            commit_message += f"\n\nTask-Idempotency-Key: {idempotency_key}"
+        commit_result = self.run_command(["git", "commit", "-m", commit_message], cwd=target_repo)
         if command_failed(commit_result):
             return False, "", command_output(commit_result)
         sha = self.run_command(["git", "rev-parse", "HEAD"], cwd=target_repo)
         if command_failed(sha):
             return True, "", command_output(sha)
         return True, sha.stdout.strip(), ""
+
+    def reconcile_side_effects(
+        self,
+        target_repo: Path,
+        publication: PublicationResult,
+    ) -> None:
+        """Recover durable publication state after a process dies between effect and checkpoint."""
+        runner = lambda args, cwd: self.run_command(args, cwd=cwd)
+        changed = False
+        if not publication.commit_sha and publication.idempotency_key:
+            sha = commit_sha_for_marker(target_repo, publication.idempotency_key, runner)
+            if sha:
+                publication.commit_created = True
+                publication.commit_sha = sha
+                publication.execution_status = "committed"
+                changed = True
+        if publication.commit_sha and not publication.push_completed:
+            if branch_pushed(target_repo, publication.branch, runner):
+                publication.branch_pushed = True
+                publication.push_completed = True
+                publication.execution_status = "pushed"
+                changed = True
+        if publication.push_completed and not publication.pr_created_or_updated:
+            existing = pr_exists(target_repo, publication.branch, runner)
+            if existing is not None:
+                publication.pr_created_or_updated = True
+                publication.pr_number, publication.pr_url = existing
+                publication.execution_status = "pr_published"
+                changed = True
+        if changed:
+            self.write_runtime_state(publication)
 
     def push(self, target_repo: Path, branch: str) -> str:
         push_result = self.run_command(["git", "push", "--set-upstream", "origin", branch], cwd=target_repo)
@@ -1144,6 +1181,7 @@ class Publisher:
         if layout.artifacts.resolve() != self.artifacts:
             raise ValueError("publication artifacts must belong to the authoritative run directory")
         publication.run_dir = str(layout.root)
+        publication.idempotency_key = f"{publication.run_id}:publication"
         publication.target_repository = str(target_repo.resolve())
         return layout.root
 
@@ -1399,14 +1437,20 @@ class Publisher:
                     body + "\n" + commit_message,
                 )
             )
-            selected = self.selected_change_set_paths(target_repo, change_set, publication, require_pending_change=not publication.commit_sha)
-            self.validate_change_set_completeness(target_repo, change_set, risk, publication)
+            worktree = self.authoritative_task_worktree(target_repo, publication)
             if publication.errors:
                 publication.execution_status = "blocked"
                 self.finalize(target_repo, publication, profile_name, post_comment=False)
                 return publication
+            self.reconcile_side_effects(worktree, publication)
 
-            worktree = self.authoritative_task_worktree(target_repo, publication)
+            selected = self.selected_change_set_paths(
+                target_repo,
+                change_set,
+                publication,
+                require_pending_change=not publication.commit_sha,
+            )
+            self.validate_change_set_completeness(target_repo, change_set, risk, publication)
             if publication.errors:
                 publication.execution_status = "blocked"
                 self.finalize(target_repo, publication, profile_name, post_comment=False)
@@ -1434,7 +1478,11 @@ class Publisher:
                     self.finalize(worktree, publication, profile_name, post_comment=False)
                     return publication
                 if self.has_staged_changes(worktree):
-                    commit_created, sha, error = self.commit(worktree, commit_message)
+                    commit_created, sha, error = self.commit(
+                        worktree,
+                        commit_message,
+                        publication.idempotency_key,
+                    )
                     publication.commit_created = commit_created
                     publication.commit_sha = sha
                     if error:

@@ -302,3 +302,24 @@ def test_python_module_exposes_agent_version() -> None:
 
     assert completed.returncode == 0
     assert completed.stdout.strip() == "agent 0.1.0"
+
+
+@pytest.mark.parametrize(
+    ("argv", "command", "run_id"),
+    [
+        (["failures"], "failures", ""),
+        (["dead-letters"], "dead-letters", None),
+        (["retry", "run-123"], "retry", "run-123"),
+        (["resume", "run-123"], "resume", "run-123"),
+        (["abort", "run-123"], "abort", "run-123"),
+    ],
+)
+def test_parser_exposes_recovery_commands(
+    argv: list[str],
+    command: str,
+    run_id: str | None,
+) -> None:
+    args = cli.build_parser().parse_args(argv)
+
+    assert args.command == command
+    assert getattr(args, "run_id", None) == run_id

@@ -34,6 +34,19 @@ from runtime_contracts import (  # noqa: E402
 from check_codex_runtime import configured_codex_base_command  # noqa: E402
 
 
+MAX_OUTPUT_REPAIR_ATTEMPTS = 2
+
+
+def failure_result(summary: str, blockers: list[str], *, kind: str, error_type: str) -> dict[str, Any]:
+    result = blocked_result(summary, blockers)
+    result["_failure"] = {
+        "kind": kind,
+        "error_type": error_type,
+        "message": summary,
+    }
+    return result
+
+
 def safe_artifact_name(value: Any) -> bool:
     if not isinstance(value, str) or not value:
         return False
@@ -55,6 +68,27 @@ def sandbox_for_filesystem_access(access: str) -> str:
 
 def role_can_write_repository(access: str) -> bool:
     return access in {"task_worktree_write", "workspace_write"}
+
+
+def repository_tool_paths(repository: Path) -> list[Path]:
+    """Find common project-managed tool directories for a git worktree."""
+    roots = [repository]
+    common = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        cwd=repository,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if common.returncode == 0 and common.stdout.strip():
+        roots.append(Path(common.stdout.strip()).resolve().parent)
+    candidates: list[Path] = []
+    for root in roots:
+        for relative in (".devenv/state/venv/bin", ".devenv/profile/bin", ".venv/bin"):
+            path = root / relative
+            if path.is_dir() and path not in candidates:
+                candidates.append(path)
+    return candidates
 
 
 def git_snapshot(repo: Path) -> str:
@@ -307,6 +341,14 @@ def parse_role_result(stdout: str, output_contract: dict[str, Any], duration_ms:
         return blocked_result("Codex CLI returned a non-object JSON value.", ["role result must be an object"])
     result.setdefault("duration_ms", duration_ms)
     result.setdefault("artifacts", [])
+    role_result_contract = load_json(SCHEMAS / "role_result.schema.json")
+    allowed_next_actions = role_result_contract.get("enums", {}).get("next_action", [])
+    next_action = result.get("next_action")
+    if allowed_next_actions and next_action not in allowed_next_actions:
+        warnings = result.setdefault("warnings", [])
+        if isinstance(warnings, list):
+            warnings.append(f"Ignored non-contract next_action: {next_action}")
+        result["next_action"] = "continue" if result.get("status") == "completed" else "blocked"
     errors = validate_contract(result, output_contract, "role_result")
     if errors:
         return blocked_result("Codex CLI result failed schema validation.", errors)
@@ -343,9 +385,15 @@ def parse_jsonl_events(raw_stdout: str) -> tuple[str, dict[str, int], list[str]]
     return thread_id, usage, errors
 
 
-def write_raw_stream(request: dict[str, Any], manifest: dict[str, Any], raw_stdout: str) -> Path:
+def write_raw_stream(
+    request: dict[str, Any],
+    manifest: dict[str, Any],
+    raw_stdout: str,
+    *,
+    suffix: str = "",
+) -> Path:
     role = str(request["role"]).replace("/", "-")
-    path = raw_outputs_dir(request, manifest) / f"{role}.jsonl"
+    path = raw_outputs_dir(request, manifest) / f"{role}{suffix}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(raw_stdout, encoding="utf-8")
     return path
@@ -468,10 +516,19 @@ def run_codex(
         str(result_path),
         "-",
     ]
+    temp_dir: Path | None = None
     if str(request.get("filesystem_access", "")) == "evidence_write":
+        temp_dir = (
+            Path(str(request["artifacts_dir"])).resolve().parent
+            / "tmp"
+            / str(request["role"])
+        )
+        temp_dir.mkdir(parents=True, exist_ok=True)
         command[command.index("-"):command.index("-")] = [
             "--add-dir",
             str(Path(str(request["artifacts_dir"])).resolve()),
+            "--add-dir",
+            str(temp_dir),
         ]
     repository = Path(str(request["repository"]))
     env = os.environ.copy()
@@ -479,6 +536,11 @@ def run_codex(
     env["AGENT_ROLE_ALLOWED_TOOLS"] = json.dumps(request.get("allowed_tools", []))
     env["AGENT_ROLE_FILESYSTEM_ACCESS"] = str(request.get("filesystem_access", "read_only"))
     env["AGENT_TOOL_POLICY_PATH"] = str((Path(__file__).resolve().parents[2] / ".agent-tool-policy.yaml"))
+    if temp_dir is not None:
+        env["TMPDIR"] = str(temp_dir)
+    managed_tool_paths = repository_tool_paths(repository)
+    if managed_tool_paths:
+        env["PATH"] = os.pathsep.join([*(str(path) for path in managed_tool_paths), env.get("PATH", "")])
     before_snapshot = ""
     if not role_can_write_repository(str(request.get("filesystem_access", "read_only"))):
         before_snapshot = git_snapshot(repository)
@@ -495,48 +557,133 @@ def run_codex(
             env=env,
         )
     except FileNotFoundError as exc:
-        return blocked_result("Codex CLI command is missing.", [str(exc)])
+        return failure_result("Codex CLI command is missing.", [str(exc)], kind="tool_failure", error_type="FileNotFoundError")
     except PermissionError as exc:
-        return blocked_result("Codex CLI command is not executable.", [str(exc)])
+        return failure_result("Codex CLI command is not executable.", [str(exc)], kind="tool_failure", error_type="PermissionError")
     except subprocess.TimeoutExpired:
-        return blocked_result("Codex CLI command timed out.", [f"timeout after {timeout_seconds} seconds"])
+        return failure_result(
+            "Codex CLI command timed out.",
+            [f"timeout after {timeout_seconds} seconds"],
+            kind="transient",
+            error_type="TimeoutExpired",
+        )
     duration_ms = int((time.monotonic() - started) * 1000)
     write_raw_stream(request, manifest, completed.stdout)
     thread_id, usage, event_errors = parse_jsonl_events(completed.stdout)
     if completed.returncode != 0:
         output = (completed.stderr or completed.stdout).strip()
-        return blocked_result("Codex CLI command failed.", [output or f"exit {completed.returncode}"])
+        return failure_result(
+            "Codex CLI command failed.",
+            [output or f"exit {completed.returncode}"],
+            kind="runtime_failure",
+            error_type="RuntimeProcessFailure",
+        )
     if event_errors:
-        return blocked_result("Codex CLI emitted failure events.", event_errors)
+        return failure_result(
+            "Codex CLI emitted failure events.",
+            event_errors,
+            kind="runtime_failure",
+            error_type="RuntimeEventFailure",
+        )
     if before_snapshot and git_snapshot(repository) != before_snapshot:
-        return blocked_result(
+        return failure_result(
             "Read-only role changed repository contents.",
             ["git snapshot changed while sandbox was expected to be read-only"],
+            kind="policy_block",
+            error_type="ReadOnlyViolation",
         )
     try:
         result_stdout = result_path.read_text(encoding="utf-8")
     except OSError:
         result_stdout = completed.stdout
+    invalid_summaries = {
+        "Codex CLI returned malformed JSON.",
+        "Codex CLI returned a non-object JSON value.",
+        "Codex CLI result failed schema validation.",
+    }
+
+    def validate_candidate(candidate: dict[str, Any]) -> list[str]:
+        if candidate.get("summary") in invalid_summaries:
+            return [str(item) for item in candidate.get("blockers", [])]
+        errors = write_artifacts_from_result(request, candidate)
+        write_deterministic_artifacts(request, candidate)
+        errors.extend(validate_artifact_ownership(request, candidate))
+        if candidate.get("status") == "completed":
+            errors.extend(validate_expected_artifacts(request))
+        return errors
+
     result = parse_role_result(result_stdout, output_contract, duration_ms)
+    validation_errors = validate_candidate(result)
+    original_output = result_stdout
+    if validation_errors:
+        standard_schema = standard_role_result_schema(output_contract)
+        for repair_attempt in range(1, MAX_OUTPUT_REPAIR_ATTEMPTS + 1):
+            repair_path = raw_outputs_dir(request, manifest) / f"{str(request['role']).replace('/', '-')}-repair-{repair_attempt}-result.json"
+            repair_command = list(command)
+            repair_command[repair_command.index("--sandbox") + 1] = "read-only"
+            repair_command[repair_command.index("--output-last-message") + 1] = str(repair_path)
+            repair_prompt = "\n".join(
+                [
+                    "Original structured output:",
+                    original_output,
+                    "Schema:",
+                    json.dumps(standard_schema, ensure_ascii=False, sort_keys=True),
+                    "Validation errors:",
+                    json.dumps(validation_errors, ensure_ascii=False),
+                ]
+            )
+            try:
+                repaired = subprocess.run(
+                    repair_command,
+                    input=repair_prompt,
+                    cwd=repository,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=timeout_seconds,
+                    env=env,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                validation_errors = [f"output repair runtime failed: {type(exc).__name__}"]
+                continue
+            write_raw_stream(request, manifest, repaired.stdout, suffix=f"-repair-{repair_attempt}")
+            if repaired.returncode != 0:
+                validation_errors = [f"output repair exited {repaired.returncode}"]
+                continue
+            try:
+                repaired_output = repair_path.read_text(encoding="utf-8")
+            except OSError:
+                repaired_output = repaired.stdout
+            candidate = parse_role_result(repaired_output, output_contract, duration_ms)
+            candidate_errors = validate_candidate(candidate)
+            if not candidate_errors:
+                result = candidate
+                warnings = list(result.get("warnings", []))
+                warnings.append(f"Structured output repaired after {repair_attempt} validation-only attempt(s).")
+                result["warnings"] = warnings
+                result["output_repair_attempts"] = repair_attempt
+                break
+            validation_errors = candidate_errors
+        else:
+            result = failure_result(
+                "Structured output repair budget exhausted.",
+                validation_errors,
+                kind="invalid_output",
+                error_type="InvalidStructuredOutput",
+            )
+            result["_failure"]["repair_attempts"] = MAX_OUTPUT_REPAIR_ATTEMPTS
     if thread_id:
         result["thread_id"] = thread_id
     result["input_tokens"] = usage["input_tokens"]
     result["cached_input_tokens"] = usage["cached_input_tokens"]
     result["output_tokens"] = usage["output_tokens"]
     result["reasoning_output_tokens"] = usage["reasoning_output_tokens"]
-    uncached_input = max(usage["input_tokens"] - usage["cached_input_tokens"], 0)
-    usage_total = uncached_input + usage["output_tokens"]
+    usage_total = (
+        max(0, usage["input_tokens"] - usage["cached_input_tokens"])
+        + usage["output_tokens"]
+    )
     if usage_total:
         result["tokens_used"] = usage_total
-    artifact_errors = write_artifacts_from_result(request, result)
-    write_deterministic_artifacts(request, result)
-    artifact_errors.extend(validate_artifact_ownership(request, result))
-    if artifact_errors:
-        return blocked_result("Codex CLI returned invalid artifacts.", artifact_errors)
-    if result.get("status") == "completed":
-        artifact_errors = validate_expected_artifacts(request)
-        if artifact_errors:
-            return blocked_result("Codex CLI completed without required artifacts.", artifact_errors)
     return result
 
 

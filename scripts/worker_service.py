@@ -20,6 +20,8 @@ from typing import Any
 from approval_lifecycle import expire_approvals
 from task_queue import DEFAULT_DB, TaskQueue
 from worker_pool import WorkflowWorkerPool
+from ai_harness.recovery.models import sanitized_message
+from ai_harness.recovery.policy import load_recovery_policy
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,6 +66,7 @@ class WorkerService:
         poll_seconds: float = 2.0,
         state_path: Path = SERVICE_STATE,
         restart_count: int = 0,
+        max_consecutive_failures: int | None = None,
     ) -> None:
         if poll_seconds <= 0:
             raise ValueError("poll_seconds must be positive")
@@ -75,7 +78,14 @@ class WorkerService:
         self.poll_seconds = poll_seconds
         self.state_path = state_path
         self.stop_event = threading.Event()
-        self.restart_count = max(0, restart_count)
+        self.total_restart_count = max(0, restart_count)
+        self.consecutive_failure_count = 0
+        configured_failures = (
+            load_recovery_policy().max_consecutive_failures
+            if max_consecutive_failures is None
+            else max_consecutive_failures
+        )
+        self.max_consecutive_failures = max(1, configured_failures)
         self.worker_ids = [f"{service_id}-{index}" for index in range(1, workers + 1)]
         self.pool = WorkflowWorkerPool(
             queue=queue,
@@ -91,7 +101,7 @@ class WorkerService:
                 worker_id=worker_id,
                 service_id=self.service_id,
                 pid=os.getpid(),
-                restart_count=self.restart_count,
+                restart_count=self.total_restart_count,
                 metadata={"workers": self.workers},
             )
             self.queue.worker_heartbeat(worker_id)
@@ -105,7 +115,9 @@ class WorkerService:
                 "pid": os.getpid(),
                 "status": status,
                 "workers": self.worker_ids,
-                "restart_count": self.restart_count,
+                "restart_count": self.total_restart_count,
+                "total_restart_count": self.total_restart_count,
+                "consecutive_failure_count": self.consecutive_failure_count,
                 "heartbeat_at": datetime.now(timezone.utc).isoformat(),
                 "db": str(self.queue.path),
             },
@@ -123,19 +135,29 @@ class WorkerService:
 
     def serve(self, *, once: bool = False) -> int:
         self.register()
+        result_code = 0
         try:
             while not self.stop_event.is_set():
                 try:
                     records = self.pool.run_wave()
                     self.heartbeat()
                     expire_approvals()
-                except (OSError, RuntimeError, ValueError) as exc:
-                    self.restart_count += 1
-                    self.write_service_state("failed")
-                    if self.restart_count > 5:
-                        raise RuntimeError("worker service restart limit exceeded") from exc
-                    time.sleep(min(self.restart_count, 5))
-                    self.register()
+                    self.consecutive_failure_count = 0
+                except Exception as exc:
+                    self.total_restart_count += 1
+                    self.consecutive_failure_count += 1
+                    self.write_service_error(exc)
+                    status = (
+                        "unhealthy"
+                        if self.consecutive_failure_count >= self.max_consecutive_failures
+                        else "degraded"
+                    )
+                    self.write_service_state(status)
+                    result_code = 1
+                    if once:
+                        break
+                    delay = 30 if status == "unhealthy" else min(2 ** (self.consecutive_failure_count - 1), 10)
+                    self.stop_event.wait(delay)
                     continue
                 if once:
                     break
@@ -145,7 +167,28 @@ class WorkerService:
             for worker_id in self.worker_ids:
                 self.queue.stop_worker(worker_id)
             self.write_service_state("stopped")
-        return 0
+        return result_code
+
+    def write_service_error(self, exception: Exception) -> None:
+        try:
+            SERVICE_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with SERVICE_LOG.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(
+                        {
+                            "time": datetime.now(timezone.utc).isoformat(),
+                            "service_id": self.service_id,
+                            "error_type": type(exception).__name__,
+                            "message": sanitized_message(exception),
+                            "total_restart_count": self.total_restart_count,
+                            "consecutive_failure_count": self.consecutive_failure_count,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+        except OSError:
+            return
 
     def health(self) -> dict[str, Any]:
         workers = [record for record in self.queue.list_workers() if record.service_id == self.service_id]
@@ -159,7 +202,9 @@ class WorkerService:
             "pid": os.getpid(),
             "workers": [asdict(record) for record in workers],
             "stale_workers": sorted(stale),
-            "restart_count": self.restart_count,
+            "restart_count": self.total_restart_count,
+            "total_restart_count": self.total_restart_count,
+            "consecutive_failure_count": self.consecutive_failure_count,
         }
 
 

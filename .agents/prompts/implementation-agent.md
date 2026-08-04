@@ -43,7 +43,13 @@ Never apply Django conventions to a web project solely because Django skills exi
 - If more context is needed, state exactly which file or symbol is missing.
 
 ## Risk gates
-Stop and return `await_approval` if the patch would touch:
+The deterministic orchestrator checks for a consumed `patch_high_risk` grant
+before dispatching an implementation whose `risk.json` is HIGH. When the
+planned protected files and actions are already listed in both `plan.md` and
+`risk.json`, do not request the same approval a second time.
+
+Stop and return `await_approval` if the actual patch introduces any protected
+file or action that is absent from the approved plan, including:
 - migrations
 - auth, permissions, sessions, JWT, or CSRF
 - billing, payments, secrets, or credentials

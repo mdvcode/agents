@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import secrets
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -55,6 +57,18 @@ def write_approval(run_dir: Path, approval: dict[str, Any]) -> None:
     if errors:
         raise ApprovalError("invalid approval artifact: " + "; ".join(errors))
     write_json_atomic(run_dir / "artifacts" / "approval.json", approval)
+
+
+@contextmanager
+def approval_lock(run_dir: Path):
+    path = run_dir / "artifacts" / "approval.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def append_event(run_dir: Path, event: str, approval: dict[str, Any]) -> None:
@@ -158,33 +172,45 @@ def request_approval(
 ) -> dict[str, Any]:
     if ttl_seconds <= 0 or ttl_seconds > 86400:
         raise ApprovalError("approval ttl_seconds must be between 1 and 86400")
-    workflow = read_json(run_dir / "workflow.json")
-    if workflow.get("execution_status") != "awaiting_approval":
-        raise ApprovalError("workflow must be awaiting_approval before requesting approval")
-    role = checkpoint_role(workflow)
-    if not role:
-        raise ApprovalError("approval checkpoint role is missing")
-    now = utc_now()
-    requested_scope = canonical_scope(scope or default_scope(workflow, role))
-    approval = {
-        "run_id": str(workflow.get("run_id", run_dir.name)),
-        "approval_id": secrets.token_hex(16),
-        "status": "pending",
-        "requested_scope": requested_scope,
-        "approved_scope": {},
-        "checkpoint_role": role,
-        "checkpoint_fingerprint": checkpoint_fingerprint(workflow, role, reason),
-        "requested_at": iso(now),
-        "expires_at": iso(now + timedelta(seconds=ttl_seconds)),
-        "decided_at": "",
-        "decided_by": "",
-        "reason": reason,
-        "decision_reason": "",
-        "resume_count": 0,
-    }
-    write_approval(run_dir, approval)
-    append_event(run_dir, "approval.requested", approval)
-    return approval
+    with approval_lock(run_dir):
+        workflow = read_json(run_dir / "workflow.json")
+        if workflow.get("execution_status") != "awaiting_approval":
+            raise ApprovalError("workflow must be awaiting_approval before requesting approval")
+        role = checkpoint_role(workflow)
+        if not role:
+            raise ApprovalError("approval checkpoint role is missing")
+        now = utc_now()
+        requested_scope = canonical_scope(scope or default_scope(workflow, role))
+        fingerprint = checkpoint_fingerprint(workflow, role, reason)
+        approval_path = run_dir / "artifacts" / "approval.json"
+        if approval_path.exists():
+            current = expire_if_needed(run_dir, read_json(approval_path), now)
+            if current.get("status") in {"pending", "approved"}:
+                if (
+                    current.get("checkpoint_fingerprint") == fingerprint
+                    and current.get("requested_scope") == requested_scope
+                ):
+                    return current
+                raise ApprovalError("a different approval request is already active")
+        approval = {
+            "run_id": str(workflow.get("run_id", run_dir.name)),
+            "approval_id": secrets.token_hex(16),
+            "status": "pending",
+            "requested_scope": requested_scope,
+            "approved_scope": {},
+            "checkpoint_role": role,
+            "checkpoint_fingerprint": fingerprint,
+            "requested_at": iso(now),
+            "expires_at": iso(now + timedelta(seconds=ttl_seconds)),
+            "decided_at": "",
+            "decided_by": "",
+            "reason": reason,
+            "decision_reason": "",
+            "resume_count": 0,
+        }
+        write_approval(run_dir, approval)
+        append_event(run_dir, "approval.requested", approval)
+        return approval
 
 
 def expire_if_needed(run_dir: Path, approval: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
@@ -213,115 +239,145 @@ def approve_run(
 ) -> dict[str, Any]:
     if not actor.strip():
         raise ApprovalError("approval actor is required")
-    approval = expire_if_needed(run_dir, read_json(run_dir / "artifacts" / "approval.json"))
-    if approval.get("status") != "pending":
-        raise ApprovalError(f"approval is not pending: {approval.get('status')}")
-    approved_scope = canonical_scope(scope or approval["requested_scope"])
-    if not scope_covers(approval["requested_scope"], approved_scope):
-        raise ApprovalError("approved scope does not exactly match requested scope")
-    approval.update(
-        {
-            "status": "approved",
-            "approved_scope": approved_scope,
-            "decided_at": iso(utc_now()),
-            "decided_by": actor,
-            "decision_reason": reason,
-        }
-    )
-    write_approval(run_dir, approval)
-    append_event(run_dir, "approval.approved", approval)
-    return approval
+    with approval_lock(run_dir):
+        approval = expire_if_needed(run_dir, read_json(run_dir / "artifacts" / "approval.json"))
+        if approval.get("status") != "pending":
+            raise ApprovalError(f"approval is not pending: {approval.get('status')}")
+        approved_scope = canonical_scope(scope or approval["requested_scope"])
+        if not scope_covers(approval["requested_scope"], approved_scope):
+            raise ApprovalError("approved scope does not exactly match requested scope")
+        approval.update(
+            {
+                "status": "approved",
+                "approved_scope": approved_scope,
+                "decided_at": iso(utc_now()),
+                "decided_by": actor,
+                "decision_reason": reason,
+            }
+        )
+        write_approval(run_dir, approval)
+        append_event(run_dir, "approval.approved", approval)
+        return approval
 
 
 def reject_run(run_dir: Path, *, actor: str, reason: str) -> dict[str, Any]:
     if not actor.strip() or not reason.strip():
         raise ApprovalError("rejection actor and reason are required")
-    approval = expire_if_needed(run_dir, read_json(run_dir / "artifacts" / "approval.json"))
-    if approval.get("status") not in {"pending", "approved"}:
-        raise ApprovalError(f"approval cannot be rejected from {approval.get('status')}")
-    approval.update(
-        {
-            "status": "rejected",
-            "decided_at": iso(utc_now()),
-            "decided_by": actor,
-            "decision_reason": reason,
-        }
+    with approval_lock(run_dir):
+        approval = expire_if_needed(run_dir, read_json(run_dir / "artifacts" / "approval.json"))
+        if approval.get("status") not in {"pending", "approved"}:
+            raise ApprovalError(f"approval cannot be rejected from {approval.get('status')}")
+        approval.update(
+            {
+                "status": "rejected",
+                "decided_at": iso(utc_now()),
+                "decided_by": actor,
+                "decision_reason": reason,
+            }
+        )
+        workflow = read_json(run_dir / "workflow.json")
+        workflow["execution_status"] = "blocked"
+        workflow["blockers"] = [f"approval rejected: {reason}"]
+        write_json_atomic(run_dir / "workflow.json", workflow)
+        write_approval(run_dir, approval)
+        append_event(run_dir, "approval.rejected", approval)
+        append_error(run_dir, code="APPROVAL_REJECTED", message=f"The scoped approval was rejected: {reason}")
+        return approval
+
+
+def _matching_consumed_grant(workflow: dict[str, Any], approval: dict[str, Any]) -> bool:
+    approval_id = str(approval.get("approval_id", ""))
+    grants = workflow.get("approval_grants", [])
+    return (
+        workflow.get("execution_status") == "resuming"
+        and isinstance(grants, list)
+        and any(isinstance(item, dict) and item.get("approval_id") == approval_id for item in grants)
     )
-    workflow = read_json(run_dir / "workflow.json")
-    workflow["execution_status"] = "blocked"
-    workflow["blockers"] = [f"approval rejected: {reason}"]
-    write_json_atomic(run_dir / "workflow.json", workflow)
-    write_approval(run_dir, approval)
-    append_event(run_dir, "approval.rejected", approval)
-    append_error(run_dir, code="APPROVAL_REJECTED", message=f"The scoped approval was rejected: {reason}")
-    return approval
 
 
-def prepare_resume(run_dir: Path) -> dict[str, Any]:
+def _prepare_resume_locked(run_dir: Path) -> dict[str, Any]:
     approval = expire_if_needed(run_dir, read_json(run_dir / "artifacts" / "approval.json"))
+    workflow = read_json(run_dir / "workflow.json")
+    if approval.get("status") == "consumed":
+        if int(approval.get("resume_count", 0) or 0) != 1 or not _matching_consumed_grant(workflow, approval):
+            raise ApprovalError("consumed approval does not match the durable workflow grant")
+        return {"approval": approval, "workflow": workflow, "already_consumed": True}
     if approval.get("status") != "approved":
         raise ApprovalError(f"run requires an unexpired approved scope, got {approval.get('status')}")
     if not scope_covers(approval["requested_scope"], approval["approved_scope"]):
         raise ApprovalError("stored approved scope no longer matches requested scope")
-    workflow = read_json(run_dir / "workflow.json")
     role = str(approval.get("checkpoint_role", ""))
     actual = checkpoint_fingerprint(workflow, role, str(approval.get("reason", "")))
-    if actual != approval.get("checkpoint_fingerprint"):
+    if workflow.get("execution_status") == "awaiting_approval" and actual != approval.get("checkpoint_fingerprint"):
         raise ApprovalError("workflow checkpoint changed after approval request")
-    if workflow.get("execution_status") != "awaiting_approval":
+    if workflow.get("execution_status") not in {"awaiting_approval", "resuming"}:
         raise ApprovalError("workflow is not awaiting approval")
-    approval["status"] = "consumed"
-    approval["resume_count"] = int(approval.get("resume_count", 0)) + 1
-    workflow["execution_status"] = "resuming"
-    workflow["resume_role"] = role
-    workflow["approval_override"] = {
-        "approval_id": approval["approval_id"],
-        "gate": role,
-        "scope": approval["approved_scope"],
-    }
-    grants = workflow.get("approval_grants", [])
-    if not isinstance(grants, list):
-        grants = []
-    grants.append(
-        {
+    if not _matching_consumed_grant(workflow, approval):
+        workflow["execution_status"] = "resuming"
+        workflow["resume_role"] = role
+        workflow["approval_override"] = {
             "approval_id": approval["approval_id"],
             "gate": role,
             "scope": approval["approved_scope"],
-            "granted_at": approval["decided_at"],
-            "reason": approval["reason"],
         }
-    )
-    workflow["approval_grants"] = grants
+        grants = workflow.get("approval_grants", [])
+        if not isinstance(grants, list):
+            grants = []
+        if not any(
+            isinstance(item, dict) and item.get("approval_id") == approval["approval_id"]
+            for item in grants
+        ):
+            grants.append(
+                {
+                    "approval_id": approval["approval_id"],
+                    "gate": role,
+                    "scope": approval["approved_scope"],
+                    "granted_at": approval["decided_at"],
+                    "reason": approval["reason"],
+                }
+            )
+        workflow["approval_grants"] = grants
+        # Workflow authority is written first. If the process dies next, a retry
+        # can reconcile the still-approved artifact without applying the grant twice.
+        write_json_atomic(run_dir / "workflow.json", workflow)
+    approval["status"] = "consumed"
+    approval["resume_count"] = 1
     write_approval(run_dir, approval)
-    write_json_atomic(run_dir / "workflow.json", workflow)
     append_event(run_dir, "approval.consumed", approval)
-    return {"approval": approval, "workflow": workflow}
+    return {"approval": approval, "workflow": workflow, "already_consumed": False}
+
+
+def prepare_resume(run_dir: Path) -> dict[str, Any]:
+    with approval_lock(run_dir):
+        return _prepare_resume_locked(run_dir)
 
 
 def resume_run(run_dir: Path, *, queue: TaskQueue) -> tuple[dict[str, Any], TaskRecord]:
     """Consume an approval and enqueue continuation from the same run/worktree."""
-    result = prepare_resume(run_dir)
-    workflow = result["workflow"]
-    approval = result["approval"]
-    record = queue.enqueue(
-        task_key=f"resume:{run_dir.name}:{approval['approval_id']}",
-        payload={
-            "task_id": str(workflow.get("task_id", "task")),
-            "goal": str(workflow.get("goal", workflow.get("task_id", "task"))),
-            "project": str(workflow.get("project", "agent_workspace")),
-            "repository": str(workflow.get("repository", "")),
-            "branch": str(workflow.get("branch", "")),
-            "base_branch": str(workflow.get("base_branch", "main")),
-            "run_id": run_dir.name,
-            "source": "approval",
-            "event_id": str(approval["approval_id"]),
-        },
-        priority=100,
-        max_retries=2,
-        run_id=run_dir.name,
-    )
-    append_event(run_dir, "workflow.resume_queued", approval)
-    return result, record
+    with approval_lock(run_dir):
+        result = _prepare_resume_locked(run_dir)
+        workflow = result["workflow"]
+        approval = result["approval"]
+        record = queue.enqueue(
+            task_key=f"resume:{run_dir.name}:{approval['approval_id']}",
+            payload={
+                "task_id": str(workflow.get("task_id", "task")),
+                "goal": str(workflow.get("goal", workflow.get("task_id", "task"))),
+                "project": str(workflow.get("project", "agent_workspace")),
+                "repository": str(workflow.get("repository", "")),
+                "branch": str(workflow.get("branch", "")),
+                "base_branch": str(workflow.get("base_branch", "main")),
+                "run_id": run_dir.name,
+                "source": "approval",
+                "event_id": str(approval["approval_id"]),
+            },
+            priority=100,
+            max_retries=2,
+            run_id=run_dir.name,
+        )
+        if not result["already_consumed"]:
+            append_event(run_dir, "workflow.resume_queued", approval)
+        return result, record
 
 
 def expire_approvals(runs_dir: Path = RUNS_DIR) -> list[str]:

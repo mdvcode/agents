@@ -2,7 +2,7 @@
 
 ## Product UX
 
-The control plane is packaged as `ai-harness` and exposes `agent init`, `agent task`, `agent status`, and `agent doctor`. One pipx installation can serve multiple repositories without submodules. Each initialized repository owns `.agent/project.yaml`; this config selects local execution identity and the existing Codex CLI runtime, while central Harness policy continues to own publication and side-effect authorization.
+The control plane is packaged as `ai-harness` and exposes project intake/status/doctor commands plus structured failure, retry, resume, abort, and dead-letter recovery commands. One pipx installation can serve multiple repositories without submodules. Each initialized repository owns `.agent/project.yaml`; this config selects local execution identity and the existing Codex CLI runtime, while central Harness policy continues to own publication, recovery policy, and side-effect authorization.
 
 ## Current State
 - The repository has a good role split: planner, risk classifier, implementation agent, test generator, quality runner, security agent, reviewer, report agent, and orchestrator.
@@ -56,8 +56,9 @@ Security routing is severity-aware. A `critical` finding returns a hard `blocked
 - Security, code review, architecture consistency, semantic conflict, and frontend/user-flow checks are separate read-only verifiers with one shared verdict contract.
 - UI verification may report `works` only with a real loopback development server, Playwright interaction evidence, screenshots, and console/network observations. `unavailable` keeps publication in draft when evidence is required; `broken` enters the bounded frontend repair loop.
 - Task Intake creates the worktree before implementation. Publication validates and reuses the worktree and branch recorded in `workflow.json`; it does not copy changes into a publication-only checkout.
-- `scripts/task_queue.py` provides an idempotent SQLite queue with atomic leases, heartbeats, retries, and dead letters. `scripts/worker_pool.py` runs three workers by default.
-- `scripts/worker_service.py` is the operational wrapper: registered slots, daemon start/restart/stop, health, graceful draining, heartbeat monitoring, and bounded internal restart handling.
+- `ai_harness/recovery/` and `.agent-recovery.yaml` own sanitized failure records, bounded recovery decisions, role checkpoints, backoff, validation-only output repair, and idempotency probes.
+- `scripts/task_queue.py` provides an idempotent SQLite queue with atomic leases, recovery scheduling, explicit retry/repair/resume/approval/dead-letter states, and compatible schema evolution. `scripts/worker_pool.py` runs three isolated workers by default.
+- `scripts/worker_service.py` is the operational wrapper: registered slots, daemon start/restart/stop, health, graceful draining, heartbeat monitoring, task-failure isolation, and consecutive system-failure degradation.
 - `.agent-queue/tasks.db` contains only scheduling state. Task workflow state remains authoritative under `.agent-runs/<run-id>/`.
 - `scripts/list_runs.py` exposes human exceptions without transcripts. `.agent-tool-policy.yaml` governs tool roles/actions/domains/credentials/timeouts and writes sanitized decisions to each run's tool-call audit.
 - `scripts/approval_lifecycle.py` owns scoped approval request/approve/reject/expire/consume transitions. A consumed approval queues the same `run_id`; `agent_role_runner.py --resume` reuses the recorded worktree and checkpoint.

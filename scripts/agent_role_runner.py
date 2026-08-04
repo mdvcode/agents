@@ -18,6 +18,9 @@ from urllib.parse import urlparse
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+HARNESS_ROOT = SCRIPT_DIR.parent
+if str(HARNESS_ROOT) not in sys.path:
+    sys.path.insert(0, str(HARNESS_ROOT))
 
 from approval_lifecycle import ApprovalError, request_approval
 from context_compiler import create_context_manifest, role_capability, role_contract
@@ -39,9 +42,18 @@ from tool_preflight import role_tool_preflight
 from validate_artifacts import validate_required as validate_artifact_required
 from workflow_router import decide_next_role, load_yaml
 from worktree_manager import create_worktree, slug
+from ai_harness.recovery import RecoveryCoordinator, classify_failure, load_recovery_policy
+from ai_harness.recovery.checkpoints import (
+    CheckpointError,
+    RoleCheckpoint,
+    read_checkpoint,
+    resume_operation as checkpoint_resume_operation,
+    write_checkpoint,
+)
+from ai_harness.recovery.models import FailureRecord, persist_failure
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = HARNESS_ROOT
 PROMPTS = ROOT / ".agents" / "prompts"
 RUNS = ROOT / ".agent-runs"
 SCHEMAS = ROOT / "schemas"
@@ -133,6 +145,143 @@ def blocked_result(summary: str, blockers: list[str]) -> dict[str, Any]:
         "tokens_used": 0,
         "duration_ms": 0,
     }
+
+
+def persist_control_failure(
+    layout: RunLayout,
+    state: dict[str, Any],
+    *,
+    role: str,
+    stage: str,
+    kind: str,
+    error_type: str,
+    message: str,
+) -> FailureRecord:
+    """Persist a structured record for harness failures outside a role runtime."""
+    failure = FailureRecord.create(
+        run_id=layout.run_id,
+        task_id=str(state.get("task_id", "task")),
+        role=role,
+        stage=stage,
+        kind=kind,
+        error_type=error_type,
+        message=message,
+        retryable=kind in {"transient", "runtime_failure", "tool_failure", "internal_error"},
+        repairable=kind in {"invalid_output", "verification_failure"},
+        checkpoint=f"before_{role.replace('-', '_')}",
+    )
+    persist_failure(layout.root, failure)
+    state["failure_id"] = failure.failure_id
+    state["failure_kind"] = failure.kind
+    return failure
+
+
+def role_checkpoint(
+    *,
+    run_dir: Path,
+    run_id: str,
+    role: str,
+    state_name: str,
+    attempt: int,
+    worktree: Path,
+    input_fingerprint: str,
+    result: dict[str, Any] | None = None,
+) -> None:
+    output_fingerprint = ""
+    artifacts: list[str] = []
+    if result is not None:
+        output_fingerprint = "sha256:" + hashlib.sha256(
+            json.dumps(result, sort_keys=True, ensure_ascii=True, default=str).encode("utf-8")
+        ).hexdigest()
+        artifacts = [str(item) for item in result.get("artifacts_created", []) if isinstance(item, str)]
+    write_checkpoint(
+        run_dir,
+        RoleCheckpoint(
+            run_id=run_id,
+            role=role,
+            state=state_name,
+            attempt=max(1, attempt),
+            worktree=str(worktree.resolve()),
+            input_fingerprint=input_fingerprint,
+            output_fingerprint=output_fingerprint,
+            artifacts=artifacts,
+        ),
+    )
+
+
+def schedule_role_recovery(
+    *,
+    layout: RunLayout,
+    state: dict[str, Any],
+    role: str,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    policy = load_recovery_policy()
+    hint = result.get("_failure", {})
+    preliminary = classify_failure(
+        None,
+        None,
+        state,
+        result,
+        layout.artifacts,
+        run_id=layout.run_id,
+        task_id=str(state.get("task_id", "task")),
+        role=role,
+        stage="runtime_execute",
+    )
+    configured = policy.for_kind(preliminary.kind)
+    recovery = state.get("recovery", {})
+    if not isinstance(recovery, dict):
+        recovery = {}
+    by_kind = recovery.get("attempts_by_kind", {})
+    if not isinstance(by_kind, dict):
+        by_kind = {}
+    attempt = int(by_kind.get(preliminary.kind, 0) or 0) + 1
+    if isinstance(hint, dict) and int(hint.get("repair_attempts", 0) or 0) >= configured.max_attempts:
+        attempt = max(attempt, configured.max_attempts + 1)
+    checkpoint = f"before_{role.replace('-', '_')}"
+    failure = classify_failure(
+        None,
+        None,
+        state,
+        result,
+        layout.artifacts,
+        run_id=layout.run_id,
+        task_id=str(state.get("task_id", "task")),
+        role=role,
+        stage="runtime_execute",
+        checkpoint=checkpoint,
+        attempt=attempt,
+        max_attempts=configured.max_attempts,
+    )
+    decision = RecoveryCoordinator().decide(failure, state, policy)
+    persist_failure(layout.root, failure)
+    by_kind[failure.kind] = attempt
+    recovery.update(
+        {
+            "started_at": float(recovery.get("started_at", time.time()) or time.time()),
+            "attempts": int(recovery.get("attempts", 0) or 0) + 1,
+            "consecutive_failures": int(recovery.get("consecutive_failures", 0) or 0) + 1,
+            "resume_attempts": int(recovery.get("resume_attempts", 0) or 0) + (1 if decision.action == "resume" else 0),
+            "attempts_by_kind": by_kind,
+        }
+    )
+    recovery["elapsed_seconds"] = int(max(0, time.time() - float(recovery["started_at"])))
+    state.update(
+        {
+            "execution_status": decision.next_status,
+            "current_role": role,
+            "resume_role": role,
+            "resume_from": checkpoint,
+            "failure_id": failure.failure_id,
+            "failure_kind": failure.kind,
+            "recovery_action": decision.action,
+            "recovery_reason": decision.reason,
+            "retry_after_seconds": decision.delay_seconds,
+            "recovery": recovery,
+        }
+    )
+    return {"failure": failure.as_json(), "decision": decision.as_json()}
 
 
 def artifact_result(summary: str, artifacts_created: list[str], next_action: str = "continue") -> dict[str, Any]:
@@ -911,6 +1060,8 @@ def run_roles(
     context_dir = layout.context
     requests_dir = layout.requests
     raw_dir = layout.raw_events
+    resume_cached_result: dict[str, Any] | None = None
+    checkpoint_problem = ""
     if resume:
         state = existing
         state["tokens_used"] = sum(
@@ -946,6 +1097,28 @@ def run_roles(
                     role = candidate
         if role not in ROLE_CHAIN:
             setup_errors.append("resume checkpoint role is invalid or missing")
+        else:
+            try:
+                stored_checkpoint = read_checkpoint(run_dir, role)
+                if stored_checkpoint is not None:
+                    if Path(stored_checkpoint.worktree).resolve() != worktree:
+                        raise CheckpointError("checkpoint worktree does not match authoritative workflow")
+                    operation = checkpoint_resume_operation(stored_checkpoint)
+                    if operation == "validate_output":
+                        pending_path = layout.role_results / f"{role}-pending.json"
+                        pending = load_json(pending_path)
+                        cached = pending.get("result") if isinstance(pending, dict) else None
+                        if not isinstance(cached, dict):
+                            raise CheckpointError("validation checkpoint is missing cached role output")
+                        resume_cached_result = cached
+                    elif operation == "next_role":
+                        last_route = state.get("last_route", {})
+                        next_role = str(last_route.get("next_role", "")) if isinstance(last_route, dict) else ""
+                        if next_role in ROLE_CHAIN:
+                            role = next_role
+            except (CheckpointError, OSError, json.JSONDecodeError, ValueError) as exc:
+                checkpoint_problem = str(exc)
+                setup_errors.append(checkpoint_problem)
         state["execution_status"] = "running"
         state["resume_count"] = int(state.get("resume_count", 0)) + 1
         state["resumed_at"] = datetime.now(timezone.utc).isoformat()
@@ -1020,6 +1193,33 @@ def run_roles(
         append_trace(layout, {"event": "workflow_started", "workflow": workflow, "task_id": task_id})
     write_json(layout.workflow, state)
     write_metrics(layout, state)
+    if checkpoint_problem:
+        failure = FailureRecord.create(
+            run_id=run_id,
+            task_id=task_id,
+            role=role or "resume",
+            stage="checkpoint_resume",
+            kind="unrecoverable",
+            error_type="CorruptedCheckpoint",
+            message=checkpoint_problem,
+            retryable=False,
+            repairable=False,
+            checkpoint=str(state.get("resume_from", "")),
+        )
+        persist_failure(layout.root, failure)
+        state.update(
+            {
+                "execution_status": "dead_letter",
+                "failure_id": failure.failure_id,
+                "failure_kind": failure.kind,
+                "recovery_action": "dead_letter",
+                "recovery_reason": "checkpoint cannot be resumed safely",
+                "blockers": [checkpoint_problem],
+            }
+        )
+        write_json(layout.workflow, state)
+        write_metrics(layout, state)
+        return state
     if setup_errors:
         state["execution_status"] = "blocked"
         state["blockers"] = setup_errors
@@ -1032,6 +1232,11 @@ def run_roles(
             message="Task worktree setup failed.",
             details=setup_errors,
         )
+        persist_control_failure(
+            layout, state, role="issue-intake", stage="worktree", kind="tool_failure",
+            error_type="WorktreeSetupFailed", message="; ".join(setup_errors),
+        )
+        write_json(layout.workflow, state)
         write_metrics(layout, state)
         return state
 
@@ -1052,6 +1257,11 @@ def run_roles(
             message="Configured runtime preflight failed.",
             details=state["blockers"],
         )
+        persist_control_failure(
+            layout, state, role="issue-intake", stage="runtime-preflight", kind="runtime_failure",
+            error_type="RuntimePreflightBlocked", message="; ".join(state["blockers"]),
+        )
+        write_json(layout.workflow, state)
         write_metrics(layout, state)
         return state
     prior_roles = [
@@ -1077,11 +1287,35 @@ def run_roles(
         guard += 1
         role_visits[role] = role_visits.get(role, 0) + 1
         role_started = time.monotonic()
+        state["current_role"] = role
+        state["resume_role"] = role
+        write_json(layout.workflow, state)
+        role_checkpoint(
+            run_dir=run_dir,
+            run_id=run_id,
+            role=role,
+            state_name="role_pending",
+            attempt=role_visits[role],
+            worktree=worktree,
+            input_fingerprint=fingerprint,
+        )
+        role_checkpoint(
+            run_dir=run_dir,
+            run_id=run_id,
+            role=role,
+            state_name="role_running",
+            attempt=role_visits[role],
+            worktree=worktree,
+            input_fingerprint=fingerprint,
+        )
         artifact_contents_before = file_contents_snapshot(run_artifacts)
         artifact_snapshot_before = file_snapshot(run_artifacts)
         role_repo_snapshot_before = git_snapshot(worktree)
         max_roles = int(state.get("budgets", {}).get("max_roles", 40))
-        if guard > max_roles:
+        if resume_cached_result is not None:
+            result = resume_cached_result
+            resume_cached_result = None
+        elif guard > max_roles:
             result = blocked_result("Workflow routing exceeded the safety limit.", ["dynamic routing loop detected"])
         elif role == "issue-intake":
             result = run_issue_intake(
@@ -1182,9 +1416,44 @@ def run_roles(
                         artifacts=run_artifacts,
                     )
 
+        role_checkpoint(
+            run_dir=run_dir,
+            run_id=run_id,
+            role=role,
+            state_name="role_output_received",
+            attempt=role_visits[role],
+            worktree=worktree,
+            input_fingerprint=fingerprint,
+            result=result,
+        )
+        if not isinstance(result.get("_failure"), dict):
+            write_json(
+                layout.role_results / f"{role}-pending.json",
+                {
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "role": role,
+                    "state": "role_output_received",
+                    "result": result,
+                },
+            )
+        role_checkpoint(
+            run_dir=run_dir,
+            run_id=run_id,
+            role=role,
+            state_name="role_validating",
+            attempt=role_visits[role],
+            worktree=worktree,
+            input_fingerprint=fingerprint,
+            result=result,
+        )
         result_errors = validate_role_result(result, role)
         if result_errors:
             result = blocked_result("Role result failed schema validation.", result_errors)
+            result["_failure"] = {
+                "kind": "invalid_output",
+                "error_type": "InvalidStructuredOutput",
+                "message": "Role result failed schema validation.",
+            }
         deterministic_created = ensure_deterministic_role_artifacts(role, run_artifacts, project_profile)
         if deterministic_created and result.get("status") == "completed":
             created = list(result.get("artifacts_created", []))
@@ -1234,6 +1503,11 @@ def run_roles(
             )
             if artifact_errors:
                 result = blocked_result("Role artifact validation failed.", artifact_errors)
+                result["_failure"] = {
+                    "kind": "invalid_output",
+                    "error_type": "InvalidArtifactOutput",
+                    "message": "Role artifact validation failed.",
+                }
         checkpoint = {
             "time": datetime.now(timezone.utc).isoformat(),
             "role": role,
@@ -1244,9 +1518,54 @@ def run_roles(
             "result": result,
         }
         state["roles"].append(checkpoint)
-        completed_roles.append(role)
+        if result.get("status") == "completed":
+            completed_roles.append(role)
         write_json(layout.role_results / f"{role}-{role_visits[role]}.json", checkpoint)
         append_trace(layout, {"event": "role_completed", "role": role, "result": result})
+        if isinstance(result.get("_failure"), dict):
+            pending_path = layout.role_results / f"{role}-pending.json"
+            if pending_path.exists():
+                pending_path.unlink()
+            role_checkpoint(
+                run_dir=run_dir,
+                run_id=run_id,
+                role=role,
+                state_name="role_running",
+                attempt=role_visits[role],
+                worktree=worktree,
+                input_fingerprint=fingerprint,
+            )
+            recovery_event = schedule_role_recovery(
+                layout=layout,
+                state=state,
+                role=role,
+                result=result,
+            )
+            state["role_count"] = len(state["roles"])
+            state["tokens_used"] = sum(
+                role_budget_tokens(item.get("result", {}))
+                for item in state["roles"]
+                if isinstance(item, dict) and isinstance(item.get("result"), dict)
+            )
+            state["elapsed_seconds"] = elapsed_before_resume + int(time.monotonic() - workflow_started)
+            write_json(layout.workflow, state)
+            write_metrics(layout, state)
+            append_trace(layout, {"event": "role_recovery_scheduled", "role": role, **recovery_event})
+            if state["execution_status"] == "awaiting_approval":
+                try:
+                    request_approval(layout.root, reason=str(state.get("recovery_reason", "recovery approval required")))
+                except ApprovalError as exc:
+                    state["execution_status"] = "blocked"
+                    state["blockers"] = [f"approval request failed: {exc}"]
+                    persist_control_failure(
+                        layout, state, role="approval-gate", stage="approval",
+                        kind="internal_error", error_type="ApprovalRequestFailed", message=str(exc),
+                    )
+                    write_json(layout.workflow, state)
+            state["base_branch_sha_after"] = git_ref_sha(repository, effective_base)
+            write_json(layout.workflow, state)
+            write_metrics(layout, state)
+            return state
         if result.get("status") != "completed":
             record_failure(
                 layout,
@@ -1256,6 +1575,24 @@ def run_roles(
                 message=str(result.get("summary", "Role did not complete.")),
                 details=[str(item) for item in result.get("blockers", [])],
             )
+            persist_control_failure(
+                layout, state, role=role, stage="role", kind="human_input_required",
+                error_type="RoleNotCompleted", message=str(result.get("summary", "Role did not complete.")),
+            )
+        else:
+            role_checkpoint(
+                run_dir=run_dir,
+                run_id=run_id,
+                role=role,
+                state_name="role_completed",
+                attempt=role_visits[role],
+                worktree=worktree,
+                input_fingerprint=fingerprint,
+                result=result,
+            )
+            pending_path = layout.role_results / f"{role}-pending.json"
+            if pending_path.exists():
+                pending_path.unlink()
 
         state["role_count"] = len(state["roles"])
         state["tokens_used"] = sum(
@@ -1291,6 +1628,10 @@ def run_roles(
                 code="INVALID_ROUTE_CONTRACT",
                 message=route["reason"],
                 details=route_errors,
+            )
+            persist_control_failure(
+                layout, state, role=role, stage="routing", kind="internal_error",
+                error_type="InvalidRouteContract", message="; ".join(route_errors),
             )
         state["last_route"] = route
         write_json(layout.workflow, state)
@@ -1339,6 +1680,10 @@ def run_roles(
                         message="Could not create scoped approval request.",
                         details=[str(exc)],
                     )
+                    persist_control_failure(
+                        layout, state, role="approval-gate", stage="approval",
+                        kind="internal_error", error_type="ApprovalRequestFailed", message=str(exc),
+                    )
                 append_trace(layout, {"event": "workflow_awaiting_approval", "reason": route["reason"]})
                 record_failure(
                     layout,
@@ -1359,6 +1704,10 @@ def run_roles(
                     code="ROUTER_BLOCKED",
                     message=route["reason"],
                     details=route.get("warnings", []),
+                )
+                persist_control_failure(
+                    layout, state, role=role, stage="routing", kind="human_input_required",
+                    error_type="RouterBlocked", message=route["reason"],
                 )
             break
         role = route["next_role"]

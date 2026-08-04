@@ -1,0 +1,5 @@
+{
+  "required": ["run_id", "role", "state", "attempt", "worktree", "input_fingerprint", "output_fingerprint", "artifacts", "side_effects", "created_at"],
+  "enums": {"state": ["role_pending", "role_running", "role_output_received", "role_validating", "role_completed"]},
+  "types": {"run_id": "str", "role": "str", "state": "str", "attempt": "int", "worktree": "str", "input_fingerprint": "str", "output_fingerprint": "str", "artifacts": "list", "side_effects": "list", "created_at": "str"}
+}

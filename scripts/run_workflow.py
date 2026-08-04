@@ -31,7 +31,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ai_harness.observability import TelemetryRuntime
+from ai_harness.observability import safe_telemetry_runtime
+from ai_harness.recovery import RecoveryCoordinator, classify_failure, load_recovery_policy
+from ai_harness.recovery.checkpoints import RoleCheckpoint, write_checkpoint
+from ai_harness.recovery.models import FailureRecord, persist_failure
 
 WORKFLOWS = ROOT / ".agent-workflows.yaml"
 RUNS_DIR = ROOT / ".agent-runs"
@@ -41,6 +44,22 @@ DEFAULT_BUDGETS = {
     "max_repair_iterations": 12,
     "max_duration_seconds": 7200,
     "max_tokens": 300000,
+}
+EXIT_COMPLETED = 0
+EXIT_AWAITING_APPROVAL = 10
+EXIT_RETRYABLE_FAILURE = 20
+EXIT_REPAIRABLE_FAILURE = 21
+EXIT_RESUMABLE_FAILURE = 22
+EXIT_DEAD_LETTER = 30
+EXIT_UNRECOVERABLE_FAILURE = 40
+EXIT_INVALID_HARNESS_STATE = 50
+RECOVERY_EXIT_CODES = {
+    "retry": EXIT_RETRYABLE_FAILURE,
+    "repair": EXIT_REPAIRABLE_FAILURE,
+    "resume": EXIT_RESUMABLE_FAILURE,
+    "approval": EXIT_AWAITING_APPROVAL,
+    "dead_letter": EXIT_DEAD_LETTER,
+    "fail": EXIT_UNRECOVERABLE_FAILURE,
 }
 
 
@@ -134,6 +153,97 @@ def quote_placeholder(value: str | Path) -> str:
     return shlex.quote(str(value))
 
 
+def read_workflow_state(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def write_workflow_state(path: Path, state: dict[str, Any]) -> None:
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def recovery_attempt(state: dict[str, Any], kind: str) -> int:
+    recovery = state.get("recovery", {})
+    by_kind = recovery.get("attempts_by_kind", {}) if isinstance(recovery, dict) else {}
+    return int(by_kind.get(kind, 0) or 0) + 1 if isinstance(by_kind, dict) else 1
+
+
+def record_recovery_failure(
+    *,
+    layout: RunLayout,
+    state: dict[str, Any],
+    process_returncode: int,
+    message: str,
+    step: str,
+) -> tuple[int, dict[str, Any]]:
+    policy = load_recovery_policy()
+    role = str(state.get("current_role", step))
+    preliminary = classify_failure(
+        RuntimeError(message),
+        process_returncode,
+        state,
+        run_id=layout.run_id,
+        task_id=str(state.get("task_id", "task")),
+        role=role,
+        stage="workflow_step",
+    )
+    configured = policy.for_kind(preliminary.kind)
+    attempt = recovery_attempt(state, preliminary.kind)
+    checkpoint = f"before_{role.replace('-', '_')}"
+    failure = classify_failure(
+        RuntimeError(message),
+        process_returncode,
+        state,
+        run_id=layout.run_id,
+        task_id=str(state.get("task_id", "task")),
+        role=role,
+        stage="workflow_step",
+        checkpoint=checkpoint,
+        attempt=attempt,
+        max_attempts=configured.max_attempts,
+    )
+    decision = RecoveryCoordinator().decide(failure, state, policy)
+    persist_failure(layout.root, failure)
+    recovery = state.get("recovery", {})
+    if not isinstance(recovery, dict):
+        recovery = {}
+    by_kind = recovery.get("attempts_by_kind", {})
+    if not isinstance(by_kind, dict):
+        by_kind = {}
+    by_kind[failure.kind] = attempt
+    recovery.update(
+        {
+            "started_at": float(recovery.get("started_at", time.time()) or time.time()),
+            "attempts": int(recovery.get("attempts", 0) or 0) + 1,
+            "consecutive_failures": int(recovery.get("consecutive_failures", 0) or 0) + 1,
+            "resume_attempts": int(recovery.get("resume_attempts", 0) or 0) + (1 if decision.action == "resume" else 0),
+            "attempts_by_kind": by_kind,
+        }
+    )
+    recovery["elapsed_seconds"] = int(max(0, time.time() - float(recovery["started_at"])))
+    state.update(
+        {
+            "execution_status": decision.next_status,
+            "current_role": role,
+            "resume_role": role,
+            "resume_from": failure.checkpoint,
+            "failure_id": failure.failure_id,
+            "failure_kind": failure.kind,
+            "recovery_action": decision.action,
+            "recovery_reason": decision.reason,
+            "retry_after_seconds": decision.delay_seconds,
+            "recovery": recovery,
+        }
+    )
+    write_workflow_state(layout.workflow, state)
+    return RECOVERY_EXIT_CODES[decision.action], failure.as_json()
+
+
 def run_workflow(
     workflow_name: str,
     dry_run: bool = False,
@@ -155,7 +265,7 @@ def run_workflow(
     workflow = workflows.get("workflows", {}).get(workflow_name)
     if not isinstance(workflow, dict):
         print(f"unknown workflow: {workflow_name}")
-        return 2
+        return EXIT_INVALID_HARNESS_STATE
     project_value = project or "agent_workspace"
     goal_value = goal or task_id
     branch_value = branch or f"issue/{task_id}"
@@ -187,7 +297,7 @@ def run_workflow(
     artifacts_dir = layout.artifacts
     budgets = workflow_budgets(workflow)
     started = time.monotonic()
-    telemetry = TelemetryRuntime(
+    telemetry = safe_telemetry_runtime(
         run_dir=run_dir,
         service_name="ai-harness-workflow",
         service_instance_id=run_id,
@@ -256,6 +366,11 @@ def run_workflow(
             + "\n",
             encoding="utf-8",
         )
+    elif resume:
+        resume_state = read_workflow_state(workflow_state_path)
+        if resume_state.get("execution_status") in {"retry_wait", "repairing", "resuming"}:
+            resume_state["execution_status"] = "resuming"
+            write_workflow_state(workflow_state_path, resume_state)
     append_trace(
         layout,
         {
@@ -273,6 +388,30 @@ def run_workflow(
         root_span.add_event("workflow.iteration", {"iteration": iteration})
         for step in steps:
             if time.monotonic() - started > budgets["max_duration_seconds"]:
+                state_data = read_workflow_state(workflow_state_path)
+                failure = FailureRecord.create(
+                    run_id=run_id,
+                    task_id=task_id,
+                    role=str(state_data.get("current_role", "workflow")),
+                    stage="budget",
+                    kind="human_input_required",
+                    error_type="WorkflowDurationExceeded",
+                    message="max_duration_seconds exceeded",
+                    retryable=False,
+                    repairable=False,
+                    checkpoint=f"before_{str(state_data.get('current_role', 'workflow')).replace('-', '_')}",
+                )
+                persist_failure(layout.root, failure)
+                state_data.update(
+                    {
+                        "execution_status": "awaiting_approval",
+                        "failure_id": failure.failure_id,
+                        "failure_kind": failure.kind,
+                        "recovery_action": "approval",
+                        "recovery_reason": "workflow duration budget exceeded",
+                    }
+                )
+                write_workflow_state(workflow_state_path, state_data)
                 append_trace(
                     layout,
                     {
@@ -282,8 +421,22 @@ def run_workflow(
                     },
                 )
                 print(str(run_dir))
-                return finish(1, "awaiting_approval")
+                return finish(EXIT_AWAITING_APPROVAL, "awaiting_approval")
             name = str(step.get("name", "step"))
+            current_state = read_workflow_state(workflow_state_path)
+            checkpoint_role = name
+            checkpoint_attempt = recovery_attempt(current_state, str(current_state.get("failure_kind", "runtime_failure")))
+            write_checkpoint(
+                run_dir,
+                RoleCheckpoint(
+                    run_id=run_id,
+                    role=checkpoint_role,
+                    state="role_pending",
+                    attempt=max(1, checkpoint_attempt),
+                    worktree=str(current_state.get("worktree", repository_value)),
+                    input_fingerprint=fingerprint,
+                ),
+            )
             command = str(step.get("command", ""))
             command = (
                 command.replace("{run_id}", quote_placeholder(run_id))
@@ -335,6 +488,17 @@ def run_workflow(
                     },
                     context=root_context,
                 ) as step_span:
+                    write_checkpoint(
+                        run_dir,
+                        RoleCheckpoint(
+                            run_id=run_id,
+                            role=checkpoint_role,
+                            state="role_running",
+                            attempt=max(1, checkpoint_attempt),
+                            worktree=str(current_state.get("worktree", repository_value)),
+                            input_fingerprint=fingerprint,
+                        ),
+                    )
                     step_started = time.monotonic()
                     returncode, stdout, stderr = run_command(command, root, workflow_timeout_seconds)
                     step_span.set_attribute("step.return_code", returncode)
@@ -345,11 +509,54 @@ def run_workflow(
                 result_event = result.as_json()
                 result_event["iteration"] = iteration
                 append_trace(layout, result_event)
+                write_checkpoint(
+                    run_dir,
+                    RoleCheckpoint(
+                        run_id=run_id,
+                        role=checkpoint_role,
+                        state="role_output_received",
+                        attempt=max(1, checkpoint_attempt),
+                        worktree=str(current_state.get("worktree", repository_value)),
+                        input_fingerprint=fingerprint,
+                    ),
+                )
                 if returncode == 0:
                     break
                 if attempt <= max_retries:
                     time.sleep(backoff_seconds)
             if returncode != 0:
+                state_data = read_workflow_state(workflow_state_path)
+                status = str(state_data.get("execution_status", ""))
+                if status == "blocked":
+                    append_trace(layout, {"time": datetime.now(timezone.utc).isoformat(), "event": "workflow_blocked", "step": name})
+                    print(str(run_dir))
+                    return finish(EXIT_AWAITING_APPROVAL, "blocked", error_type="WorkflowBlocked")
+                if status in {"retry_wait", "repairing", "resuming", "dead_letter", "failed", "awaiting_approval"}:
+                    action = str(state_data.get("recovery_action", ""))
+                    if status == "awaiting_approval":
+                        action = "approval"
+                    elif status == "dead_letter":
+                        action = "dead_letter"
+                    elif status == "failed":
+                        action = "fail"
+                    elif not action:
+                        action = {"retry_wait": "retry", "repairing": "repair", "resuming": "resume"}[status]
+                    append_trace(layout, {"time": datetime.now(timezone.utc).isoformat(), "event": "workflow_recovery_scheduled", "step": name, "action": action})
+                    with telemetry.span(
+                        f"ai_harness.recovery.{action if action != 'fail' else 'dead_letter'}",
+                        {"failure.kind": str(state_data.get("failure_kind", "")), "recovery.action": action},
+                        context=root_context,
+                    ):
+                        pass
+                    telemetry.recovery_attempts_total.add(1, {"action": action})
+                    if action == "retry":
+                        telemetry.task_retries_total.add(1)
+                    elif action == "repair":
+                        telemetry.output_repairs_total.add(1)
+                    elif action == "dead_letter":
+                        telemetry.recovery_exhausted_total.add(1)
+                    print(str(run_dir))
+                    return finish(RECOVERY_EXIT_CODES[action], status, error_type=str(state_data.get("failure_kind", "RecoveryFailure")))
                 append_trace(
                     layout,
                     {
@@ -359,16 +566,31 @@ def run_workflow(
                         "returncode": returncode,
                     },
                 )
-                record_failure(
-                    layout,
-                    stage="workflow-step",
-                    code="STEP_FAILED",
-                    message=f"Workflow step {name} failed.",
-                    details=[stderr or stdout or f"exit {returncode}"],
-                )
+                with telemetry.span("ai_harness.recovery.classify", {"step.name": name}, context=root_context):
+                    recovery_code, failure = record_recovery_failure(
+                        layout=layout,
+                        state=state_data,
+                        process_returncode=returncode,
+                        message=stderr or stdout or f"exit {returncode}",
+                        step=name,
+                    )
+                scheduled = read_workflow_state(workflow_state_path)
+                action = str(scheduled.get("recovery_action", "retry"))
+                span_action = action if action in {"retry", "repair", "resume", "dead_letter"} else "dead_letter"
+                with telemetry.span(
+                    f"ai_harness.recovery.{span_action}",
+                    {"failure.kind": str(failure["kind"]), "recovery.action": action},
+                    context=root_context,
+                ):
+                    pass
+                telemetry.recovery_attempts_total.add(1, {"action": action})
+                if action == "retry":
+                    telemetry.task_retries_total.add(1)
+                elif action == "dead_letter":
+                    telemetry.recovery_exhausted_total.add(1)
                 print(str(run_dir))
-                return finish(returncode, "failed", error_type="WorkflowStepFailure")
-            state_data = json.loads(workflow_state_path.read_text(encoding="utf-8")) if workflow_state_path.exists() else {}
+                return finish(recovery_code, str(read_workflow_state(workflow_state_path).get("execution_status", "retry_wait")), error_type=str(failure["error_type"]))
+            state_data = read_workflow_state(workflow_state_path)
             if isinstance(state_data, dict) and state_data.get("execution_status") == "awaiting_approval":
                 append_trace(
                     layout,
@@ -379,8 +601,26 @@ def run_workflow(
                     },
                 )
                 print(str(run_dir))
-                return finish(1, "awaiting_approval")
+                return finish(EXIT_AWAITING_APPROVAL, "awaiting_approval")
+            write_checkpoint(
+                run_dir,
+                RoleCheckpoint(
+                    run_id=run_id,
+                    role=checkpoint_role,
+                    state="role_completed",
+                    attempt=max(1, checkpoint_attempt),
+                    worktree=str(state_data.get("worktree", repository_value)),
+                    input_fingerprint=fingerprint,
+                    artifacts=[str(item) for item in state_data.get("artifacts", []) if isinstance(item, str)],
+                ),
+            )
     append_trace(layout, {"time": datetime.now(timezone.utc).isoformat(), "event": "workflow_completed"})
+    completed_state = read_workflow_state(workflow_state_path)
+    recovery_state = completed_state.get("recovery", {})
+    if isinstance(recovery_state, dict) and int(recovery_state.get("attempts", 0) or 0) > 0:
+        telemetry.recovery_success_total.add(1)
+        if int(completed_state.get("resume_count", 0) or 0) > 0:
+            telemetry.resume_success_total.add(1)
     print(str(run_dir))
     return finish(0, "completed")
 
@@ -406,22 +646,26 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    return run_workflow(
-        args.workflow,
-        dry_run=args.dry_run,
-        timeout_seconds=args.timeout_seconds,
-        run_id=args.run_id,
-        task_id=args.task_id,
-        goal=args.goal,
-        project=args.project,
-        repository=args.repo,
-        branch=args.branch,
-        base_branch=args.base_branch,
-        adapter_command=args.adapter_command,
-        resume=args.resume,
-        runtime_provider=args.runtime_provider,
-        runtime_command=args.runtime_command,
-    )
+    try:
+        return run_workflow(
+            args.workflow,
+            dry_run=args.dry_run,
+            timeout_seconds=args.timeout_seconds,
+            run_id=args.run_id,
+            task_id=args.task_id,
+            goal=args.goal,
+            project=args.project,
+            repository=args.repo,
+            branch=args.branch,
+            base_branch=args.base_branch,
+            adapter_command=args.adapter_command,
+            resume=args.resume,
+            runtime_provider=args.runtime_provider,
+            runtime_command=args.runtime_command,
+        )
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"invalid harness state: {exc}", file=sys.stderr)
+        return EXIT_INVALID_HARNESS_STATE
 
 
 if __name__ == "__main__":

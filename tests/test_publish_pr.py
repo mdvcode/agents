@@ -67,6 +67,37 @@ def write_json(path: Path, data: dict[str, object]) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
+def test_reconcile_side_effects_recovers_commit_push_and_pr_after_crash(tmp_path: Path) -> None:
+    marker = "run-test:publication"
+    runner = FakeRunner(
+        {
+            ("git", "log", "--format=%H%x00%B%x00", "-n", "200"): publish_pr.CommandResult(
+                0, f"abc123\x00subject\n\nTask-Idempotency-Key: {marker}\x00", ""
+            ),
+            ("git", "rev-parse", "feat/task"): publish_pr.CommandResult(0, "abc123\n", ""),
+            ("git", "ls-remote", "origin", "refs/heads/feat/task"): publish_pr.CommandResult(
+                0, "abc123\trefs/heads/feat/task\n", ""
+            ),
+            ("gh", "pr", "view", "feat/task", "--json", "number,url"): publish_pr.CommandResult(
+                0, '{"number":17,"url":"https://example/pr/17"}', ""
+            ),
+        }
+    )
+    publisher = publisher_for(tmp_path, runner=runner)
+    publication = publish_pr.PublicationResult(
+        run_id="run-test", branch="feat/task", idempotency_key=marker
+    )
+
+    publisher.reconcile_side_effects(tmp_path, publication)
+
+    assert publication.commit_sha == "abc123"
+    assert publication.push_completed is True
+    assert publication.pr_number == 17
+    assert publication.execution_status == "pr_published"
+    persisted = json.loads(publisher.publication_path.read_text(encoding="utf-8"))
+    assert persisted["pr_url"] == "https://example/pr/17"
+
+
 def risk_payload(risk_class: str = "medium") -> dict[str, object]:
     allowed = risk_class != "high"
     return {

@@ -31,6 +31,7 @@ from ai_harness.evaluation.corpus import (
 )
 from ai_harness.evaluation.runner import validate_dataset
 from ai_harness.evaluation.scoring import validate_rubric
+from ai_harness.recovery.policy import load_recovery_policy
 
 ARTIFACTS = ROOT / ".agent-runs" / "UNSPECIFIED" / "artifacts"
 SCHEMAS = ROOT / "schemas"
@@ -40,6 +41,7 @@ PROJECT_PROFILES = ROOT / ".agent-project-profiles.yaml"
 AGENT_WORKFLOWS = ROOT / ".agent-workflows.yaml"
 AGENT_RUNTIME = ROOT / ".agent-runtime.yaml"
 AGENT_ROUTING = ROOT / ".agent-routing.yaml"
+AGENT_RECOVERY = ROOT / ".agent-recovery.yaml"
 AGENT_REPOSITORIES = ROOT / ".agent-repositories.yaml"
 AGENT_ROLE_CONTRACTS = ROOT / ".agent-role-contracts.yaml"
 AGENT_ARTIFACT_OWNERS = ROOT / ".agent-artifact-owners.yaml"
@@ -753,6 +755,26 @@ def validate_runtime_config_data(data: Any, label: str = ".agent-runtime.yaml") 
     return errors
 
 
+def validate_recovery_records(run_dir: Path) -> list[str]:
+    errors: list[str] = []
+    contracts = (
+        (run_dir / "failures", SCHEMAS / "failure_record.schema.json"),
+        (run_dir / "checkpoints", SCHEMAS / "recovery_checkpoint.schema.json"),
+    )
+    for directory, schema_path in contracts:
+        if not directory.is_dir():
+            continue
+        schema = load_json(schema_path)
+        for path in sorted(directory.glob("*.json")):
+            try:
+                data = load_json(path)
+            except (OSError, json.JSONDecodeError, ValueError) as exc:
+                errors.append(f"{path}: invalid recovery record: {exc}")
+                continue
+            errors.extend(validate_required(data, schema, str(path)))
+    return errors
+
+
 def validate_agent_routing_data(
     routing_doc: Any, label: str = ".agent-routing.yaml"
 ) -> list[str]:
@@ -1053,6 +1075,8 @@ def main(artifacts_dir: Path | None = None) -> int:
                     loaded_artifacts[name] = data
             if args.phase == "complete":
                 errors.extend(validate_audit_log(artifacts_root.parent))
+            if args.run_dir is not None:
+                errors.extend(validate_recovery_records(args.run_dir))
     policy_doc, policy_errors = load_yaml(POLICY, ".agent-policy.yaml")
     errors.extend(policy_errors)
     if policy_doc is not None:
@@ -1069,6 +1093,10 @@ def main(artifacts_dir: Path | None = None) -> int:
     errors.extend(runtime_errors)
     if runtime_doc is not None:
         errors.extend(validate_runtime_config_data(runtime_doc))
+    try:
+        load_recovery_policy(AGENT_RECOVERY)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        errors.append(f".agent-recovery.yaml: {exc}")
     routing_doc, routing_errors = load_yaml(AGENT_ROUTING, ".agent-routing.yaml")
     errors.extend(routing_errors)
     if routing_doc is not None:

@@ -27,13 +27,14 @@ The snapshot and dashboard expose:
 - queue wait, total task, workflow, span, and PR-time distributions;
 - known USD cost plus known/unknown coverage, never an invented zero;
 - queue and workflow retries, loop iterations, failures, and human interventions;
+- recovery attempts, successes, exhausted budgets, task retries, output repairs, successful resumes, worker crashes, and recovery actions;
 - recent sanitized spans with trace and parent IDs.
 
 The operational snapshot contract is `schemas/observability_snapshot.schema.json`. Local spans use `schemas/otel_span.schema.json` and are stored at `.agent-runs/<run-id>/raw-events/otel-spans.jsonl`.
 
 ## OpenTelemetry
 
-The worker starts `ai_harness.worker.task`, injects W3C Trace Context into the workflow subprocess, and the workflow creates `ai_harness.workflow` plus child `ai_harness.workflow.step` spans. Metrics use OpenTelemetry counters and histograms for tasks, retries, loop iterations, failures, and duration.
+The worker starts `ai_harness.worker.task`, injects W3C Trace Context into the workflow subprocess, and the workflow creates `ai_harness.workflow` plus child `ai_harness.workflow.step` spans. Recovery adds `ai_harness.recovery.classify`, `.retry`, `.repair`, `.resume`, and `.dead_letter`. Metrics include `recovery_attempts_total`, `recovery_success_total`, `recovery_exhausted_total`, `task_retries_total`, `output_repairs_total`, `resume_success_total`, and `worker_crashes_total` alongside task, loop, failure, and duration signals.
 
 The runtime works without a collector. Configure standard OpenTelemetry environment variables to export over OTLP/HTTP:
 
