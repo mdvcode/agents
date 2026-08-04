@@ -270,3 +270,4 @@ workflows:
     monkeypatch.setattr(run_workflow, "RUNS_DIR", runs)
     assert run_workflow.run_workflow("sample", root=tmp_path, task_id="same-task") == 0
     assert sorted(path.name for path in runs.iterdir()) == ["completed"]
+

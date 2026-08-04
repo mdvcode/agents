@@ -46,29 +46,30 @@ def create_worktree(
         "worktree": str(worktree.resolve()),
         "execution_status": "planned",
         "errors": [],
+        "warnings": [],
     }
     fetch = run_git(repo, ["fetch", "--prune", "origin"])
     if fetch.returncode != 0:
+        result["warnings"] = [
+            "git fetch was unavailable; using the existing local origin reference",
+        ]
+    verify = run_git(repo, ["rev-parse", "--verify", f"origin/{base_branch}"])
+    if verify.returncode != 0:
         result["execution_status"] = "blocked"
-        result["errors"] = [fetch.stderr.strip() or fetch.stdout.strip()]
-    else:
-        verify = run_git(repo, ["rev-parse", "--verify", f"origin/{base_branch}"])
-        if verify.returncode != 0:
-            result["execution_status"] = "blocked"
-            result["errors"] = [f"base branch origin/{base_branch} does not exist"]
-        elif not worktree.exists():
-            branch_exists = run_git(repo, ["show-ref", "--verify", f"refs/heads/{branch}"]).returncode == 0
-            args = ["worktree", "add", str(worktree), branch]
-            if not branch_exists:
-                args = ["worktree", "add", "-b", branch, str(worktree), f"origin/{base_branch}"]
-            add = run_git(repo, args)
-            if add.returncode != 0:
-                result["execution_status"] = "failed"
-                result["errors"] = [add.stderr.strip() or add.stdout.strip()]
-            else:
-                result["execution_status"] = "completed"
+        result["errors"] = [f"base branch origin/{base_branch} does not exist"]
+    elif not worktree.exists():
+        branch_exists = run_git(repo, ["show-ref", "--verify", f"refs/heads/{branch}"]).returncode == 0
+        args = ["worktree", "add", str(worktree), branch]
+        if not branch_exists:
+            args = ["worktree", "add", "-b", branch, str(worktree), f"origin/{base_branch}"]
+        add = run_git(repo, args)
+        if add.returncode != 0:
+            result["execution_status"] = "failed"
+            result["errors"] = [add.stderr.strip() or add.stdout.strip()]
         else:
             result["execution_status"] = "completed"
+    else:
+        result["execution_status"] = "completed"
     (run_dir / "worktree.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, indent=2))
     return result

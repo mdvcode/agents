@@ -57,6 +57,27 @@ def role_can_write_repository(access: str) -> bool:
     return access in {"task_worktree_write", "workspace_write"}
 
 
+def repository_tool_paths(repository: Path) -> list[Path]:
+    """Find common project-managed tool directories for a git worktree."""
+    roots = [repository]
+    common = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        cwd=repository,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if common.returncode == 0 and common.stdout.strip():
+        roots.append(Path(common.stdout.strip()).resolve().parent)
+    candidates: list[Path] = []
+    for root in roots:
+        for relative in (".devenv/state/venv/bin", ".devenv/profile/bin", ".venv/bin"):
+            path = root / relative
+            if path.is_dir() and path not in candidates:
+                candidates.append(path)
+    return candidates
+
+
 def git_snapshot(repo: Path) -> str:
     inside = subprocess.run(
         ["git", "rev-parse", "--is-inside-work-tree"],
@@ -307,6 +328,14 @@ def parse_role_result(stdout: str, output_contract: dict[str, Any], duration_ms:
         return blocked_result("Codex CLI returned a non-object JSON value.", ["role result must be an object"])
     result.setdefault("duration_ms", duration_ms)
     result.setdefault("artifacts", [])
+    role_result_contract = load_json(SCHEMAS / "role_result.schema.json")
+    allowed_next_actions = role_result_contract.get("enums", {}).get("next_action", [])
+    next_action = result.get("next_action")
+    if allowed_next_actions and next_action not in allowed_next_actions:
+        warnings = result.setdefault("warnings", [])
+        if isinstance(warnings, list):
+            warnings.append(f"Ignored non-contract next_action: {next_action}")
+        result["next_action"] = "continue" if result.get("status") == "completed" else "blocked"
     errors = validate_contract(result, output_contract, "role_result")
     if errors:
         return blocked_result("Codex CLI result failed schema validation.", errors)
@@ -468,10 +497,19 @@ def run_codex(
         str(result_path),
         "-",
     ]
+    temp_dir: Path | None = None
     if str(request.get("filesystem_access", "")) == "evidence_write":
+        temp_dir = (
+            Path(str(request["artifacts_dir"])).resolve().parent
+            / "tmp"
+            / str(request["role"])
+        )
+        temp_dir.mkdir(parents=True, exist_ok=True)
         command[command.index("-"):command.index("-")] = [
             "--add-dir",
             str(Path(str(request["artifacts_dir"])).resolve()),
+            "--add-dir",
+            str(temp_dir),
         ]
     repository = Path(str(request["repository"]))
     env = os.environ.copy()
@@ -479,6 +517,11 @@ def run_codex(
     env["AGENT_ROLE_ALLOWED_TOOLS"] = json.dumps(request.get("allowed_tools", []))
     env["AGENT_ROLE_FILESYSTEM_ACCESS"] = str(request.get("filesystem_access", "read_only"))
     env["AGENT_TOOL_POLICY_PATH"] = str((Path(__file__).resolve().parents[2] / ".agent-tool-policy.yaml"))
+    if temp_dir is not None:
+        env["TMPDIR"] = str(temp_dir)
+    managed_tool_paths = repository_tool_paths(repository)
+    if managed_tool_paths:
+        env["PATH"] = os.pathsep.join([*(str(path) for path in managed_tool_paths), env.get("PATH", "")])
     before_snapshot = ""
     if not role_can_write_repository(str(request.get("filesystem_access", "read_only"))):
         before_snapshot = git_snapshot(repository)
@@ -524,8 +567,10 @@ def run_codex(
     result["cached_input_tokens"] = usage["cached_input_tokens"]
     result["output_tokens"] = usage["output_tokens"]
     result["reasoning_output_tokens"] = usage["reasoning_output_tokens"]
-    uncached_input = max(usage["input_tokens"] - usage["cached_input_tokens"], 0)
-    usage_total = uncached_input + usage["output_tokens"]
+    usage_total = (
+        max(0, usage["input_tokens"] - usage["cached_input_tokens"])
+        + usage["output_tokens"]
+    )
     if usage_total:
         result["tokens_used"] = usage_total
     artifact_errors = write_artifacts_from_result(request, result)

@@ -39,7 +39,8 @@ Do not run Django-specific tools for web projects unless the repository actually
 
 ## Required `security.json` fields
 - `verdict`: `works`, `broken`, or `unavailable`
-- `expected`, `observed`, `evidence`, `blockers`, `repair_required`
+- `expected`, `observed`, `evidence`, and `blockers` must be JSON arrays
+- `repair_required` must be a boolean
 - `status`: `pass`, `warn`, or `fail`
 - `highest_severity`: `none`, `low`, `medium`, `high`, or `critical`
 - `project_profile`
@@ -53,3 +54,5 @@ Do not run Django-specific tools for web projects unless the repository actually
 - Highlight auth, permissions, session logic, secret files, and production settings as elevated risk.
 - Distinguish between confirmed findings, tool failures, and unverified assumptions.
 - Use `critical` only for an immediately unsafe condition that must stop the workflow. `medium` and `high` findings require human approval; they do not become an automatic hard block.
+- Use `verdict: works` only when `repair_required` is false, `blockers` is empty, and `highest_severity` is `none` or `low`.
+- Use `verdict: broken` when a confirmed `medium`, `high`, or `critical` finding requires repair or approval.
