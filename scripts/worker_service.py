@@ -21,6 +21,7 @@ from approval_lifecycle import expire_approvals
 from task_queue import DEFAULT_DB, TaskQueue
 from worker_pool import WorkflowWorkerPool
 from ai_harness.recovery.models import sanitized_message
+from ai_harness.recovery.policy import load_recovery_policy
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,7 +66,7 @@ class WorkerService:
         poll_seconds: float = 2.0,
         state_path: Path = SERVICE_STATE,
         restart_count: int = 0,
-        max_consecutive_failures: int = 5,
+        max_consecutive_failures: int | None = None,
     ) -> None:
         if poll_seconds <= 0:
             raise ValueError("poll_seconds must be positive")
@@ -79,7 +80,12 @@ class WorkerService:
         self.stop_event = threading.Event()
         self.total_restart_count = max(0, restart_count)
         self.consecutive_failure_count = 0
-        self.max_consecutive_failures = max(1, max_consecutive_failures)
+        configured_failures = (
+            load_recovery_policy().max_consecutive_failures
+            if max_consecutive_failures is None
+            else max_consecutive_failures
+        )
+        self.max_consecutive_failures = max(1, configured_failures)
         self.worker_ids = [f"{service_id}-{index}" for index in range(1, workers + 1)]
         self.pool = WorkflowWorkerPool(
             queue=queue,

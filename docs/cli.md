@@ -57,7 +57,7 @@ agent status --json
 
 Status is read-only, project-scoped, and compact. It shows queue, run, and worker-service states without role transcripts, source contents, credentials, or raw events. If the worker service is not running, tasks remain visibly queued; the CLI does not start a daemon as a hidden side effect.
 
-Recovery state includes the current role, failure class, selected action, attempt budget, resume checkpoint, and next retry timing.
+Recovery state includes the current role, exact sanitized error type and cause, failure class, selected action, attempt budget, resume checkpoint, next retry time in UTC, and worker-service health.
 
 ## Inspect and control recovery
 

@@ -14,6 +14,7 @@
 - None.
 
 ## Done
+- Milestone R1 completion hardening: publication crash reconciliation, atomic approval replay, owned-artifact repair, fail-open workflow telemetry, structured control failures, recovery-rich CLI status, and direct regression coverage.
 - Milestone R1 — Unified Task Recovery Layer: deterministic failure policy, bounded retry/repair/resume, queue recovery states, worker/service isolation, checkpoints, idempotency, CLI/observability, and failure-injection coverage.
 - Qdrant Content Manager bonuses: thin service-layer routing, a reproducible five-service Docker Compose stack, isolated Qdrant tests, live smoke verification, and three local commits; no publication.
 - Qdrant Content Manager coding challenge: transactional PATCH, read-only consistency diagnostics, regression tests, and two local commits on `test_api_func`; no publication.

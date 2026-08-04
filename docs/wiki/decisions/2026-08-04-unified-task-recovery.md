@@ -17,7 +17,9 @@ The queue already reclaimed expired leases and the workflow already had bounded 
 - The queue exposes `retry_wait`, `repairing`, `resuming`, `awaiting_approval`, terminal `failed`, `dead_letter`, and `cancelled` while retaining compatibility with existing leased tasks and databases.
 - Worker task execution, thread futures, telemetry shutdown, heartbeat updates, and the long-lived service loop have independent error boundaries. Only consecutive system-level wave failures degrade service health; ordinary task failures do not increment the service restart budget.
 - Workflow subprocess exit codes distinguish approval, retryable, repairable, resumable, dead-letter, unrecoverable, and invalid Harness state outcomes.
-- Publication stores a run-scoped idempotency key and continues its existing commit/push/PR resume checks. Approval grants remain one-shot.
+- Publication writes the run-scoped idempotency key into the commit trailer. Before any repeated side effect it reconciles the marker, the exact remote branch SHA, and the existing PR, then atomically checkpoints recovered state.
+- Approval request, decision, grant consumption, and continuation enqueue are serialized by a run-scoped file lock. The workflow grant is durable before the approval becomes consumed; replay returns the same grant and queue task without applying either twice.
+- Schema validation and owned-artifact validation share one two-attempt, read-only output-repair budget. Exhaustion routes directly to dead letter instead of rerunning the ordinary role prompt.
 
 ## Safety bounds
 

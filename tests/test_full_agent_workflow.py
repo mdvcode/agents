@@ -550,7 +550,7 @@ print(json.dumps({
         create_task_worktree=True,
     )
 
-    assert state["execution_status"] == "repairing"
+    assert state["execution_status"] == "dead_letter"
     assert state["failure_kind"] == "invalid_output"
     assert state["runtime"]["provider"] == "codex-cli"
     assert state["runtime"]["api_required"] is False

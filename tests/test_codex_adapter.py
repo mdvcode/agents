@@ -272,7 +272,49 @@ result_path.write_text(json.dumps({
     assert completed.returncode == 0
     result = json.loads(completed.stdout)
     assert result["status"] == "blocked"
-    assert result["summary"] == "Codex CLI completed without required artifacts."
+    assert result["summary"] == "Structured output repair budget exhausted."
+    assert result["_failure"]["repair_attempts"] == 2
+
+
+def test_codex_cli_executor_repairs_missing_artifact_without_role_rerun(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    executor = Path(__file__).resolve().parents[1] / "scripts" / "adapters" / "codex_cli_executor.py"
+    cli = tmp_path / "fake_codex_cli.py"
+    cli.write_text(
+        """
+import json
+import sys
+from pathlib import Path
+
+result_path = Path(sys.argv[sys.argv.index("--output-last-message") + 1])
+is_repair = "-repair-" in result_path.name
+payload = {
+    "status": "completed", "next_action": "continue", "summary": "planner done",
+    "artifacts_created": [], "artifacts": [], "blockers": [], "warnings": [], "tokens_used": 5
+}
+if is_repair:
+    payload["artifacts"] = [{"path": "plan.md", "content": "# repaired plan\\n"}]
+result_path.write_text(json.dumps(payload), encoding="utf-8")
+""".lstrip(),
+        encoding="utf-8",
+    )
+    cli.chmod(cli.stat().st_mode | stat.S_IXUSR)
+    manifest = tmp_path / "context.json"
+    request = role_request(tmp_path)
+    manifest.write_text(json.dumps(context_manifest_payload(tmp_path)), encoding="utf-8")
+    request["context_manifest"] = str(manifest)
+    monkeypatch.setenv("AGENT_CODEX_CLI_COMMAND", f"{sys.executable} {cli}")
+
+    completed = subprocess.run(
+        [sys.executable, str(executor)], input=json.dumps(request), text=True,
+        capture_output=True, check=False,
+    )
+
+    result = json.loads(completed.stdout)
+    assert result["status"] == "completed"
+    assert result["output_repair_attempts"] == 1
+    assert (tmp_path / "artifacts" / "plan.md").read_text(encoding="utf-8") == "# repaired plan\n"
 
 
 def test_codex_cli_executor_blocks_read_only_repository_mutation(tmp_path: Path, monkeypatch: object) -> None:

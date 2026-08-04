@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -66,8 +67,9 @@ def test_approval_scope_is_exact_and_consumed_once(tmp_path: Path) -> None:
     assert resumed["workflow"]["resume_role"] == "risk-classifier"
     assert resumed["workflow"]["approval_override"]["gate"] == "risk-classifier"
     assert resumed["workflow"]["approval_grants"][0]["reason"] == "HIGH risk"
-    with pytest.raises(ApprovalError, match="unexpired approved"):
-        prepare_resume(run)
+    replay = prepare_resume(run)
+    assert replay["already_consumed"] is True
+    assert len(replay["workflow"]["approval_grants"]) == 1
 
 
 def test_rejection_blocks_workflow(tmp_path: Path) -> None:
@@ -121,8 +123,25 @@ def test_resume_enqueues_same_run_and_checkpoint(tmp_path: Path) -> None:
     assert record.payload["run_id"] == "run-approval"
     assert record.payload["repository"] == str(tmp_path)
     assert record.status == "queued"
-    with pytest.raises(ApprovalError, match="unexpired approved"):
-        resume_run(run, queue=queue)
+    replay, replay_record = resume_run(run, queue=queue)
+    assert replay["already_consumed"] is True
+    assert replay_record.id == record.id
+
+
+def test_concurrent_resume_consumes_and_enqueues_exactly_once(tmp_path: Path) -> None:
+    run = awaiting_run(tmp_path)
+    request_approval(run, reason="HIGH risk")
+    approve_run(run, actor="reviewer")
+    queue = TaskQueue(tmp_path / "queue.db")
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _item: resume_run(run, queue=queue), range(4)))
+
+    assert {record.id for _transition, record in results} == {results[0][1].id}
+    workflow = json.loads((run / "workflow.json").read_text(encoding="utf-8"))
+    approval = json.loads((run / "artifacts" / "approval.json").read_text(encoding="utf-8"))
+    assert approval["resume_count"] == 1
+    assert len(workflow["approval_grants"]) == 1
 
 
 def test_high_risk_request_explicitly_scopes_patch_authority(tmp_path: Path) -> None:

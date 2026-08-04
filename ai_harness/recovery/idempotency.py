@@ -3,21 +3,43 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Protocol, Sequence
 
 
-Runner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]]
+class CommandResult(Protocol):
+    returncode: int
+    stdout: str
+    stderr: str
 
 
-def _run(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+Runner = Callable[[Sequence[str], Path], CommandResult]
+
+
+def _run(args: Sequence[str], cwd: Path) -> CommandResult:
+    import subprocess
+
     return subprocess.run(list(args), cwd=cwd, text=True, capture_output=True, check=False, timeout=30)
 
 
 def commit_exists(repository: Path, marker: str, runner: Runner = _run) -> bool:
-    result = runner(["git", "log", "--format=%B", "-n", "200"], repository)
-    return result.returncode == 0 and marker in result.stdout
+    return commit_sha_for_marker(repository, marker, runner) != ""
+
+
+def commit_sha_for_marker(repository: Path, marker: str, runner: Runner = _run) -> str:
+    if not marker:
+        return ""
+    result = runner(
+        ["git", "log", "--format=%H%x00%B%x00", "-n", "200"],
+        repository,
+    )
+    if result.returncode != 0:
+        return ""
+    fields = result.stdout.split("\x00")
+    for index in range(0, len(fields) - 1, 2):
+        if marker in fields[index + 1]:
+            return fields[index].strip()
+    return ""
 
 
 def branch_pushed(repository: Path, branch: str, runner: Runner = _run) -> bool:

@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ai_harness.observability import TelemetryRuntime
+from ai_harness.observability import NoOpTelemetryRuntime, TelemetryRuntime
+from ai_harness.observability import telemetry as telemetry_module
 from ai_harness.observability.store import recent_spans, trace_summary
 
 
@@ -51,3 +52,16 @@ def test_trace_store_is_bounded_and_summarized(tmp_path: Path) -> None:
     assert len(spans) == 3
     assert summary["count"] == 3
     assert summary["duration_ms"]["p95"] is not None
+
+
+def test_telemetry_initialization_failure_is_fail_open(monkeypatch: object) -> None:
+    def fail(**_kwargs: object) -> None:
+        raise RuntimeError("collector unavailable")
+
+    monkeypatch.setattr(telemetry_module, "TelemetryRuntime", fail)
+
+    runtime = telemetry_module.safe_telemetry_runtime(service_name="test")
+
+    assert isinstance(runtime, NoOpTelemetryRuntime)
+    with runtime.span("still-runs"):
+        runtime.task_counter.add(1)

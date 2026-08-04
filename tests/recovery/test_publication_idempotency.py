@@ -10,7 +10,7 @@ from ai_harness.recovery.idempotency import approval_consumed, branch_pushed, co
 def runner(args: list[str] | tuple[str, ...], _cwd: Path) -> subprocess.CompletedProcess[str]:
     command = list(args)
     if command[:2] == ["git", "log"]:
-        return subprocess.CompletedProcess(command, 0, "run-1:publication\n", "")
+        return subprocess.CompletedProcess(command, 0, "abc123\x00subject\n\nrun-1:publication\x00", "")
     if command[:2] == ["git", "rev-parse"]:
         return subprocess.CompletedProcess(command, 0, "abc123\n", "")
     if command[:2] == ["git", "ls-remote"]:

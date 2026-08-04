@@ -147,6 +147,35 @@ def blocked_result(summary: str, blockers: list[str]) -> dict[str, Any]:
     }
 
 
+def persist_control_failure(
+    layout: RunLayout,
+    state: dict[str, Any],
+    *,
+    role: str,
+    stage: str,
+    kind: str,
+    error_type: str,
+    message: str,
+) -> FailureRecord:
+    """Persist a structured record for harness failures outside a role runtime."""
+    failure = FailureRecord.create(
+        run_id=layout.run_id,
+        task_id=str(state.get("task_id", "task")),
+        role=role,
+        stage=stage,
+        kind=kind,
+        error_type=error_type,
+        message=message,
+        retryable=kind in {"transient", "runtime_failure", "tool_failure", "internal_error"},
+        repairable=kind in {"invalid_output", "verification_failure"},
+        checkpoint=f"before_{role.replace('-', '_')}",
+    )
+    persist_failure(layout.root, failure)
+    state["failure_id"] = failure.failure_id
+    state["failure_kind"] = failure.kind
+    return failure
+
+
 def role_checkpoint(
     *,
     run_dir: Path,
@@ -1203,6 +1232,11 @@ def run_roles(
             message="Task worktree setup failed.",
             details=setup_errors,
         )
+        persist_control_failure(
+            layout, state, role="issue-intake", stage="worktree", kind="tool_failure",
+            error_type="WorktreeSetupFailed", message="; ".join(setup_errors),
+        )
+        write_json(layout.workflow, state)
         write_metrics(layout, state)
         return state
 
@@ -1223,6 +1257,11 @@ def run_roles(
             message="Configured runtime preflight failed.",
             details=state["blockers"],
         )
+        persist_control_failure(
+            layout, state, role="issue-intake", stage="runtime-preflight", kind="runtime_failure",
+            error_type="RuntimePreflightBlocked", message="; ".join(state["blockers"]),
+        )
+        write_json(layout.workflow, state)
         write_metrics(layout, state)
         return state
     prior_roles = [
@@ -1518,6 +1557,10 @@ def run_roles(
                 except ApprovalError as exc:
                     state["execution_status"] = "blocked"
                     state["blockers"] = [f"approval request failed: {exc}"]
+                    persist_control_failure(
+                        layout, state, role="approval-gate", stage="approval",
+                        kind="internal_error", error_type="ApprovalRequestFailed", message=str(exc),
+                    )
                     write_json(layout.workflow, state)
             state["base_branch_sha_after"] = git_ref_sha(repository, effective_base)
             write_json(layout.workflow, state)
@@ -1531,6 +1574,10 @@ def run_roles(
                 code="ROLE_NOT_COMPLETED",
                 message=str(result.get("summary", "Role did not complete.")),
                 details=[str(item) for item in result.get("blockers", [])],
+            )
+            persist_control_failure(
+                layout, state, role=role, stage="role", kind="human_input_required",
+                error_type="RoleNotCompleted", message=str(result.get("summary", "Role did not complete.")),
             )
         else:
             role_checkpoint(
@@ -1582,6 +1629,10 @@ def run_roles(
                 message=route["reason"],
                 details=route_errors,
             )
+            persist_control_failure(
+                layout, state, role=role, stage="routing", kind="internal_error",
+                error_type="InvalidRouteContract", message="; ".join(route_errors),
+            )
         state["last_route"] = route
         write_json(layout.workflow, state)
         write_metrics(layout, state)
@@ -1629,6 +1680,10 @@ def run_roles(
                         message="Could not create scoped approval request.",
                         details=[str(exc)],
                     )
+                    persist_control_failure(
+                        layout, state, role="approval-gate", stage="approval",
+                        kind="internal_error", error_type="ApprovalRequestFailed", message=str(exc),
+                    )
                 append_trace(layout, {"event": "workflow_awaiting_approval", "reason": route["reason"]})
                 record_failure(
                     layout,
@@ -1649,6 +1704,10 @@ def run_roles(
                     code="ROUTER_BLOCKED",
                     message=route["reason"],
                     details=route.get("warnings", []),
+                )
+                persist_control_failure(
+                    layout, state, role=role, stage="routing", kind="human_input_required",
+                    error_type="RouterBlocked", message=route["reason"],
                 )
             break
         role = route["next_role"]

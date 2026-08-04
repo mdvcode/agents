@@ -596,15 +596,26 @@ def run_codex(
         result_stdout = result_path.read_text(encoding="utf-8")
     except OSError:
         result_stdout = completed.stdout
-    result = parse_role_result(result_stdout, output_contract, duration_ms)
-    invalid_output = result.get("summary") in {
+    invalid_summaries = {
         "Codex CLI returned malformed JSON.",
         "Codex CLI returned a non-object JSON value.",
         "Codex CLI result failed schema validation.",
     }
+
+    def validate_candidate(candidate: dict[str, Any]) -> list[str]:
+        if candidate.get("summary") in invalid_summaries:
+            return [str(item) for item in candidate.get("blockers", [])]
+        errors = write_artifacts_from_result(request, candidate)
+        write_deterministic_artifacts(request, candidate)
+        errors.extend(validate_artifact_ownership(request, candidate))
+        if candidate.get("status") == "completed":
+            errors.extend(validate_expected_artifacts(request))
+        return errors
+
+    result = parse_role_result(result_stdout, output_contract, duration_ms)
+    validation_errors = validate_candidate(result)
     original_output = result_stdout
-    if invalid_output:
-        validation_errors = [str(item) for item in result.get("blockers", [])]
+    if validation_errors:
         standard_schema = standard_role_result_schema(output_contract)
         for repair_attempt in range(1, MAX_OUTPUT_REPAIR_ATTEMPTS + 1):
             repair_path = raw_outputs_dir(request, manifest) / f"{str(request['role']).replace('/', '-')}-repair-{repair_attempt}-result.json"
@@ -644,18 +655,15 @@ def run_codex(
             except OSError:
                 repaired_output = repaired.stdout
             candidate = parse_role_result(repaired_output, output_contract, duration_ms)
-            if candidate.get("summary") not in {
-                "Codex CLI returned malformed JSON.",
-                "Codex CLI returned a non-object JSON value.",
-                "Codex CLI result failed schema validation.",
-            }:
+            candidate_errors = validate_candidate(candidate)
+            if not candidate_errors:
                 result = candidate
                 warnings = list(result.get("warnings", []))
                 warnings.append(f"Structured output repaired after {repair_attempt} validation-only attempt(s).")
                 result["warnings"] = warnings
                 result["output_repair_attempts"] = repair_attempt
                 break
-            validation_errors = [str(item) for item in candidate.get("blockers", [])]
+            validation_errors = candidate_errors
         else:
             result = failure_result(
                 "Structured output repair budget exhausted.",
@@ -676,25 +684,6 @@ def run_codex(
     )
     if usage_total:
         result["tokens_used"] = usage_total
-    artifact_errors = write_artifacts_from_result(request, result)
-    write_deterministic_artifacts(request, result)
-    artifact_errors.extend(validate_artifact_ownership(request, result))
-    if artifact_errors:
-        return failure_result(
-            "Codex CLI returned invalid artifacts.",
-            artifact_errors,
-            kind="invalid_output",
-            error_type="InvalidArtifactOutput",
-        )
-    if result.get("status") == "completed":
-        artifact_errors = validate_expected_artifacts(request)
-        if artifact_errors:
-            return failure_result(
-                "Codex CLI completed without required artifacts.",
-                artifact_errors,
-                kind="invalid_output",
-                error_type="MissingOwnedArtifact",
-            )
     return result
 
 

@@ -228,3 +228,48 @@ class TelemetryRuntime:
             self.meter_provider.shutdown()
         except Exception:
             pass
+
+
+class _NoOpInstrument:
+    def add(self, *_args: object, **_kwargs: object) -> None:
+        return
+
+    def record(self, *_args: object, **_kwargs: object) -> None:
+        return
+
+
+class NoOpTelemetryRuntime:
+    """API-compatible fallback: observability must never stop task execution."""
+
+    def __init__(self) -> None:
+        self.tracer = trace.get_tracer("ai_harness.observability.noop")
+        instrument = _NoOpInstrument()
+        for name in (
+            "task_counter", "retry_counter", "loop_counter", "failure_counter",
+            "recovery_attempts_total", "recovery_success_total", "recovery_exhausted_total",
+            "task_retries_total", "output_repairs_total", "resume_success_total",
+            "worker_crashes_total", "duration_histogram",
+        ):
+            setattr(self, name, instrument)
+
+    @contextmanager
+    def span(self, _name: str, _attributes: Mapping[str, object] | None = None, *, context: Context | None = None) -> Iterator[Span]:
+        with self.tracer.start_as_current_span("noop", context=context) as span:
+            yield span
+
+    def extracted_context(self, _carrier: Mapping[str, str] | None = None) -> Context:
+        return Context()
+
+    @staticmethod
+    def inject_environment(environment: dict[str, str]) -> dict[str, str]:
+        return environment
+
+    def shutdown(self) -> None:
+        return
+
+
+def safe_telemetry_runtime(**kwargs: object) -> TelemetryRuntime | NoOpTelemetryRuntime:
+    try:
+        return TelemetryRuntime(**kwargs)
+    except Exception:
+        return NoOpTelemetryRuntime()

@@ -31,10 +31,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ai_harness.observability import TelemetryRuntime
+from ai_harness.observability import safe_telemetry_runtime
 from ai_harness.recovery import RecoveryCoordinator, classify_failure, load_recovery_policy
 from ai_harness.recovery.checkpoints import RoleCheckpoint, write_checkpoint
-from ai_harness.recovery.models import persist_failure
+from ai_harness.recovery.models import FailureRecord, persist_failure
 
 WORKFLOWS = ROOT / ".agent-workflows.yaml"
 RUNS_DIR = ROOT / ".agent-runs"
@@ -297,7 +297,7 @@ def run_workflow(
     artifacts_dir = layout.artifacts
     budgets = workflow_budgets(workflow)
     started = time.monotonic()
-    telemetry = TelemetryRuntime(
+    telemetry = safe_telemetry_runtime(
         run_dir=run_dir,
         service_name="ai-harness-workflow",
         service_instance_id=run_id,
@@ -388,6 +388,30 @@ def run_workflow(
         root_span.add_event("workflow.iteration", {"iteration": iteration})
         for step in steps:
             if time.monotonic() - started > budgets["max_duration_seconds"]:
+                state_data = read_workflow_state(workflow_state_path)
+                failure = FailureRecord.create(
+                    run_id=run_id,
+                    task_id=task_id,
+                    role=str(state_data.get("current_role", "workflow")),
+                    stage="budget",
+                    kind="human_input_required",
+                    error_type="WorkflowDurationExceeded",
+                    message="max_duration_seconds exceeded",
+                    retryable=False,
+                    repairable=False,
+                    checkpoint=f"before_{str(state_data.get('current_role', 'workflow')).replace('-', '_')}",
+                )
+                persist_failure(layout.root, failure)
+                state_data.update(
+                    {
+                        "execution_status": "awaiting_approval",
+                        "failure_id": failure.failure_id,
+                        "failure_kind": failure.kind,
+                        "recovery_action": "approval",
+                        "recovery_reason": "workflow duration budget exceeded",
+                    }
+                )
+                write_workflow_state(workflow_state_path, state_data)
                 append_trace(
                     layout,
                     {

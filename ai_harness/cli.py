@@ -340,6 +340,8 @@ def project_runs(runs_dir: Path, repository: Path) -> list[dict[str, Any]]:
                 "retry_after_seconds": int(workflow.get("retry_after_seconds", 0) or 0),
                 "failure_attempt": int(current_failure.get("attempt", 0) or 0),
                 "failure_max_attempts": int(current_failure.get("max_attempts", 0) or 0),
+                "failure_error_type": str(current_failure.get("error_type", "")),
+                "failure_message": str(current_failure.get("message", "")),
                 "approval": {
                     "status": str(approval.get("status", "")),
                     "reason": str(approval.get("reason", "")),
@@ -446,7 +448,7 @@ def handle_status(args: argparse.Namespace) -> int:
         f"Repository: {repository}",
         "Queue: " + (", ".join(f"{key}={value}" for key, value in sorted(task_counts.items())) or "empty"),
         "Runs: " + (", ".join(f"{key}={value}" for key, value in sorted(run_counts.items())) or "none"),
-        f"Worker service: {'running' if service['alive'] else 'not running'}",
+        f"Worker service: {service['status']} ({'running' if service['alive'] else 'not running'})",
     ]
     for item in tasks[: args.limit]:
         marker = " !" if item["requires_human"] else ""
@@ -456,6 +458,11 @@ def handle_status(args: argparse.Namespace) -> int:
                 f"    failure: {item['failure_kind']}; action: {item['recovery_action'] or 'none'}; "
                 f"attempt: {item['recovery_attempts']}; checkpoint: {item['resume_checkpoint'] or 'none'}"
             )
+            if item["next_attempt_at"]:
+                retry_at = datetime.fromtimestamp(item["next_attempt_at"], timezone.utc).isoformat()
+                lines.append(f"    next retry: {retry_at}")
+        if item["exception_reason"]:
+            lines.append(f"    cause: {item['exception_reason']}")
     for run in runs[: args.limit]:
         if run["status"] in {"retry_wait", "repairing", "resuming", "dead_letter", "failed"}:
             lines.append(
@@ -464,6 +471,11 @@ def handle_status(args: argparse.Namespace) -> int:
                 f"attempt={run['failure_attempt']}/{run['failure_max_attempts']} "
                 f"checkpoint={run['resume_from'] or 'none'}"
             )
+            if run["failure_error_type"] or run["failure_message"]:
+                lines.append(
+                    f"    cause: {run['failure_error_type'] or 'unknown'}: "
+                    f"{run['failure_message'] or run['recovery_reason']}"
+                )
         if run["status"] != "awaiting_approval" or run["approval"]["status"] != "pending":
             continue
         lines.append(
