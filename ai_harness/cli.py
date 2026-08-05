@@ -148,6 +148,7 @@ def handle_task(args: argparse.Namespace) -> int:
     root = harness_home()
     event_ingestion = load_harness_module(root, "event_ingestion")
     task_queue = load_harness_module(root, "task_queue")
+    worktree_manager = load_harness_module(root, "worktree_manager")
     goal = " ".join(args.goal).strip()
     if not goal:
         raise CLIError("task goal is required")
@@ -156,12 +157,26 @@ def handle_task(args: argparse.Namespace) -> int:
     task_id = slug(args.task_id, "") if args.task_id else generated_task_id(goal)
     if not task_id:
         raise CLIError("--task-id must contain at least one letter or number")
-    branch = args.branch or f"{config.branch_prefix}{slug(task_id, 'task')}"
+    if args.current_branch and args.branch:
+        raise CLIError("--current-branch cannot be combined with --branch")
+    workspace_mode = "current_branch" if args.current_branch else "isolated"
+    if args.current_branch:
+        checkout = worktree_manager.inspect_current_checkout(
+            repository,
+            protected_branches={config.base_branch, "main", "master", "trunk"},
+            require_clean=True,
+        )
+        checkout_errors = [str(item) for item in checkout.get("errors", [])]
+        if checkout_errors:
+            raise CLIError("; ".join(checkout_errors))
+        branch = str(checkout.get("branch", ""))
+    else:
+        branch = args.branch or f"{config.branch_prefix}{slug(task_id, 'task')}"
     if not safe_branch(branch):
         raise CLIError("task branch must be a safe git branch name")
     if branch in {config.base_branch, "main", "master", "trunk"}:
         raise CLIError("task branch must not be a protected/default branch")
-    if not any(branch.startswith(prefix) for prefix in ALLOWED_BRANCH_PREFIXES):
+    if not args.current_branch and not any(branch.startswith(prefix) for prefix in ALLOWED_BRANCH_PREFIXES):
         raise CLIError(f"task branch must use one of {sorted(ALLOWED_BRANCH_PREFIXES)}")
     external_id = f"{config.project_id}:{task_id}"
     payload = {
@@ -171,6 +186,7 @@ def handle_task(args: argparse.Namespace) -> int:
         "goal": goal,
         "branch": branch,
         "base_branch": config.base_branch,
+        "workspace_mode": workspace_mode,
         "priority": args.priority,
         "max_retries": args.max_retries,
     }
@@ -188,6 +204,7 @@ def handle_task(args: argparse.Namespace) -> int:
                 f"Dry run: {task_id}",
                 f"  repository: {repository}",
                 f"  branch: {branch}",
+                f"  workspace: {'current checkout' if args.current_branch else 'isolated worktree'}",
                 "No queue state was changed.",
             ),
         )
@@ -202,6 +219,7 @@ def handle_task(args: argparse.Namespace) -> int:
         "task_key": record.task_key,
         "repository": str(repository),
         "branch": stored_branch,
+        "workspace_mode": str(record.payload.get("workspace_mode", workspace_mode)),
         "queue_db": str(queue_path),
         "idempotent": record.payload.get("event_id") == envelope["event_id"],
     }
@@ -212,6 +230,7 @@ def handle_task(args: argparse.Namespace) -> int:
             f"Task queued: {task_id}",
             f"  queue id: {record.id}",
             f"  branch: {stored_branch}",
+            f"  workspace: {'current checkout' if args.current_branch else 'isolated worktree'}",
             f"  status: {record.status}",
             "Inspect it with: agent status",
         ),
@@ -278,6 +297,7 @@ def project_tasks(db_path: Path, repository: Path) -> list[dict[str, Any]]:
                 "queue_task_id": int(row["id"]),
                 "task_id": str(task_payload.get("task_id", "")),
                 "goal": str(task_payload.get("goal", "")),
+                "workspace_mode": str(task_payload.get("workspace_mode", "isolated")),
                 "status": str(row["status"]),
                 "run_id": str(row["run_id"]),
                 "requires_human": bool(row["requires_human"]),
@@ -336,6 +356,7 @@ def project_runs(runs_dir: Path, repository: Path) -> list[dict[str, Any]]:
                 "tokens_used": int(workflow.get("tokens_used", 0) or 0),
                 "branch": str(workflow.get("branch", "")),
                 "worktree": str(workflow.get("worktree", workflow.get("repository", ""))),
+                "workspace_mode": str(workflow.get("workspace_mode", "isolated")),
                 "blockers": [str(item) for item in workflow.get("blockers", [])],
                 "current_role": str(workflow.get("current_role", "")),
                 "failure_id": str(workflow.get("failure_id", "")),
@@ -458,7 +479,10 @@ def handle_status(args: argparse.Namespace) -> int:
     ]
     for item in tasks[: args.limit]:
         marker = " !" if item["requires_human"] else ""
-        lines.append(f"  task {item['queue_task_id']}: {item['task_id']} [{item['status']}]{marker}")
+        lines.append(
+            f"  task {item['queue_task_id']}: {item['task_id']} [{item['status']}]{marker} "
+            f"workspace={item['workspace_mode']}"
+        )
         if item["failure_kind"]:
             lines.append(
                 f"    failure: {item['failure_kind']}; action: {item['recovery_action'] or 'none'}; "
@@ -480,7 +504,8 @@ def handle_status(args: argparse.Namespace) -> int:
                 f"checkpoint={run['resume_from'] or 'none'}"
             )
             lines.append(
-                f"    branch: {run['branch'] or 'unknown'}; worktree: {run['worktree'] or 'unknown'}"
+                f"    branch: {run['branch'] or 'unknown'}; worktree: {run['worktree'] or 'unknown'}; "
+                f"workspace: {run['workspace_mode']}"
             )
             if run["failure_error_type"] or run["failure_message"]:
                 lines.append(
@@ -792,6 +817,11 @@ def build_parser() -> argparse.ArgumentParser:
     task_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")
     task_parser.add_argument("--task-id", default="")
     task_parser.add_argument("--branch", default="")
+    task_parser.add_argument(
+        "--current-branch",
+        action="store_true",
+        help="run in the clean currently checked-out branch without creating a worktree",
+    )
     task_parser.add_argument("--priority", type=int, choices=range(-100, 101), default=0)
     task_parser.add_argument("--max-retries", type=int, choices=range(0, 11), default=2)
     task_parser.add_argument("--dry-run", action="store_true")

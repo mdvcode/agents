@@ -4,6 +4,8 @@
 
 `pipx install ai-harness` -> `agent init` -> `.agent/project.yaml` + `AGENTS.md` -> `agent task "Goal"` -> normalized Task envelope -> SQLite queue -> worker/worktree/workflow -> `agent status` -> PR or compact exception.
 
+`agent task --current-branch "Goal"` follows the same queue, worker, recovery, and status flow but binds the run to the clean current checkout. The queue reserves a checkout for its earliest unfinished current-branch task until completion or explicit cancellation, and execution stops if the checked-out branch changed after intake.
+
 Project-local configuration authorizes onboarding into isolated execution only. Central Harness policy and repository trust remain mandatory for publication.
 
 ## GitHub Issue Flow

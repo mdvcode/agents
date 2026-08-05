@@ -46,6 +46,71 @@ def test_enqueue_is_idempotent_and_claims_are_unique(tmp_path: Path) -> None:
     assert len(set(ids)) == 3
 
 
+def test_claim_serializes_current_branch_tasks_for_one_checkout(tmp_path: Path) -> None:
+    queue = TaskQueue(tmp_path / "queue.db")
+    repository = str((tmp_path / "shared").resolve())
+    first = queue.enqueue(
+        task_key="current-1",
+        payload={"task_id": "current-1", "repository": repository, "workspace_mode": "current_branch"},
+    )
+    second = queue.enqueue(
+        task_key="current-2",
+        payload={"task_id": "current-2", "repository": repository, "workspace_mode": "current_branch"},
+    )
+    unrelated = queue.enqueue(
+        task_key="current-other",
+        payload={
+            "task_id": "current-other",
+            "repository": str((tmp_path / "other").resolve()),
+            "workspace_mode": "current_branch",
+        },
+    )
+
+    claimed_first = queue.claim(worker_id="worker-1")
+    claimed_other = queue.claim(worker_id="worker-2")
+    blocked_same_checkout = queue.claim(worker_id="worker-3")
+
+    assert claimed_first is not None and claimed_first.id == first.id
+    assert claimed_other is not None and claimed_other.id == unrelated.id
+    assert blocked_same_checkout is None
+    queue.finish(task_id=first.id, worker_id="worker-1", status="completed")
+    claimed_second = queue.claim(worker_id="worker-3")
+    assert claimed_second is not None and claimed_second.id == second.id
+
+
+def test_unfinished_current_branch_task_keeps_checkout_reserved(tmp_path: Path) -> None:
+    queue = TaskQueue(tmp_path / "queue.db")
+    repository = str((tmp_path / "shared").resolve())
+    first = queue.enqueue(
+        task_key="approval-1",
+        payload={
+            "task_id": "approval-1",
+            "repository": repository,
+            "workspace_mode": "current_branch",
+            "run_id": "run-approval",
+        },
+        run_id="run-approval",
+    )
+    queue.enqueue(
+        task_key="approval-2",
+        payload={"task_id": "approval-2", "repository": repository, "workspace_mode": "current_branch"},
+    )
+    claimed = queue.claim(worker_id="worker-1")
+    assert claimed is not None and claimed.id == first.id
+    queue.finish(
+        task_id=first.id,
+        worker_id="worker-1",
+        status="awaiting_approval",
+        requires_human=True,
+        exception_reason="approval required",
+    )
+
+    assert queue.claim(worker_id="worker-2") is None
+    queue.abort_run("run-approval")
+    released = queue.claim(worker_id="worker-2")
+    assert released is not None and released.payload["task_id"] == "approval-2"
+
+
 def test_heartbeat_extends_only_owned_active_lease(tmp_path: Path) -> None:
     queue = TaskQueue(tmp_path / "queue.db")
     task = queue.enqueue(task_key="heartbeat", payload={"task_id": "a", "repository": "/tmp/repo"})

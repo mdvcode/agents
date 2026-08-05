@@ -112,6 +112,7 @@ def safe_payload(record: TaskRecord) -> dict[str, str]:
         "repository",
         "branch",
         "base_branch",
+        "workspace_mode",
         "run_id",
         "adapter_command",
         "runtime_provider",
@@ -127,6 +128,9 @@ def safe_payload(record: TaskRecord) -> dict[str, str]:
     missing = [field for field in required if not isinstance(record.payload.get(field), str) or not record.payload[field]]
     if missing:
         raise ValueError("missing task payload fields: " + ", ".join(missing))
+    workspace_mode = record.payload.get("workspace_mode", "isolated")
+    if workspace_mode not in {"isolated", "current_branch"}:
+        raise ValueError("workspace_mode must be isolated or current_branch")
     if (
         record.payload.get("adapter_command") or record.payload.get("runtime_command")
     ) and os.environ.get("AGENT_HARNESS_TEST_MODE") != "1":
@@ -208,6 +212,8 @@ class WorkflowWorkerPool:
             command.extend(["--runtime-provider", payload["runtime_provider"]])
         if payload.get("runtime_command"):
             command.extend(["--runtime-command", payload["runtime_command"]])
+        if payload.get("workspace_mode") == "current_branch":
+            command.append("--current-branch")
         workflow_path = run_dir / "workflow.json"
         if workflow_path.exists():
             try:

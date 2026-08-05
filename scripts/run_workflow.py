@@ -256,6 +256,7 @@ def run_workflow(
     repository: Path | None = None,
     branch: str = "",
     base_branch: str = "main",
+    current_branch: bool = False,
     adapter_command: str = "",
     resume: bool = False,
     runtime_provider: str = "",
@@ -276,6 +277,7 @@ def run_workflow(
         repository=repository_value,
         branch=branch_value,
         base_branch=base_branch,
+        workspace_mode="current_branch" if current_branch else "isolated",
     )
     existing = find_completed_run(RUNS_DIR, fingerprint, exclude_run_id="") if not resume else None
     if existing is not None:
@@ -475,6 +477,12 @@ def run_workflow(
                 command = command + " --dry-run"
             if resume and command.startswith("python3 scripts/agent_role_runner.py") and "--resume" not in command:
                 command = command + " --resume"
+            if (
+                current_branch
+                and command.startswith("python3 scripts/agent_role_runner.py")
+                and "--current-branch" not in command
+            ):
+                command = command + " --current-branch"
             for attempt in range(1, max_retries + 2):
                 if attempt > 1:
                     total_retries += 1
@@ -637,6 +645,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo", type=Path, default=None)
     parser.add_argument("--branch", default="")
     parser.add_argument("--base-branch", default="main")
+    parser.add_argument("--current-branch", action="store_true")
     parser.add_argument("--adapter-command", default="")
     parser.add_argument("--runtime-provider", default="")
     parser.add_argument("--runtime-command", default="")
@@ -658,6 +667,7 @@ def main() -> int:
             repository=args.repo,
             branch=args.branch,
             base_branch=args.base_branch,
+            current_branch=args.current_branch,
             adapter_command=args.adapter_command,
             resume=args.resume,
             runtime_provider=args.runtime_provider,

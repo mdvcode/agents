@@ -43,7 +43,7 @@ from run_state import (
 from tool_preflight import role_tool_preflight
 from validate_artifacts import validate_required as validate_artifact_required
 from workflow_router import decide_next_role, load_yaml
-from worktree_manager import create_worktree, slug
+from worktree_manager import create_worktree, inspect_current_checkout, slug, use_current_checkout
 from ai_harness.recovery import RecoveryCoordinator, classify_failure, load_recovery_policy
 from ai_harness.recovery.checkpoints import (
     CheckpointError,
@@ -736,12 +736,26 @@ def prepare_worktree(
     branch: str,
     base_branch: str,
     create_task_worktree: bool,
+    current_branch: bool = False,
 ) -> tuple[Path, str, str, list[str]]:
     record, errors = resolve_registry_record(repository, project)
     if errors:
         return repository, "", "", errors
     effective_base = record.base_branch if record is not None else base_branch
     effective_branch = branch or f"issue/{slug(task_id)}"
+    if current_branch:
+        result = use_current_checkout(
+            repository,
+            task_id,
+            effective_branch,
+            effective_base,
+            run_id,
+            runs_dir=RUNS,
+            require_clean=True,
+        )
+        if result.get("execution_status") != "completed":
+            return repository, effective_branch, effective_base, [str(item) for item in result.get("errors", [])]
+        return repository, effective_branch, effective_base, []
     if not create_task_worktree:
         return repository, effective_branch, effective_base, []
     result = create_worktree(
@@ -1038,6 +1052,7 @@ def run_roles(
     token_budget: int = 12000,
     timeout_seconds: int = 600,
     create_task_worktree: bool = False,
+    current_branch: bool = False,
     resume: bool = False,
     runtime_provider: str = "",
     runtime_command: str = "",
@@ -1076,6 +1091,7 @@ def run_roles(
             repository=repository,
             branch=branch,
             base_branch=base_branch,
+            workspace_mode="current_branch" if current_branch else "isolated",
         )
         if existing.get("execution_status") == "completed" and existing.get("input_fingerprint") == fingerprint:
             return existing
@@ -1129,6 +1145,7 @@ def run_roles(
         worktree = Path(str(state.get("worktree", ""))).resolve()
         effective_branch = str(state.get("branch", branch))
         effective_base = str(state.get("base_branch", base_branch))
+        current_branch = str(state.get("workspace_mode", "isolated")) == "current_branch"
         stored_runtime = state.get("runtime", state.get("executor", {}))
         if not isinstance(stored_runtime, dict):
             stored_runtime = {}
@@ -1144,6 +1161,14 @@ def run_roles(
         setup_errors = []
         if not repository.is_dir() or not worktree.is_dir():
             setup_errors.append("resume repository or task worktree is missing")
+        if current_branch and repository.is_dir():
+            checkout = inspect_current_checkout(
+                repository,
+                expected_branch=effective_branch,
+                protected_branches={effective_base, "main", "master", "trunk"},
+                require_clean=False,
+            )
+            setup_errors.extend(str(item) for item in checkout.get("errors", []))
         role = str(state.pop("resume_role", ""))
         if not role:
             last_route = state.get("last_route", {})
@@ -1192,6 +1217,7 @@ def run_roles(
             branch,
             base_branch,
             create_task_worktree,
+            current_branch,
         )
     runtime = None
     try:
@@ -1203,9 +1229,9 @@ def run_roles(
         )
     except RuntimeConfigurationError as exc:
         setup_errors.append(str(exc))
-    if runtime is not None and runtime.descriptor.production and not create_task_worktree:
+    if runtime is not None and runtime.descriptor.production and not (create_task_worktree or current_branch):
         setup_errors.append(
-            "production runtime requires --create-worktree; implementation may not run in the source repository"
+            "production runtime requires an isolated task worktree or explicit --current-branch mode"
         )
     if resume:
         if runtime is not None:
@@ -1221,6 +1247,7 @@ def run_roles(
             "project_profile": project_profile,
             "repository": str(repository),
             "worktree": str(worktree.resolve()),
+            "workspace_mode": "current_branch" if current_branch else "isolated",
             "branch": effective_branch,
             "base_branch": effective_base,
             "dry_run": dry_run,
@@ -1810,6 +1837,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--token-budget", type=int, default=12000)
     parser.add_argument("--timeout-seconds", type=int, default=600)
     parser.add_argument("--create-worktree", action="store_true")
+    parser.add_argument("--current-branch", action="store_true")
     parser.add_argument("--resume", action="store_true")
     return parser.parse_args()
 
@@ -1831,6 +1859,7 @@ def main() -> int:
         token_budget=args.token_budget,
         timeout_seconds=args.timeout_seconds,
         create_task_worktree=args.create_worktree,
+        current_branch=args.current_branch,
         resume=args.resume,
         runtime_provider=args.runtime_provider,
         runtime_command=args.runtime_command,

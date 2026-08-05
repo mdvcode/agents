@@ -25,6 +25,7 @@ def test_all_sources_normalize_to_one_task_envelope(tmp_path: Path, source: str)
     assert envelope["source"] == source
     assert envelope["task_id"] == f"task-{source}"
     assert envelope["repository"] == str(tmp_path.resolve())
+    assert envelope["workspace_mode"] == "isolated"
     assert envelope["event_id"]
 
 
@@ -51,3 +52,23 @@ def test_event_rejects_non_numeric_queue_controls(tmp_path: Path) -> None:
             payload={"external_id": "bad", "priority": "urgent"},
             repository=tmp_path,
         )
+
+
+def test_current_branch_workspace_mode_survives_normalization_and_queueing(tmp_path: Path) -> None:
+    queue = TaskQueue(tmp_path / "queue.db")
+    envelope = normalize_event(
+        source="cli",
+        payload={
+            "external_id": "current-1",
+            "task_id": "current-1",
+            "goal": "Use the checkout",
+            "branch": "feature/current",
+            "workspace_mode": "current_branch",
+        },
+        repository=tmp_path,
+    )
+
+    record = enqueue_envelope(queue, envelope)
+
+    assert envelope["workspace_mode"] == "current_branch"
+    assert record.payload["workspace_mode"] == "current_branch"

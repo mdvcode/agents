@@ -61,6 +61,7 @@ This repository is the local operating base for agents working across supported 
 - `pipx install .`: install the local `ai-harness` distribution once.
 - `agent init`: create `.agent/project.yaml` and safe project instructions.
 - `agent task "Goal"`: enqueue a normalized task for the current project.
+- `agent task --current-branch "Goal"`: safely queue work in the clean, already checked-out non-default branch without creating a worktree.
 - `agent status`: show compact project queue/run state.
 - `agent doctor [--full]`: validate packaging, project config, Codex CLI, and optionally runtime authentication.
 

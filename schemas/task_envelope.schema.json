@@ -1,16 +1,17 @@
 {
   "required": [
     "event_id", "source", "event_type", "task_key", "task_id", "goal",
-    "project", "repository", "branch", "base_branch", "run_id", "priority",
+    "project", "repository", "branch", "base_branch", "workspace_mode", "run_id", "priority",
     "max_retries", "external_id", "received_at", "metadata"
   ],
-  "enums": {
-    "source": ["cli", "github_issue", "webhook", "api", "ci"]
-  },
   "types": {
     "event_id": "str", "source": "str", "event_type": "str", "task_key": "str",
     "task_id": "str", "goal": "str", "project": "str", "repository": "str",
-    "branch": "str", "base_branch": "str", "run_id": "str", "priority": "int",
+    "branch": "str", "base_branch": "str", "workspace_mode": "str", "run_id": "str", "priority": "int",
     "max_retries": "int", "external_id": "str", "received_at": "str", "metadata": "dict"
+  },
+  "enums": {
+    "source": ["cli", "github_issue", "webhook", "api", "ci"],
+    "workspace_mode": ["isolated", "current_branch"]
   }
 }

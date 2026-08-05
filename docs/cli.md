@@ -42,9 +42,12 @@ Existing files are preserved. Use `--force` only when replacement is intentional
 ```sh
 agent task "Fix login"
 agent task --repo . --task-id fix-login "Fix login"
+agent task --current-branch --task-id fix-login "Fix login"
 ```
 
 The command normalizes the request into the existing Task envelope and idempotently enqueues it in the Harness SQLite queue. Repeating the same explicit `--task-id` returns the existing queue item. Generated branches use the prefix selected during initialization and never use the default branch.
+
+`--current-branch` is the explicit exception to isolated task worktrees. It records and uses the currently checked-out non-default branch without creating, switching, or renaming a branch or worktree. The command refuses detached HEAD, protected/default branches, and uncommitted changes; commit or stash the checkout first. The worker revalidates the branch immediately before execution, and the queue serializes current-branch tasks that target the same checkout. Unrelated repositories and ordinary isolated-worktree tasks can still run concurrently. Status, retry, resume, and abort use the same authoritative run and checkout as other queued tasks.
 
 Use `--dry-run --json` to inspect the envelope without changing queue state.
 

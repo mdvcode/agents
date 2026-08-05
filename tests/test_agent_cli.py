@@ -36,6 +36,11 @@ def initialize_git_repository(path: Path) -> None:
     subprocess.run(["git", "commit", "-m", "initial"], cwd=path, check=True, capture_output=True, text=True)
 
 
+def commit_all(path: Path, message: str = "project setup") -> None:
+    subprocess.run(["git", "add", "."], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-m", message], cwd=path, check=True, capture_output=True, text=True)
+
+
 def configure_temporary_harness(monkeypatch: object, tmp_path: Path) -> Path:
     state_root = tmp_path / "harness-state"
     state_root.mkdir()
@@ -202,6 +207,90 @@ def test_agent_task_rejects_default_branch_before_queue_mutation(
 
     assert result == 2
     assert "protected/default branch" in capsys.readouterr().err
+    assert not (state_root / ".agent-queue").exists()
+
+
+def test_agent_task_current_branch_queues_existing_clean_checkout_without_renaming_it(
+    tmp_path: Path,
+    monkeypatch: object,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    subprocess.run(["git", "switch", "-c", "custom/kc-413"], cwd=repository, check=True, capture_output=True)
+    commit_all(repository)
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+
+    assert cli.main(
+        [
+            "task",
+            "Implement KC-413",
+            "--repo",
+            str(repository),
+            "--task-id",
+            "kc-413",
+            "--current-branch",
+            "--json",
+        ]
+    ) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["branch"] == "custom/kc-413"
+    assert result["workspace_mode"] == "current_branch"
+    assert subprocess.run(
+        ["git", "branch", "--show-current"], cwd=repository, check=True, capture_output=True, text=True
+    ).stdout.strip() == "custom/kc-413"
+    assert not (state_root / ".agent-worktrees").exists()
+    with sqlite3.connect(state_root / ".agent-queue" / "tasks.db") as connection:
+        payload = json.loads(connection.execute("SELECT payload_json FROM tasks").fetchone()[0])
+    assert payload["workspace_mode"] == "current_branch"
+    assert payload["branch"] == "custom/kc-413"
+
+
+def test_agent_task_current_branch_refuses_dirty_checkout_before_queue_mutation(
+    tmp_path: Path,
+    monkeypatch: object,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    subprocess.run(["git", "switch", "-c", "feature/current"], cwd=repository, check=True, capture_output=True)
+    commit_all(repository)
+    (repository / "README.md").write_text("dirty\n", encoding="utf-8")
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+
+    result = cli.main(
+        ["task", "Unsafe dirty run", "--repo", str(repository), "--current-branch"]
+    )
+
+    assert result == 2
+    assert "uncommitted changes" in capsys.readouterr().err
+    assert not (state_root / ".agent-queue").exists()
+
+
+def test_agent_task_current_branch_refuses_default_branch(
+    tmp_path: Path,
+    monkeypatch: object,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    commit_all(repository)
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+
+    result = cli.main(["task", "Unsafe default", "--repo", str(repository), "--current-branch"])
+
+    assert result == 2
+    assert "protected or configured as the default branch" in capsys.readouterr().err
     assert not (state_root / ".agent-queue").exists()
 
 
