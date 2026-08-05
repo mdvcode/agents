@@ -50,15 +50,56 @@ def branch_pushed(repository: Path, branch: str, runner: Runner = _run) -> bool:
     return remote.stdout.split()[0] == local.stdout.strip()
 
 
-def pr_exists(repository: Path, branch: str, runner: Runner = _run) -> tuple[int, str] | None:
+def pr_exists(
+    repository: Path,
+    branch: str,
+    runner: Runner = _run,
+    markers: Sequence[str] = (),
+) -> tuple[int, str] | None:
     result = runner(["gh", "pr", "view", branch, "--json", "number,url"], repository)
-    if result.returncode != 0:
-        return None
-    try:
-        value = json.loads(result.stdout)
-        return int(value["number"]), str(value["url"])
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return None
+    if result.returncode == 0:
+        try:
+            value = json.loads(result.stdout)
+            return int(value["number"]), str(value["url"])
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            pass
+    for marker in dict.fromkeys(item for item in markers if item):
+        listed = runner(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--state",
+                "all",
+                "--search",
+                marker,
+                "--json",
+                "number,url,headRefName",
+                "--limit",
+                "20",
+            ],
+            repository,
+        )
+        if listed.returncode != 0:
+            continue
+        try:
+            values = json.loads(listed.stdout)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(values, list):
+            continue
+        matching = [
+            item
+            for item in values
+            if isinstance(item, dict) and str(item.get("headRefName", "")) == branch
+        ]
+        candidates = matching or [item for item in values if isinstance(item, dict)]
+        if candidates:
+            try:
+                return int(candidates[0]["number"]), str(candidates[0]["url"])
+            except (KeyError, TypeError, ValueError):
+                continue
+    return None
 
 
 def approval_consumed(approval: dict[str, object]) -> bool:

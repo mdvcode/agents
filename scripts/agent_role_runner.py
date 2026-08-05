@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from opentelemetry.trace import Status, StatusCode
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -51,6 +53,7 @@ from ai_harness.recovery.checkpoints import (
     write_checkpoint,
 )
 from ai_harness.recovery.models import FailureRecord, persist_failure
+from ai_harness.observability import safe_telemetry_runtime
 
 
 ROOT = HARNESS_ROOT
@@ -362,6 +365,59 @@ def safe_artifact_name(value: Any) -> bool:
         return False
     path = Path(value)
     return not path.is_absolute() and ".." not in path.parts
+
+
+def artifact_bytes(path: Path, *, stop_after: int) -> int:
+    total = 0
+    for candidate in path.rglob("*"):
+        if candidate.is_symlink() or not candidate.is_file():
+            continue
+        try:
+            total += candidate.stat().st_size
+        except OSError:
+            continue
+        if total > stop_after:
+            return total
+    return total
+
+
+def execute_runtime_observed(
+    runtime: Any,
+    *,
+    run_dir: Path,
+    role: str,
+    context: Path,
+    task: dict[str, Any],
+    worktree: Path,
+    artifacts: Path,
+) -> dict[str, Any]:
+    telemetry = safe_telemetry_runtime(run_dir=run_dir, service_name="ai-harness-role-runtime")
+    try:
+        with telemetry.span("ai_harness.runtime.execute", {"role": role}) as span:
+            telemetry.runtime_executions_total.add(1, {"role": role})
+            result = runtime.execute(
+                role=role,
+                context=context,
+                task=task,
+                worktree=worktree,
+                artifacts=artifacts,
+            )
+            failure = result.get("_failure", {}) if isinstance(result, dict) else {}
+            if isinstance(failure, dict) and failure:
+                error_type = str(failure.get("error_type", "RuntimeFailure"))
+                telemetry.runtime_failures_total.add(1, {"error.type": error_type})
+                span.set_attribute("error.type", error_type)
+                span.set_status(Status(StatusCode.ERROR))
+                if "timeout" in error_type.lower():
+                    telemetry.runtime_timeouts_total.add(1, {"error.type": error_type})
+                    with telemetry.span("ai_harness.runtime.timeout", {"role": role, "error.type": error_type}):
+                        pass
+            return result
+    finally:
+        try:
+            telemetry.shutdown()
+        except Exception:
+            pass
 
 
 def ensure_project_profile_artifact(artifacts_dir: Path, project_profile: str) -> None:
@@ -1408,13 +1464,28 @@ def run_roles(
                         project_profile=project_profile,
                     )
                     write_json(requests_dir / f"{role}.json", request)
-                    result = runtime.execute(
+                    result = execute_runtime_observed(
+                        runtime,
+                        run_dir=run_dir,
                         role=role,
                         context=manifest_path,
                         task=request,
                         worktree=worktree,
                         artifacts=run_artifacts,
                     )
+
+        artifact_limit = load_recovery_policy().runtime_limits.max_artifact_bytes
+        used_artifact_bytes = artifact_bytes(run_artifacts, stop_after=artifact_limit)
+        if used_artifact_bytes > artifact_limit:
+            result = blocked_result(
+                "Run artifacts exceeded the configured byte limit.",
+                [f"artifact bytes {used_artifact_bytes} exceed limit {artifact_limit}"],
+            )
+            result["_failure"] = {
+                "kind": "unrecoverable",
+                "error_type": "ArtifactLimitExceeded",
+                "message": "Run artifacts exceeded the configured byte limit.",
+            }
 
         role_checkpoint(
             run_dir=run_dir,

@@ -20,6 +20,8 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 if str(SCRIPT_DIR.parent) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR.parent))
+if str(SCRIPT_DIR.parents[1]) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR.parents[1]))
 
 from runtime_contracts import (  # noqa: E402
     DEFAULT_TIMEOUT_SECONDS,
@@ -32,6 +34,8 @@ from runtime_contracts import (  # noqa: E402
     validate_contract,
 )
 from check_codex_runtime import configured_codex_base_command  # noqa: E402
+from ai_harness.processes import ManagedProcessResult, run_managed_process  # noqa: E402
+from ai_harness.recovery.policy import load_recovery_policy  # noqa: E402
 
 
 MAX_OUTPUT_REPAIR_ATTEMPTS = 2
@@ -45,6 +49,73 @@ def failure_result(summary: str, blockers: list[str], *, kind: str, error_type: 
         "message": summary,
     }
     return result
+
+
+def run_codex_process(
+    *,
+    command: list[str],
+    input_text: str,
+    repository: Path,
+    request: dict[str, Any],
+    manifest: dict[str, Any],
+    timeout_seconds: int,
+    env: dict[str, str],
+    suffix: str = "",
+) -> ManagedProcessResult:
+    """Run Codex with bounded files, artifacts, descriptors, and a killable process group."""
+
+    limits = load_recovery_policy().runtime_limits
+    role = str(request["role"]).replace("/", "-")
+    raw_dir = raw_outputs_dir(request, manifest)
+    effective_timeout = min(timeout_seconds, limits.role_timeout_seconds)
+    return run_managed_process(
+        command,
+        cwd=repository,
+        input_text=input_text,
+        stdout_path=raw_dir / f"{role}{suffix}.stdout.log",
+        stderr_path=raw_dir / f"{role}{suffix}.stderr.log",
+        env=env,
+        timeout_seconds=effective_timeout,
+        idle_timeout_seconds=min(limits.idle_timeout_seconds, effective_timeout),
+        shutdown_grace_seconds=limits.shutdown_grace_seconds,
+        max_output_bytes=limits.max_output_bytes,
+        artifact_paths=(Path(str(request["artifacts_dir"])),),
+        max_artifact_bytes=limits.max_artifact_bytes,
+        max_open_files=limits.max_open_files,
+    )
+
+
+def managed_failure(completed: ManagedProcessResult, timeout_seconds: int) -> dict[str, Any] | None:
+    if completed.timed_out or completed.idle_timed_out:
+        error_type = "IdleTimeout" if completed.idle_timed_out else "TimeoutExpired"
+        return failure_result(
+            "Codex CLI command timed out.",
+            [f"timeout after {timeout_seconds} seconds"],
+            kind="transient",
+            error_type=error_type,
+        )
+    if completed.output_limit_exceeded:
+        return failure_result(
+            "Codex CLI output exceeded the configured limit.",
+            ["bounded output limit exceeded"],
+            kind="runtime_failure",
+            error_type="OutputLimitExceeded",
+        )
+    if completed.artifact_limit_exceeded:
+        return failure_result(
+            "Codex CLI artifacts exceeded the configured limit.",
+            ["bounded artifact limit exceeded"],
+            kind="runtime_failure",
+            error_type="ArtifactLimitExceeded",
+        )
+    if completed.open_file_limit_exceeded:
+        return failure_result(
+            "Codex CLI open-file budget is exhausted.",
+            ["bounded open-file limit exceeded"],
+            kind="runtime_failure",
+            error_type="OpenFileLimitExceeded",
+        )
+    return None
 
 
 def safe_artifact_name(value: Any) -> bool:
@@ -546,27 +617,22 @@ def run_codex(
         before_snapshot = git_snapshot(repository)
     started = time.monotonic()
     try:
-        completed = subprocess.run(
-            command,
-            input=prompt,
-            cwd=repository,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=timeout_seconds,
+        completed = run_codex_process(
+            command=command,
+            input_text=prompt,
+            repository=repository,
+            request=request,
+            manifest=manifest,
+            timeout_seconds=timeout_seconds,
             env=env,
         )
     except FileNotFoundError as exc:
         return failure_result("Codex CLI command is missing.", [str(exc)], kind="tool_failure", error_type="FileNotFoundError")
     except PermissionError as exc:
         return failure_result("Codex CLI command is not executable.", [str(exc)], kind="tool_failure", error_type="PermissionError")
-    except subprocess.TimeoutExpired:
-        return failure_result(
-            "Codex CLI command timed out.",
-            [f"timeout after {timeout_seconds} seconds"],
-            kind="transient",
-            error_type="TimeoutExpired",
-        )
+    managed_error = managed_failure(completed, timeout_seconds)
+    if managed_error is not None:
+        return managed_error
     duration_ms = int((time.monotonic() - started) * 1000)
     write_raw_stream(request, manifest, completed.stdout)
     thread_id, usage, event_errors = parse_jsonl_events(completed.stdout)
@@ -633,18 +699,22 @@ def run_codex(
                 ]
             )
             try:
-                repaired = subprocess.run(
-                    repair_command,
-                    input=repair_prompt,
-                    cwd=repository,
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                    timeout=timeout_seconds,
+                repaired = run_codex_process(
+                    command=repair_command,
+                    input_text=repair_prompt,
+                    repository=repository,
+                    request=request,
+                    manifest=manifest,
+                    timeout_seconds=timeout_seconds,
                     env=env,
+                    suffix=f"-repair-{repair_attempt}",
                 )
-            except (OSError, subprocess.TimeoutExpired) as exc:
+            except OSError as exc:
                 validation_errors = [f"output repair runtime failed: {type(exc).__name__}"]
+                continue
+            repair_failure = managed_failure(repaired, timeout_seconds)
+            if repair_failure is not None:
+                validation_errors = [str(repair_failure.get("summary", "output repair resource failure"))]
                 continue
             write_raw_stream(request, manifest, repaired.stdout, suffix=f"-repair-{repair_attempt}")
             if repaired.returncode != 0:

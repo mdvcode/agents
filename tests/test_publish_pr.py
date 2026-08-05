@@ -96,6 +96,81 @@ def test_reconcile_side_effects_recovers_commit_push_and_pr_after_crash(tmp_path
     assert publication.execution_status == "pr_published"
     persisted = json.loads(publisher.publication_path.read_text(encoding="utf-8"))
     assert persisted["pr_url"] == "https://example/pr/17"
+    spans_path = publisher.artifacts.parent / "raw-events" / "otel-spans.jsonl"
+    spans = [json.loads(line) for line in spans_path.read_text(encoding="utf-8").splitlines()]
+    assert spans[-1]["name"] == "ai_harness.publication.idempotency_check"
+    assert spans[-1]["attributes"]["publication.prevented_steps"] == ["commit", "push", "pr"]
+
+
+@pytest.mark.parametrize(
+    ("existing", "expected_step", "expected_status"),
+    [
+        ({}, "commit", "committed"),
+        ({"commit_sha": "abc123"}, "push", "pushed"),
+        ({"commit_sha": "abc123", "push_completed": True}, "pr", "pr_published"),
+    ],
+)
+def test_each_publication_crash_boundary_reconciles_without_repeating_side_effect(
+    tmp_path: Path,
+    existing: dict[str, object],
+    expected_step: str,
+    expected_status: str,
+) -> None:
+    marker = "run-test:publication"
+    responses: dict[tuple[str, ...], publish_pr.CommandResult] = {}
+    if expected_step == "commit":
+        responses[("git", "log", "--format=%H%x00%B%x00", "-n", "200")] = publish_pr.CommandResult(
+            0, f"abc123\x00subject\n\nTask-Idempotency-Key: {marker}\x00", ""
+        )
+        responses[("git", "rev-parse", "feat/task")] = publish_pr.CommandResult(1, "", "missing")
+    elif expected_step == "push":
+        responses[("git", "rev-parse", "feat/task")] = publish_pr.CommandResult(0, "abc123\n", "")
+        responses[("git", "ls-remote", "origin", "refs/heads/feat/task")] = publish_pr.CommandResult(
+            0, "abc123\trefs/heads/feat/task\n", ""
+        )
+    else:
+        responses[("gh", "pr", "view", "feat/task", "--json", "number,url")] = publish_pr.CommandResult(
+            0, '{"number":17,"url":"https://example/pr/17"}', ""
+        )
+    publisher = publisher_for(tmp_path, runner=FakeRunner(responses))
+    publication = publish_pr.PublicationResult(
+        run_id="run-test",
+        branch="feat/task",
+        idempotency_key=marker,
+        **existing,
+    )
+
+    publisher.reconcile_side_effects(tmp_path, publication)
+
+    assert publication.reconciled_steps == [expected_step]
+    assert publication.execution_status == expected_status
+
+
+def test_publication_idempotency_telemetry_failure_is_fail_open(tmp_path: Path, monkeypatch: object) -> None:
+    marker = "run-test:publication"
+    runner = FakeRunner(
+        {
+            ("git", "log", "--format=%H%x00%B%x00", "-n", "200"): publish_pr.CommandResult(
+                0, f"abc123\x00subject\n\nTask-Idempotency-Key: {marker}\x00", ""
+            ),
+        }
+    )
+    monkeypatch.setattr(
+        publish_pr,
+        "safe_telemetry_runtime",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("exporter unavailable")),
+    )
+    publisher = publisher_for(tmp_path, runner=runner)
+    publication = publish_pr.PublicationResult(
+        run_id="run-test",
+        branch="feat/task",
+        idempotency_key=marker,
+    )
+
+    publisher.reconcile_side_effects(tmp_path, publication)
+
+    assert publication.commit_sha == "abc123"
+    assert publication.reconciled_steps == ["commit"]
 
 
 def risk_payload(risk_class: str = "medium") -> dict[str, object]:
@@ -166,6 +241,16 @@ def test_pr_state_ready_only_when_checks_and_evidence_pass() -> None:
     assert publish_pr.determine_pr_state(quality_payload(), verdict) == "ready"
     verdict["visual_evidence"] = {"required": True, "provided": False, "items": []}
     assert publish_pr.determine_pr_state(quality_payload(), verdict) == "draft"
+
+
+def test_irreversible_publication_resume_rejects_changed_inputs() -> None:
+    resume = publish_pr.PublicationResult(
+        commit_sha="abc123",
+        input_fingerprint="sha256:original",
+    )
+
+    assert publish_pr.irreversible_resume_blocker(resume, "sha256:changed")
+    assert publish_pr.irreversible_resume_blocker(resume, "sha256:original") == ""
 
 
 def test_high_risk_blocks_publication_preflight(tmp_path: Path) -> None:

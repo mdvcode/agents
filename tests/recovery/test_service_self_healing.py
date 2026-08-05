@@ -37,6 +37,15 @@ class TaskFailurePool:
         return [object()]
 
 
+class AlwaysFailingPool:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def run_wave(self) -> list[object]:
+        self.calls += 1
+        raise RuntimeError("persistent system wave failure")
+
+
 def service(tmp_path: Path) -> WorkerService:
     return WorkerService(
         queue=TaskQueue(tmp_path / "queue.db"),
@@ -65,3 +74,25 @@ def test_five_unrelated_task_failures_do_not_restart_service(tmp_path: Path) -> 
     assert instance.serve() == 0
     assert instance.total_restart_count == 0
     assert instance.consecutive_failure_count == 0
+
+
+def test_persistent_pool_restart_loop_has_terminal_attempt_fallback(tmp_path: Path) -> None:
+    instance = WorkerService(
+        queue=TaskQueue(tmp_path / "queue.db"),
+        service_id="bounded-restart",
+        workers=1,
+        lease_seconds=30,
+        heartbeat_seconds=1,
+        poll_seconds=0.001,
+        state_path=tmp_path / "service.json",
+        max_consecutive_failures=2,
+    )
+    pool = AlwaysFailingPool()
+    instance.pool = pool  # type: ignore[assignment]
+
+    assert instance.serve() == 1
+    assert pool.calls == 2
+    assert instance.total_restart_count == 2
+    assert instance.consecutive_failure_count == 2
+    state = json.loads((tmp_path / "service.json").read_text(encoding="utf-8"))
+    assert state["status"] == "stopped"

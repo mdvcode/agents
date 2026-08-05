@@ -2,13 +2,32 @@ from __future__ import annotations
 
 import time
 import sys
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import task_queue
 from task_queue import TaskQueue
+
+
+class RecordingInstrument:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, dict[str, str]]] = []
+
+    def add(self, value: int, attributes: dict[str, str]) -> None:
+        self.calls.append((value, attributes))
+
+
+class RecordingTelemetry:
+    def __init__(self) -> None:
+        self.queue_lease_expirations_total = RecordingInstrument()
+        self.dead_letters_total = RecordingInstrument()
+
+    def shutdown(self) -> None:
+        return
 
 
 def test_enqueue_is_idempotent_and_claims_are_unique(tmp_path: Path) -> None:
@@ -89,7 +108,9 @@ def test_expired_lease_is_reclaimed(tmp_path: Path) -> None:
     assert reclaimed.attempts == 2
 
 
-def test_expired_lease_preserves_run_for_checkpoint_resume(tmp_path: Path) -> None:
+def test_expired_lease_preserves_run_for_checkpoint_resume(tmp_path: Path, monkeypatch: object) -> None:
+    telemetry = RecordingTelemetry()
+    monkeypatch.setattr(task_queue, "safe_telemetry_runtime", lambda **_kwargs: telemetry)
     queue = TaskQueue(tmp_path / "queue.db")
     task = queue.enqueue(
         task_key="recover",
@@ -106,7 +127,72 @@ def test_expired_lease_preserves_run_for_checkpoint_resume(tmp_path: Path) -> No
 
     assert recovered is not None
     assert recovered.run_id == "run-recover"
+    assert recovered.lease_owner == "worker-new"
     assert any(event["event"] == "lease_expired_resume" for event in queue.events(task.id))
+    assert telemetry.queue_lease_expirations_total.calls == [(1, {"outcome": "resuming"})]
+
+
+def test_public_reclaim_expired_leases_method_returns_recovered_records(tmp_path: Path) -> None:
+    queue = TaskQueue(tmp_path / "queue.db")
+    task = queue.enqueue(
+        task_key="public-reclaim",
+        payload={"task_id": "public-reclaim", "repository": str(tmp_path)},
+    )
+    claimed = queue.claim(worker_id="stalled", lease_seconds=30)
+    assert claimed is not None
+    assert claimed.lease_owner == "stalled"
+    assert queue.mark_running(task.id, "stalled")
+    with queue.connect() as connection:
+        connection.execute("UPDATE tasks SET lease_expires_at=0 WHERE id=?", (task.id,))
+
+    recovered = queue.reclaim_expired_leases(now=time.time())
+
+    assert [record.id for record in recovered] == [task.id]
+    assert recovered[0].status == "retry_wait"
+    assert recovered[0].lease_owner == ""
+
+
+def test_lease_owner_migration_preserves_existing_recovery_state(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.db"
+    legacy_sql = task_queue.TASKS_TABLE_SQL.replace("    lease_owner TEXT NOT NULL DEFAULT '',\n", "")
+    with sqlite3.connect(path) as connection:
+        connection.execute(legacy_sql.format(table="tasks"))
+        connection.execute(
+            """
+            INSERT INTO tasks(
+                task_key,payload_json,status,run_id,worker_id,lease_expires_at,heartbeat_at,
+                available_at,created_at,updated_at,failure_kind,recovery_action,
+                resume_checkpoint,recovery_attempts,last_failure_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "legacy",
+                '{"task_id":"legacy","repository":"/tmp/repo"}',
+                "running",
+                "run-legacy",
+                "worker-old",
+                time.time() + 30,
+                time.time(),
+                time.time(),
+                time.time(),
+                time.time(),
+                "transient",
+                "resume",
+                "before_runtime_execute",
+                2,
+                "failure-2",
+            ),
+        )
+
+    queue = TaskQueue(path)
+    record = queue.list()[0]
+
+    assert record.lease_owner == "worker-old"
+    assert record.failure_kind == "transient"
+    assert record.recovery_action == "resume"
+    assert record.resume_checkpoint == "before_runtime_execute"
+    assert record.recovery_attempts == 2
+    assert record.last_failure_id == "failure-2"
 
 
 def test_worker_registration_heartbeat_and_stale_monitor(tmp_path: Path) -> None:

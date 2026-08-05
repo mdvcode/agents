@@ -4,6 +4,17 @@ task_recovery:
   max_resume_attempts: 3
   max_consecutive_failures: 5
   max_recovery_duration_seconds: 1800
+runtime_limits:
+  role_timeout_seconds: 600
+  workflow_timeout_seconds: 14400
+  idle_timeout_seconds: 900
+  tool_timeout_seconds: 120
+  approval_timeout_seconds: 86400
+  shutdown_grace_seconds: 10
+  max_output_bytes: 10485760
+  max_artifact_bytes: 52428800
+  max_concurrent_subprocesses: 32
+  max_open_files: 256
 failure_classes:
   transient:
     action: retry

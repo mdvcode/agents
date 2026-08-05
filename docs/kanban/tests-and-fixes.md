@@ -14,6 +14,7 @@
 - None.
 
 ## Done
+- Production Runtime PR1 local acceptance: 86 focused runtime-chaos tests, 287 repository tests, real Codex preflight/smoke, the 30-case evaluation gate, security, artifacts, compilation, and diff checks passed; only the explicitly excluded multi-hour production soak remains.
 - Milestone E2 verification: 41 focused tests and the 218-test repository suite passed with one opt-in smoke skipped; regression failure, incompatible dataset/scorer rejection, structured-input safety, contracts, security, wheel assets, and diff checks passed.
 - Observability verification: 42 focused tests and 205-test repository suite passed with one opt-in smoke skipped; contract, security, wheel, diff, authenticated desktop dashboard, responsive 390 px layout, and console checks passed.
 - Evaluation Framework verification: 7 focused behavior tests, 31 eval/validator/packaging tests, wheel inspection, CLI smoke, security scan, and 201-test repository suite passed; one opt-in real Codex smoke remained skipped.

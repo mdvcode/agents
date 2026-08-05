@@ -11,7 +11,7 @@
 - Step 2 production evidence: implementation is complete; run at least three real queued tasks with two overlapping workers, one successful PR, one human exception, and UI evidence in a registered web repository.
 
 ## Review
-- None.
+- Milestone PR1 production runtime: every locally verifiable requirement, all 20 chaos scenarios, runtime preflight, and real Codex smoke are complete; only the user-excluded real 30-task multi-hour soak remains the production-readiness gate.
 
 ## Done
 - Milestone R1 completion hardening: publication crash reconciliation, atomic approval replay, owned-artifact repair, fail-open workflow telemetry, structured control failures, recovery-rich CLI status, and direct regression coverage.

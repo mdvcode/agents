@@ -1,6 +1,6 @@
 CODEX_CLI ?= $(shell if [ -x /Applications/ChatGPT.app/Contents/Resources/codex ]; then printf /Applications/ChatGPT.app/Contents/Resources/codex; elif [ -x "$$HOME/Applications/ChatGPT.app/Contents/Resources/codex" ]; then printf "$$HOME/Applications/ChatGPT.app/Contents/Resources/codex"; else command -v codex 2>/dev/null || printf codex; fi)
 
-.PHONY: check security validate-artifacts runtime-preflight codex-preflight codex-smoke step1-verify step2-verify eval-score eval-run eval-compare eval-leaderboard eval-regression queue-worker worker-service-start worker-service-restart worker-service-status worker-service-health worker-service-stop control-plane dashboard metrics approve-run resume-run reject-run list-exceptions publish-dry-run publish agent-status
+.PHONY: check security validate-artifacts runtime-preflight codex-preflight codex-smoke runtime-chaos runtime-soak runtime-soak-verify step1-verify step2-verify eval-score eval-run eval-compare eval-leaderboard eval-regression queue-worker worker-service-start worker-service-restart worker-service-status worker-service-health worker-service-stop control-plane dashboard metrics approve-run resume-run reject-run list-exceptions publish-dry-run publish agent-status
 
 RUN_ID ?=
 STEP1_MANIFEST ?=
@@ -18,6 +18,8 @@ EVAL_OUTPUT ?=
 EVAL_EXPERIMENT ?= evals/experiments/production_e2_v1.json
 EVAL_CANDIDATE_REPORT ?=
 EVAL_GATE_OUTPUT ?=
+SOAK_MANIFEST ?=
+SOAK_REPORT ?=
 
 check: validate-artifacts security
 	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests
@@ -45,6 +47,18 @@ codex-preflight: runtime-preflight
 codex-smoke:
 	AGENT_REAL_CODEX_SMOKE=1 AGENT_CODEX_CLI_COMMAND="$(CODEX_CLI)" \
 	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_real_codex_smoke.py -q
+
+runtime-chaos:
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q tests/recovery tests/test_worker_pool.py tests/test_worker_service.py tests/test_task_queue.py tests/test_publish_pr.py tests/test_approval_lifecycle.py
+
+runtime-soak:
+	@test -n "$(SOAK_MANIFEST)" || (echo "SOAK_MANIFEST is required" >&2; exit 2)
+	@test -n "$(SOAK_REPORT)" || (echo "SOAK_REPORT is required" >&2; exit 2)
+	python3 scripts/run_runtime_soak.py "$(SOAK_MANIFEST)" --db "$(QUEUE_DB)" --output "$(SOAK_REPORT)"
+
+runtime-soak-verify:
+	@test -n "$(SOAK_REPORT)" || (echo "SOAK_REPORT is required" >&2; exit 2)
+	python3 scripts/verify_runtime_soak.py "$(SOAK_REPORT)"
 
 step1-verify:
 	@test -n "$(RUN_ID)" || (echo "RUN_ID is required for the evidence artifact owner" >&2; exit 2)

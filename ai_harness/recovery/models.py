@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -27,6 +28,7 @@ _SECRET_PATTERNS = (
     re.compile(r"(?i)(authorization\s*:\s*)([^\s]+(?:\s+[^\s]+)?)"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"),
 )
+_SECRET_METADATA_PARTS = {"authorization", "credential", "password", "prompt", "secret", "token"}
 
 
 def utc_now() -> str:
@@ -38,6 +40,25 @@ def sanitized_message(value: object, *, limit: int = 1000) -> str:
     for pattern in _SECRET_PATTERNS:
         message = pattern.sub(lambda match: f"{match.group(1)}[REDACTED]" if match.lastindex else "[REDACTED]", message)
     return message[:limit]
+
+
+def sanitized_metadata(value: dict[str, Any]) -> dict[str, Any]:
+    safe: dict[str, Any] = {}
+    for raw_key, raw_value in value.items():
+        key = str(raw_key)[:128]
+        if any(part in key.lower() for part in _SECRET_METADATA_PARTS):
+            continue
+        if isinstance(raw_value, dict):
+            safe[key] = sanitized_metadata(raw_value)
+        elif isinstance(raw_value, (list, tuple)):
+            safe[key] = [sanitized_message(item, limit=256) for item in raw_value[:32]]
+        elif isinstance(raw_value, (str, bytes)):
+            safe[key] = sanitized_message(raw_value, limit=512)
+        elif isinstance(raw_value, (bool, int, float)) or raw_value is None:
+            safe[key] = raw_value
+        else:
+            safe[key] = sanitized_message(raw_value, limit=256)
+    return safe
 
 
 @dataclass(frozen=True)
@@ -102,7 +123,7 @@ class FailureRecord:
             max_attempts=max_attempts,
             checkpoint=checkpoint,
             created_at=utc_now(),
-            metadata=dict(metadata or {}),
+            metadata=sanitized_metadata(dict(metadata or {})),
         )
 
 
@@ -130,8 +151,19 @@ def persist_failure(run_dir: Path, failure: FailureRecord) -> Path:
     failures_dir.mkdir(parents=True, exist_ok=True)
     path = failures_dir / f"{failure.failure_id}.json"
     temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(failure.as_json(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    payload = failure.as_json()
+    payload["message"] = sanitized_message(payload.get("message", ""))
+    payload["metadata"] = sanitized_metadata(dict(payload.get("metadata", {})))
+    with temporary.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
     temporary.replace(path)
+    directory_fd = os.open(failures_dir, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
     errors = resolved / "errors.jsonl"
     with errors.open("a", encoding="utf-8") as handle:
         handle.write(
@@ -149,4 +181,6 @@ def persist_failure(run_dir: Path, failure: FailureRecord) -> Path:
             )
             + "\n"
         )
+        handle.flush()
+        os.fsync(handle.fileno())
     return path

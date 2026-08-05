@@ -4,6 +4,7 @@ import sqlite3
 import subprocess
 
 from ai_harness.recovery.classifier import classify_failure
+from ai_harness.recovery.models import FailureRecord
 
 
 def test_codex_timeout_is_transient_and_retryable() -> None:
@@ -44,3 +45,44 @@ def test_key_error_is_internal_and_unknown_text_is_preserved() -> None:
     )
     assert failure.kind == "internal_error"
     assert "missing recovery field" in failure.message
+
+
+def test_schema_validation_error_is_repairable_invalid_output() -> None:
+    failure = classify_failure(
+        ValueError("schema validation failed: missing required field"),
+        None,
+        {"run_id": "run-1", "task_id": "task-1"},
+    )
+
+    assert failure.kind == "invalid_output"
+    assert failure.repairable is True
+
+
+def test_pytest_failure_routes_to_existing_verification_repair_loop() -> None:
+    failure = classify_failure(
+        RuntimeError("pytest failed: regression test failed"),
+        1,
+        {"run_id": "run-1", "task_id": "task-1"},
+    )
+
+    assert failure.kind == "verification_failure"
+    assert failure.repairable is True
+
+
+def test_failure_metadata_drops_secret_bearing_fields() -> None:
+    failure = FailureRecord.create(
+        run_id="run-1",
+        task_id="task-1",
+        role="worker",
+        stage="execute",
+        kind="runtime_failure",
+        error_type="Injected",
+        message="Authorization: Bearer private-value",
+        retryable=True,
+        repairable=False,
+        metadata={"token": "private-value", "safe": "sk-privatevalue"},
+    )
+
+    assert "private-value" not in failure.message
+    assert "token" not in failure.metadata
+    assert failure.metadata["safe"] == "[REDACTED]"

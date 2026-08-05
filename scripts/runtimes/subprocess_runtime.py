@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import json
 import shlex
-import subprocess
-import time
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+HARNESS_ROOT = Path(__file__).resolve().parents[2]
+if str(HARNESS_ROOT) not in sys.path:
+    sys.path.insert(0, str(HARNESS_ROOT))
+
+from ai_harness.processes import run_managed_process
+from ai_harness.recovery.policy import load_recovery_policy
 from runtime_contracts import (
     ContractError,
     SCHEMAS,
@@ -69,32 +74,63 @@ class SubprocessRuntime:
 
         payload = json.dumps(task, ensure_ascii=False)
         started = datetime.now(timezone.utc).isoformat()
-        started_monotonic = time.monotonic()
-        effective_timeout = int(task.get("timeout_seconds", self.timeout_seconds) or self.timeout_seconds)
+        limits = load_recovery_policy().runtime_limits
+        requested_timeout = int(task.get("timeout_seconds", self.timeout_seconds) or self.timeout_seconds)
+        effective_timeout = min(requested_timeout, limits.role_timeout_seconds)
+        safe_role = role.replace("/", "-")
+        raw_dir = self.raw_output_dir or artifacts.parent / "raw-events"
         try:
-            completed = subprocess.run(
+            completed = run_managed_process(
                 shlex.split(self.descriptor.command),
-                input=payload,
-                text=True,
-                capture_output=True,
-                check=False,
-                timeout=effective_timeout,
+                cwd=HARNESS_ROOT,
+                input_text=payload,
+                stdout_path=raw_dir / f"runtime.{safe_role}.stdout.log",
+                stderr_path=raw_dir / f"runtime.{safe_role}.stderr.log",
+                timeout_seconds=effective_timeout,
+                idle_timeout_seconds=min(limits.idle_timeout_seconds, effective_timeout),
+                shutdown_grace_seconds=limits.shutdown_grace_seconds,
+                max_output_bytes=limits.max_output_bytes,
+                artifact_paths=(artifacts,),
+                max_artifact_bytes=limits.max_artifact_bytes,
+                max_open_files=limits.max_open_files,
             )
         except FileNotFoundError as exc:
             return recovery_blocked("Runtime adapter command is missing.", [str(exc)], kind="tool_failure", error_type="FileNotFoundError")
-        except subprocess.TimeoutExpired as exc:
-            self._write_raw(task, started, 124, exc.stdout or "", exc.stderr or "")
-            return recovery_blocked(
-                "Runtime adapter command timed out.",
-                [f"timeout after {effective_timeout} seconds"],
-                kind="transient",
-                error_type="TimeoutExpired",
-            )
         except PermissionError as exc:
             return recovery_blocked("Runtime adapter command is not executable.", [str(exc)], kind="tool_failure", error_type="PermissionError")
 
         self._write_raw(task, started, completed.returncode, completed.stdout, completed.stderr)
-        duration_ms = int((time.monotonic() - started_monotonic) * 1000)
+        duration_ms = int(completed.duration_seconds * 1000)
+        if completed.timed_out or completed.idle_timed_out:
+            error_type = "IdleTimeout" if completed.idle_timed_out else "TimeoutExpired"
+            timeout_kind = "idle" if completed.idle_timed_out else "runtime"
+            return recovery_blocked(
+                "Runtime adapter command timed out.",
+                [f"{timeout_kind} timeout after {effective_timeout} seconds"],
+                kind="transient",
+                error_type=error_type,
+            )
+        if completed.output_limit_exceeded:
+            return recovery_blocked(
+                "Runtime adapter output exceeded the configured limit.",
+                [f"output limit is {limits.max_output_bytes} bytes"],
+                kind="runtime_failure",
+                error_type="OutputLimitExceeded",
+            )
+        if completed.artifact_limit_exceeded:
+            return recovery_blocked(
+                "Runtime artifacts exceeded the configured limit.",
+                [f"artifact limit is {limits.max_artifact_bytes} bytes"],
+                kind="runtime_failure",
+                error_type="ArtifactLimitExceeded",
+            )
+        if completed.open_file_limit_exceeded:
+            return recovery_blocked(
+                "Runtime open-file budget is exhausted.",
+                [f"open-file limit is {limits.max_open_files}"],
+                kind="runtime_failure",
+                error_type="OpenFileLimitExceeded",
+            )
         if completed.returncode != 0:
             output = (completed.stderr or completed.stdout).strip()
             return recovery_blocked(

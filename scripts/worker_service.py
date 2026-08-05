@@ -86,6 +86,8 @@ class WorkerService:
             else max_consecutive_failures
         )
         self.max_consecutive_failures = max(1, configured_failures)
+        self.max_restart_elapsed_seconds = load_recovery_policy().max_recovery_duration_seconds
+        self.restart_recovery_started_at = 0.0
         self.worker_ids = [f"{service_id}-{index}" for index in range(1, workers + 1)]
         self.pool = WorkflowWorkerPool(
             queue=queue,
@@ -93,6 +95,7 @@ class WorkerService:
             lease_seconds=lease_seconds,
             heartbeat_seconds=heartbeat_seconds,
             worker_prefix=service_id,
+            shutdown_requested=self.stop_event.is_set,
         )
 
     def register(self) -> None:
@@ -118,14 +121,20 @@ class WorkerService:
                 "restart_count": self.total_restart_count,
                 "total_restart_count": self.total_restart_count,
                 "consecutive_failure_count": self.consecutive_failure_count,
+                "restart_recovery_elapsed_seconds": (
+                    max(0.0, time.monotonic() - self.restart_recovery_started_at)
+                    if self.restart_recovery_started_at
+                    else 0.0
+                ),
                 "heartbeat_at": datetime.now(timezone.utc).isoformat(),
                 "db": str(self.queue.path),
             },
         )
 
     def heartbeat(self, status: str = "healthy") -> None:
+        worker_status = "draining" if status == "draining" else "healthy"
         for worker_id in self.worker_ids:
-            self.queue.worker_heartbeat(worker_id, status=status)
+            self.queue.worker_heartbeat(worker_id, status=worker_status)
         self.queue.stale_workers(stale_seconds=max(self.heartbeat_seconds * 3, 30), mark=True)
         self.write_service_state(status)
 
@@ -140,10 +149,18 @@ class WorkerService:
             while not self.stop_event.is_set():
                 try:
                     records = self.pool.run_wave()
-                    self.heartbeat()
+                    degraded = any(
+                        getattr(record, "status", "completed")
+                        in {"retry_wait", "repairing", "resuming", "dead_letter", "failed"}
+                        for record in records
+                    )
+                    self.heartbeat("degraded" if degraded else "healthy")
                     expire_approvals()
                     self.consecutive_failure_count = 0
+                    self.restart_recovery_started_at = 0.0
                 except Exception as exc:
+                    if not self.restart_recovery_started_at:
+                        self.restart_recovery_started_at = time.monotonic()
                     self.total_restart_count += 1
                     self.consecutive_failure_count += 1
                     self.write_service_error(exc)
@@ -154,7 +171,12 @@ class WorkerService:
                     )
                     self.write_service_state(status)
                     result_code = 1
-                    if once:
+                    elapsed = time.monotonic() - self.restart_recovery_started_at
+                    if (
+                        once
+                        or self.consecutive_failure_count >= self.max_consecutive_failures
+                        or elapsed >= self.max_restart_elapsed_seconds
+                    ):
                         break
                     delay = 30 if status == "unhealthy" else min(2 ** (self.consecutive_failure_count - 1), 10)
                     self.stop_event.wait(delay)
@@ -193,12 +215,14 @@ class WorkerService:
     def health(self) -> dict[str, Any]:
         workers = [record for record in self.queue.list_workers() if record.service_id == self.service_id]
         stale = {record.worker_id for record in self.queue.stale_workers(stale_seconds=max(self.heartbeat_seconds * 3, 30))}
-        healthy = len(workers) == self.workers and not stale and all(
+        workers_alive = len(workers) == self.workers and not stale and all(
             record.status in {"starting", "healthy", "draining"} for record in workers
         )
+        state_status = str(read_state(self.state_path).get("status", ""))
+        status = "unhealthy" if not workers_alive else ("degraded" if state_status == "degraded" else "healthy")
         return {
             "service_id": self.service_id,
-            "status": "healthy" if healthy else "unhealthy",
+            "status": status,
             "pid": os.getpid(),
             "workers": [asdict(record) for record in workers],
             "stale_workers": sorted(stale),
@@ -285,7 +309,7 @@ def main() -> int:
         pid = int(state.get("pid", 0) or 0)
         if process_alive(pid):
             os.kill(pid, signal.SIGTERM)
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + load_recovery_policy().runtime_limits.shutdown_grace_seconds + 5
             while process_alive(pid) and time.monotonic() < deadline:
                 time.sleep(0.1)
             if process_alive(pid):
@@ -310,18 +334,19 @@ def main() -> int:
         workers = [record for record in queue.list_workers() if record.service_id == service_id]
         stale = queue.stale_workers(stale_seconds=30)
         stale_ids = sorted(record.worker_id for record in stale if record.service_id == service_id)
-        healthy = alive and bool(service_id) and bool(workers) and not stale_ids and all(
+        workers_alive = alive and bool(service_id) and bool(workers) and not stale_ids and all(
             record.status in {"starting", "healthy", "draining"} for record in workers
         )
+        status = "unhealthy" if not workers_alive else ("degraded" if state.get("status") == "degraded" else "healthy")
         result = {
             **state,
             "alive": alive,
-            "status": "healthy" if healthy else "unhealthy",
+            "status": status,
             "registered_workers": [asdict(record) for record in workers],
             "stale_workers": stale_ids,
         }
         print(json.dumps(result, indent=2, ensure_ascii=False))
-        return 0 if healthy else 1
+        return 0 if status in {"healthy", "degraded"} else 1
     if args.command == "stop":
         pid = int(state.get("pid", 0) or 0)
         if not process_alive(pid):

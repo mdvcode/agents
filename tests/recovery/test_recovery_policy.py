@@ -50,3 +50,16 @@ def test_policy_rejects_unbounded_or_missing_classes(tmp_path: Path) -> None:
     policy.write_text("version: 1\ntask_recovery: {}\nfailure_classes: {}\n", encoding="utf-8")
     with pytest.raises(ValueError):
         load_recovery_policy(policy)
+
+
+def test_runtime_resource_limits_are_authoritative_and_bounded() -> None:
+    limits = load_recovery_policy(ROOT / ".agent-recovery.yaml").runtime_limits
+
+    assert limits.role_timeout_seconds > 0
+    assert limits.workflow_timeout_seconds >= limits.role_timeout_seconds
+    assert limits.idle_timeout_seconds > 0
+    assert limits.shutdown_grace_seconds > 0
+    assert limits.max_output_bytes > 0
+    assert limits.max_artifact_bytes >= limits.max_output_bytes
+    assert 1 <= limits.max_concurrent_subprocesses <= 32
+    assert limits.max_open_files >= 4
