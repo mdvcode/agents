@@ -58,6 +58,10 @@ For long-lived operation use `make worker-service-start`, verify `make worker-se
 
 Step 2 acceptance requires `make step2-verify RUN_ID=<evidence-run-id> QUEUE_DB=<queue.db>`. The evidence must come from real Codex runs and include concurrent workers, isolated worktrees, governed tools, independent verification, a PR, and a human exception.
 
+## Production Runtime Gate
+
+Before declaring the production runtime ready, run `make runtime-chaos` and then execute the real soak manifest against a disposable publication target with `make runtime-soak SOAK_MANIFEST=<manifest.json> SOAK_REPORT=<report.json>`. The collector requires at least 30 tasks, observes the worker service for at least two hours, checks same-run identity and terminal recovery state, and probes commit/PR idempotency. Validate the finished evidence with `make runtime-soak-verify SOAK_REPORT=<report.json>`; deterministic unit or failure-injection tests do not substitute for this external gate.
+
 ## Handoff Rules
 - If implementation is incomplete, leave a concrete blocker in the current run's `artifacts/report.md` and `errors.jsonl`.
 - If checks fail because of the repository baseline, separate baseline failures from task-specific failures.

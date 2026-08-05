@@ -152,3 +152,46 @@ def test_reclaimed_run_uses_resume_command(tmp_path: Path, monkeypatch: object) 
 
     assert outcome.run_id == "run-recover"
     assert commands and "--resume" in commands[0]
+
+
+def test_two_workers_cannot_resume_the_same_run_concurrently(tmp_path: Path, monkeypatch: object) -> None:
+    monkeypatch.setattr(worker_pool, "RUNS_DIR", tmp_path / ".agent-runs")
+    queue = TaskQueue(tmp_path / "queue.db")
+    queued = queue.enqueue(
+        task_key="single-resume",
+        payload={"task_id": "single-resume", "repository": str(tmp_path), "run_id": "run-single"},
+        run_id="run-single",
+    )
+    first = queue.claim(worker_id="initial", lease_seconds=30)
+    assert first is not None
+    assert queue.mark_running(queued.id, "initial")
+    queue.mark_resuming(
+        task_id=queued.id,
+        worker_id="initial",
+        run_id="run-single",
+        available_after=time.time(),
+        recovery_action="resume",
+        resume_checkpoint="before_runtime_execute",
+    )
+    calls: list[str] = []
+    lock = threading.Lock()
+
+    def handler(record: TaskRecord, worker_id: str) -> WorkerOutcome:
+        with lock:
+            calls.append(worker_id)
+        time.sleep(0.05)
+        return WorkerOutcome(status="completed", run_id=record.run_id)
+
+    pool = WorkflowWorkerPool(
+        queue=queue,
+        workers=2,
+        lease_seconds=30,
+        heartbeat_seconds=1,
+        handler=handler,
+    )
+
+    records = pool.run_wave()
+
+    assert len(calls) == 1
+    assert [record.status for record in records] == ["completed"]
+    assert queue.get(queued.id).run_id == "run-single"  # type: ignore[union-attr]

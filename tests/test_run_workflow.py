@@ -144,6 +144,15 @@ workflows:
     assert state["failure_kind"] == "transient"
     assert state["resume_role"] == "implementation-agent"
     assert len(list((tmp_path / ".agent-runs" / "run-timeout" / "failures").glob("*.json"))) == 1
+    spans = [
+        json.loads(line)
+        for line in (
+            tmp_path / ".agent-runs" / "run-timeout" / "raw-events" / "otel-spans.jsonl"
+        ).read_text(encoding="utf-8").splitlines()
+    ]
+    names = {span["name"] for span in spans}
+    assert "ai_harness.recovery.classify" in names
+    assert "ai_harness.recovery.retry" in names
 
 
 def test_workflow_runner_passes_adapter_command_from_workflow(tmp_path: Path, monkeypatch: object) -> None:
@@ -309,4 +318,3 @@ workflows:
     monkeypatch.setattr(run_workflow, "RUNS_DIR", runs)
     assert run_workflow.run_workflow("sample", root=tmp_path, task_id="same-task") == 0
     assert sorted(path.name for path in runs.iterdir()) == ["completed"]
-

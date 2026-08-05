@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import warnings
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Mapping
@@ -75,6 +76,7 @@ class JsonlSpanExporter(SpanExporter):
     def __init__(self, path: Path) -> None:
         self.path = path
         self._lock = threading.Lock()
+        self._warned = False
 
     def export(self, spans: tuple[ReadableSpan, ...]) -> SpanExportResult:
         try:
@@ -84,6 +86,13 @@ class JsonlSpanExporter(SpanExporter):
                 for record in records:
                     handle.write(record + "\n")
         except OSError:
+            if not self._warned:
+                warnings.warn(
+                    "local telemetry export failed; execution will continue",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                self._warned = True
             return SpanExportResult.FAILURE
         return SpanExportResult.SUCCESS
 
@@ -152,6 +161,17 @@ class TelemetryRuntime:
         self.output_repairs_total = self.meter.create_counter("output_repairs_total", unit="{repair}")
         self.resume_success_total = self.meter.create_counter("resume_success_total", unit="{resume}")
         self.worker_crashes_total = self.meter.create_counter("worker_crashes_total", unit="{crash}")
+        self.runtime_executions_total = self.meter.create_counter("runtime_executions_total", unit="{execution}")
+        self.runtime_failures_total = self.meter.create_counter("runtime_failures_total", unit="{failure}")
+        self.runtime_timeouts_total = self.meter.create_counter("runtime_timeouts_total", unit="{timeout}")
+        self.resume_attempts_total = self.meter.create_counter("resume_attempts_total", unit="{resume}")
+        self.dead_letters_total = self.meter.create_counter("dead_letters_total", unit="{task}")
+        self.duplicate_side_effects_prevented_total = self.meter.create_counter(
+            "duplicate_side_effects_prevented_total", unit="{side_effect}"
+        )
+        self.queue_lease_expirations_total = self.meter.create_counter(
+            "queue_lease_expirations_total", unit="{lease}"
+        )
         self.duration_histogram = self.meter.create_histogram(
             "ai_harness.duration", unit="s", description="Harness operation latency"
         )
@@ -222,12 +242,20 @@ class TelemetryRuntime:
             self.trace_provider.force_flush(timeout_millis=2_000)
             self.trace_provider.shutdown()
         except Exception:
-            pass
+            warnings.warn(
+                "telemetry trace shutdown failed; execution will continue",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         try:
             self.meter_provider.force_flush(timeout_millis=2_000)
             self.meter_provider.shutdown()
         except Exception:
-            pass
+            warnings.warn(
+                "telemetry metric shutdown failed; execution will continue",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
 
 class _NoOpInstrument:
@@ -248,7 +276,10 @@ class NoOpTelemetryRuntime:
             "task_counter", "retry_counter", "loop_counter", "failure_counter",
             "recovery_attempts_total", "recovery_success_total", "recovery_exhausted_total",
             "task_retries_total", "output_repairs_total", "resume_success_total",
-            "worker_crashes_total", "duration_histogram",
+            "worker_crashes_total", "runtime_executions_total", "runtime_failures_total",
+            "runtime_timeouts_total", "resume_attempts_total", "dead_letters_total",
+            "duplicate_side_effects_prevented_total", "queue_lease_expirations_total",
+            "duration_histogram",
         ):
             setattr(self, name, instrument)
 
@@ -272,4 +303,9 @@ def safe_telemetry_runtime(**kwargs: object) -> TelemetryRuntime | NoOpTelemetry
     try:
         return TelemetryRuntime(**kwargs)
     except Exception:
+        warnings.warn(
+            "telemetry initialization failed; execution will continue",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         return NoOpTelemetryRuntime()

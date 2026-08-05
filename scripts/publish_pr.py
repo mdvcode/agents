@@ -31,6 +31,7 @@ from run_state import RunLayout
 from tool_governance import audit_tool_call, authorize_tool_call
 from workflow_router import required_gate_roles
 from ai_harness.recovery.idempotency import branch_pushed, commit_sha_for_marker, pr_exists
+from ai_harness.observability import safe_telemetry_runtime
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -108,12 +109,20 @@ class PublicationResult:
     task_id: str = ""
     input_fingerprint: str = ""
     idempotency_key: str = ""
+    reconciled_steps: list[str] = field(default_factory=list)
     pr_comment_posted: bool = False
     command_results: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
     def as_json(self) -> dict[str, Any]:
+        completed_steps: list[str] = []
+        if self.commit_sha:
+            completed_steps.append("commit")
+        if self.push_completed:
+            completed_steps.append("push")
+        if self.pr_created_or_updated:
+            completed_steps.append("pr")
         return {
             "run_id": self.run_id,
             "task_id": self.task_id,
@@ -135,6 +144,8 @@ class PublicationResult:
             "pr_comment_posted": self.pr_comment_posted,
             "input_fingerprint": self.input_fingerprint,
             "idempotency_key": self.idempotency_key,
+            "completed_steps": completed_steps,
+            "reconciled_steps": self.reconciled_steps,
             "command_results": self.command_results,
             "warnings": self.warnings,
             "errors": self.errors,
@@ -269,6 +280,14 @@ def determine_pr_state(quality: dict[str, Any], verdict: dict[str, Any]) -> str:
     if checks_passed and not missing_evidence:
         return "ready"
     return "draft"
+
+
+def irreversible_resume_blocker(resume: PublicationResult, current_fingerprint: str) -> str:
+    if not (resume.commit_sha or resume.push_completed):
+        return ""
+    if resume.input_fingerprint == current_fingerprint:
+        return ""
+    return "publication inputs changed after an irreversible side effect; refusing to continue"
 
 
 def protected_path_blockers(
@@ -1046,28 +1065,70 @@ class Publisher:
         """Recover durable publication state after a process dies between effect and checkpoint."""
         runner = lambda args, cwd: self.run_command(args, cwd=cwd)
         changed = False
+        prevented: list[str] = []
         if not publication.commit_sha and publication.idempotency_key:
             sha = commit_sha_for_marker(target_repo, publication.idempotency_key, runner)
             if sha:
                 publication.commit_created = True
                 publication.commit_sha = sha
                 publication.execution_status = "committed"
+                if "commit" not in publication.reconciled_steps:
+                    publication.reconciled_steps.append("commit")
+                prevented.append("commit")
                 changed = True
         if publication.commit_sha and not publication.push_completed:
             if branch_pushed(target_repo, publication.branch, runner):
                 publication.branch_pushed = True
                 publication.push_completed = True
                 publication.execution_status = "pushed"
+                if "push" not in publication.reconciled_steps:
+                    publication.reconciled_steps.append("push")
+                prevented.append("push")
                 changed = True
         if publication.push_completed and not publication.pr_created_or_updated:
-            existing = pr_exists(target_repo, publication.branch, runner)
+            existing = pr_exists(
+                target_repo,
+                publication.branch,
+                runner,
+                markers=(publication.run_id, publication.idempotency_key),
+            )
             if existing is not None:
                 publication.pr_created_or_updated = True
                 publication.pr_number, publication.pr_url = existing
                 publication.execution_status = "pr_published"
+                if "pr" not in publication.reconciled_steps:
+                    publication.reconciled_steps.append("pr")
+                prevented.append("pr")
                 changed = True
+        self.record_idempotency_check(publication, prevented)
         if changed:
             self.write_runtime_state(publication)
+
+    def record_idempotency_check(self, publication: PublicationResult, prevented: list[str]) -> None:
+        """Emit the required publication signal without letting telemetry affect publication."""
+
+        try:
+            telemetry = safe_telemetry_runtime(
+                run_dir=self.artifacts.parent,
+                service_name="ai-harness-publication",
+            )
+        except Exception:
+            return
+        try:
+            with telemetry.span(
+                "ai_harness.publication.idempotency_check",
+                {"publication.run_id": publication.run_id, "publication.branch": publication.branch},
+            ) as span:
+                span.set_attribute("publication.prevented_steps", prevented)
+            for step in prevented:
+                telemetry.duplicate_side_effects_prevented_total.add(1, {"side_effect": step})
+        except Exception:
+            pass
+        finally:
+            try:
+                telemetry.shutdown()
+            except Exception:
+                pass
 
     def push(self, target_repo: Path, branch: str) -> str:
         push_result = self.run_command(["git", "push", "--set-upstream", "origin", branch], cwd=target_repo)
@@ -1370,7 +1431,6 @@ class Publisher:
                 publication.base_branch,
             )
             resume = self.find_resume_state(publication.task_id, target_repo, publication.branch)
-            resume_after_irreversible_action = False
             previous_precommit_blocked = False
             previous_precommit_errors: list[str] = []
             if resume is not None:
@@ -1379,10 +1439,33 @@ class Publisher:
                     publication = resume
                     publication.dry_run = dry_run
                     publication.warnings.append("publication already completed; no-op")
+                    completed_steps = [
+                        step
+                        for step, completed in (
+                            ("commit", bool(publication.commit_sha)),
+                            ("push", publication.push_completed),
+                            ("pr", publication.pr_created_or_updated),
+                        )
+                        if completed
+                    ]
+                    self.record_idempotency_check(publication, completed_steps)
                     self.finalize(target_repo, publication, str(project_profile.get("project_profile", "")), post_comment=False)
                     return publication
                 if resume.execution_status != "completed" and (resume.commit_sha or resume.push_completed):
-                    resume_after_irreversible_action = True
+                    resume_blocker = irreversible_resume_blocker(resume, publication.input_fingerprint)
+                    if resume_blocker:
+                        publication = resume
+                        publication.dry_run = dry_run
+                        publication.execution_status = "blocked"
+                        publication.errors = [resume_blocker]
+                        self.ensure_runtime_state(publication, change_set, target_repo)
+                        self.finalize(
+                            target_repo,
+                            publication,
+                            str(project_profile.get("project_profile", "")),
+                            post_comment=False,
+                        )
+                        return publication
                     fingerprint = publication.input_fingerprint
                     publication = resume
                     publication.dry_run = dry_run

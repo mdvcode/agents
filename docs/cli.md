@@ -57,7 +57,7 @@ agent status --json
 
 Status is read-only, project-scoped, and compact. It shows queue, run, and worker-service states without role transcripts, source contents, credentials, or raw events. If the worker service is not running, tasks remain visibly queued; the CLI does not start a daemon as a hidden side effect.
 
-Recovery state includes the current role, exact sanitized error type and cause, failure class, selected action, attempt budget, resume checkpoint, next retry time in UTC, and worker-service health.
+Recovery state includes the current role, exact sanitized error type and cause, failure class, selected action, attempt budget, resume checkpoint, next retry time in UTC, branch, worktree, and worker-service health.
 
 ## Inspect and control recovery
 
@@ -68,9 +68,11 @@ agent dead-letters
 agent retry <run-id>
 agent resume <run-id>
 agent abort <run-id>
+agent worker status
+agent worker restart
 ```
 
-`retry` and `resume` enqueue the existing run and preserve its task worktree. They reject an active lease. An approval-gated run must use `agent approve`, which consumes its exact scoped grant once. `abort` marks a non-active run and queue task `cancelled`; it does not delete the run evidence or worktree.
+`retry` and `resume` enqueue the existing run and preserve its task worktree. They reject an active lease. An approval-gated run must use `agent approve`, which consumes its exact scoped grant once. `abort` marks a non-active run and queue task `cancelled`; for an active run its durable flag makes the owning worker terminate the complete process group, persist the cancellation checkpoint, release the lease, and retain the worktree. Worker restart uses the bounded graceful shutdown path and expired leases resume the same run.
 
 ## Diagnose installation
 

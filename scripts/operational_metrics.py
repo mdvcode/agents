@@ -100,6 +100,7 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
     approval = read_json(run_dir / "artifacts" / "approval.json")
     runner_events = jsonl_records(run_dir / "raw-events" / "workflow-runner.jsonl")
     errors = jsonl_records(run_dir / "errors.jsonl")
+    spans = jsonl_records(run_dir / "raw-events" / "otel-spans.jsonl")
     loop_values = workflow.get("loops", {})
     repair_loop_iterations = 0
     if isinstance(loop_values, dict):
@@ -124,6 +125,10 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
     if isinstance(metrics.get("duration_ms"), (int, float)):
         elapsed_seconds = float(metrics["duration_ms"]) / 1000
     publication = read_json(run_dir / "artifacts" / "publication.json") or read_json(run_dir / "publication.json")
+    runtime_spans = [span for span in spans if span.get("name") == "ai_harness.runtime.execute"]
+    runtime_timeouts = sum(span.get("name") == "ai_harness.runtime.timeout" for span in spans)
+    runtime_failures = sum(span.get("status") == "error" for span in runtime_spans)
+    reconciled_steps = publication.get("reconciled_steps", [])
     pr_time_seconds: float | None = None
     started_at = parse_timestamp(workflow.get("started_at"))
     publication_path = run_dir / "artifacts" / "publication.json"
@@ -153,6 +158,10 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
         "resume_count": int(workflow.get("resume_count", 0) or 0),
         "failure_kind": str(workflow.get("failure_kind", "")),
         "failure_count": len(errors) or sum(event.get("event") == "workflow_failed" for event in runner_events),
+        "runtime_executions": len(runtime_spans),
+        "runtime_failures": runtime_failures,
+        "runtime_timeouts": runtime_timeouts,
+        "duplicate_side_effects_prevented": len(reconciled_steps) if isinstance(reconciled_steps, list) else 0,
         "pr_time_seconds": pr_time_seconds,
         "budgets": {
             "max_roles": int(budgets.get("max_roles", 0) or 0),
@@ -286,13 +295,24 @@ def collect_metrics(
             "by_run_status": dict(Counter(str(run["status"]) for run in runs if run["status"] in {"failed", "blocked"})),
         },
         "recovery": {
+            "runtime_executions_total": sum(int(run["runtime_executions"]) for run in runs),
+            "runtime_failures_total": sum(int(run["runtime_failures"]) for run in runs),
+            "runtime_timeouts_total": sum(int(run["runtime_timeouts"]) for run in runs),
             "recovery_attempts_total": sum(item.recovery_attempts for item in tasks),
             "recovery_success_total": sum(run["status"] == "completed" and int(run["recovery_attempts"]) > 0 for run in runs),
             "recovery_exhausted_total": sum(item.status == "dead_letter" for item in tasks),
             "task_retries_total": sum(item.recovery_action == "retry" for item in tasks),
             "output_repairs_total": sum(run["failure_kind"] == "invalid_output" for run in runs),
+            "resume_attempts_total": sum(int(run["resume_count"]) for run in runs),
             "resume_success_total": sum(run["status"] == "completed" and int(run["resume_count"]) > 0 for run in runs),
             "worker_crashes_total": sum(event["event"] == "lease_expired_resume" for event in events),
+            "dead_letters_total": sum(item.status == "dead_letter" for item in tasks),
+            "duplicate_side_effects_prevented_total": sum(
+                int(run["duplicate_side_effects_prevented"]) for run in runs
+            ),
+            "queue_lease_expirations_total": sum(
+                event["event"] in {"lease_expired_resume", "cancelled_after_lease_expiry"} for event in events
+            ),
             "actions": dict(Counter(item.recovery_action for item in tasks if item.recovery_action)),
         },
         "tracing": tracing,

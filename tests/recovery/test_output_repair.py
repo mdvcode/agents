@@ -61,10 +61,14 @@ def test_output_repair_exhaustion_is_bounded() -> None:
 def test_codex_executor_repairs_invalid_structured_output_in_place(tmp_path: Path, monkeypatch: object) -> None:
     prompts: list[str] = []
 
-    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         if args[:2] == ["git", "rev-parse"]:
             return subprocess.CompletedProcess(args, 1, "", "not a git repository")
-        prompt = str(kwargs["input"])
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    def fake_codex_process(**kwargs: object) -> codex_cli_executor.ManagedProcessResult:
+        args = list(kwargs["command"])
+        prompt = str(kwargs["input_text"])
         prompts.append(prompt)
         result_path = Path(args[args.index("--output-last-message") + 1])
         if len(prompts) == 1:
@@ -85,10 +89,11 @@ def test_codex_executor_repairs_invalid_structured_output_in_place(tmp_path: Pat
                 ),
                 encoding="utf-8",
             )
-        return subprocess.CompletedProcess(args, 0, "", "")
+        return codex_cli_executor.ManagedProcessResult(0, "", "", 0.01)
 
     monkeypatch.setattr(codex_cli_executor, "configured_codex_base_command", lambda: ["codex"])
     monkeypatch.setattr(codex_cli_executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(codex_cli_executor, "run_codex_process", fake_codex_process)
     request = {
         "run_id": "run-1",
         "role": "planner",

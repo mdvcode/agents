@@ -288,6 +288,11 @@ def project_tasks(db_path: Path, repository: Path) -> list[dict[str, Any]]:
                 "resume_checkpoint": str(row["resume_checkpoint"]) if "resume_checkpoint" in row.keys() else "",
                 "recovery_attempts": int(row["recovery_attempts"]) if "recovery_attempts" in row.keys() else 0,
                 "last_failure_id": str(row["last_failure_id"]) if "last_failure_id" in row.keys() else "",
+                "cancellation_requested_at": (
+                    float(row["cancellation_requested_at"])
+                    if "cancellation_requested_at" in row.keys()
+                    else 0.0
+                ),
                 "updated_at": float(row["updated_at"]),
             }
         )
@@ -330,6 +335,7 @@ def project_runs(runs_dir: Path, repository: Path) -> list[dict[str, Any]]:
                 "role_count": int(workflow.get("role_count", 0) or 0),
                 "tokens_used": int(workflow.get("tokens_used", 0) or 0),
                 "branch": str(workflow.get("branch", "")),
+                "worktree": str(workflow.get("worktree", workflow.get("repository", ""))),
                 "blockers": [str(item) for item in workflow.get("blockers", [])],
                 "current_role": str(workflow.get("current_role", "")),
                 "failure_id": str(workflow.get("failure_id", "")),
@@ -463,6 +469,8 @@ def handle_status(args: argparse.Namespace) -> int:
                 lines.append(f"    next retry: {retry_at}")
         if item["exception_reason"]:
             lines.append(f"    cause: {item['exception_reason']}")
+        if item["cancellation_requested_at"]:
+            lines.append("    cancellation requested; worker is terminating the process group")
     for run in runs[: args.limit]:
         if run["status"] in {"retry_wait", "repairing", "resuming", "dead_letter", "failed"}:
             lines.append(
@@ -470,6 +478,9 @@ def handle_status(args: argparse.Namespace) -> int:
                 f"failure={run['failure_kind'] or 'unknown'} action={run['recovery_action'] or 'none'} "
                 f"attempt={run['failure_attempt']}/{run['failure_max_attempts']} "
                 f"checkpoint={run['resume_from'] or 'none'}"
+            )
+            lines.append(
+                f"    branch: {run['branch'] or 'unknown'}; worktree: {run['worktree'] or 'unknown'}"
             )
             if run["failure_error_type"] or run["failure_message"]:
                 lines.append(
@@ -536,6 +547,53 @@ def handle_dead_letters(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_worker_command(args: argparse.Namespace) -> int:
+    root = harness_home()
+    if args.worker_command == "status":
+        status = worker_service_status(root)
+        emit(
+            status,
+            as_json=args.json,
+            lines=(
+                f"Worker service: {status['status']}",
+                f"  alive: {status['alive']}",
+                f"  pid: {status['pid']}",
+                f"  service: {status['service_id'] or '-'}",
+            ),
+        )
+        return 0 if status["alive"] else 1
+    state = read_json_object(root / ".agent-queue" / "worker-service.json")
+    command = [sys.executable, str(root / "scripts" / "worker_service.py"), "restart"]
+    if state.get("db"):
+        command.extend(["--db", str(state["db"])])
+    workers = state.get("workers")
+    if isinstance(workers, list) and workers:
+        command.extend(["--workers", str(len(workers))])
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CLIError(f"worker restart failed: {exc}") from exc
+    if completed.returncode != 0:
+        raise CLIError((completed.stderr or completed.stdout or "worker restart failed").strip())
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        payload = worker_service_status(root)
+    emit(
+        payload if isinstance(payload, dict) else worker_service_status(root),
+        as_json=args.json,
+        lines=("Worker service restart requested.",),
+    )
+    return 0
+
+
 def handle_recovery_command(args: argparse.Namespace) -> int:
     repository = repository_from_arg(args.repo, require_initialized=True)
     root = harness_home()
@@ -550,10 +608,14 @@ def handle_recovery_command(args: argparse.Namespace) -> int:
     task_queue = load_harness_module(root, "task_queue")
     queue = task_queue.TaskQueue(root / ".agent-queue" / "tasks.db")
     try:
+        write_workflow = True
         if args.command == "abort":
             record = queue.abort_run(args.run_id)
-            workflow["execution_status"] = "cancelled"
-            workflow["recovery_action"] = ""
+            if record.status in {"claimed", "leased", "running"}:
+                write_workflow = False
+            else:
+                workflow["execution_status"] = "cancelled"
+                workflow["recovery_action"] = ""
         else:
             record = queue.recover_run(args.run_id, action=args.command)
             workflow["execution_status"] = "retry_wait" if args.command == "retry" else "resuming"
@@ -575,15 +637,21 @@ def handle_recovery_command(args: argparse.Namespace) -> int:
             workflow["manual_recovery_count"] = int(workflow.get("manual_recovery_count", 0) or 0) + 1
             if args.command == "resume" and not workflow.get("resume_role"):
                 workflow["resume_role"] = workflow.get("current_role", "")
-        temporary = workflow_path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(workflow, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        temporary.replace(workflow_path)
+        if write_workflow:
+            temporary = workflow_path.with_suffix(".json.tmp")
+            temporary.write_text(json.dumps(workflow, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            temporary.replace(workflow_path)
     except (ValueError, RuntimeError) as exc:
         raise CLIError(str(exc)) from exc
+    reported_status = (
+        "cancellation_requested"
+        if args.command == "abort" and record.status in {"claimed", "leased", "running"}
+        else record.status
+    )
     emit(
-        {"status": record.status, "run_id": args.run_id, "queue_task_id": record.id, "action": args.command},
+        {"status": reported_status, "run_id": args.run_id, "queue_task_id": record.id, "action": args.command},
         as_json=args.json,
-        lines=(f"Run {args.run_id}: {record.status}", f"  action: {args.command}"),
+        lines=(f"Run {args.run_id}: {reported_status}", f"  action: {args.command}"),
     )
     return 0
 
@@ -748,6 +816,13 @@ def build_parser() -> argparse.ArgumentParser:
     dead_parser.add_argument("--limit", type=int, choices=range(1, 501), default=50)
     dead_parser.add_argument("--json", action="store_true")
     dead_parser.set_defaults(handler=handle_dead_letters)
+
+    worker_parser = subparsers.add_parser("worker", help="inspect or restart the persistent worker service")
+    worker_subparsers = worker_parser.add_subparsers(dest="worker_command", required=True)
+    for worker_command in ("status", "restart"):
+        worker_action = worker_subparsers.add_parser(worker_command)
+        worker_action.add_argument("--json", action="store_true")
+        worker_action.set_defaults(handler=handle_worker_command)
 
     for recovery_command in ("retry", "resume", "abort"):
         recovery_parser = subparsers.add_parser(recovery_command, help=f"{recovery_command} an existing run")

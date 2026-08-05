@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import sqlite3
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -119,3 +121,48 @@ def test_manual_recovery_cannot_bypass_approval_or_reopen_terminal_task(tmp_path
         queue.recover_run("completed-run", action="resume")
     with pytest.raises(ValueError, match="terminal completed"):
         queue.abort_run("completed-run")
+
+
+def test_active_abort_sets_a_durable_cancellation_flag_until_worker_finishes(tmp_path: Path) -> None:
+    queue = TaskQueue(tmp_path / "tasks.db")
+    task = queue.enqueue(
+        task_key="abort-active",
+        payload={"task_id": "abort-active", "repository": str(tmp_path)},
+        run_id="abort-run",
+    )
+    claimed = queue.claim(worker_id="worker-1")
+    assert claimed is not None and claimed.id == task.id
+    assert queue.mark_running(task.id, "worker-1")
+
+    requested = queue.abort_run("abort-run")
+
+    assert requested.status == "running"
+    assert requested.cancellation_requested_at > 0
+    assert queue.cancellation_requested(task.id, "worker-1") is True
+    cancelled = queue.finish(
+        task_id=task.id,
+        worker_id="worker-1",
+        status="cancelled",
+        run_id="abort-run",
+    )
+    assert cancelled.status == "cancelled"
+    assert any(event["event"] == "cancellation_requested" for event in queue.events(task.id))
+
+
+def test_sqlite_write_lock_is_retried_with_a_bounded_backoff(tmp_path: Path) -> None:
+    queue = TaskQueue(tmp_path / "tasks.db")
+    blocker = sqlite3.connect(queue.path, timeout=0, isolation_level=None, check_same_thread=False)
+    blocker.execute("PRAGMA busy_timeout = 0")
+    blocker.execute("BEGIN IMMEDIATE")
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            queue.enqueue,
+            task_key="after-lock",
+            payload={"task_id": "after-lock", "repository": str(tmp_path)},
+        )
+        time.sleep(1.1)
+        blocker.commit()
+        record = future.result(timeout=4)
+    blocker.close()
+
+    assert record.task_key == "after-lock"

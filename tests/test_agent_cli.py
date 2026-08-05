@@ -323,3 +323,11 @@ def test_parser_exposes_recovery_commands(
 
     assert args.command == command
     assert getattr(args, "run_id", None) == run_id
+
+
+@pytest.mark.parametrize("worker_command", ["status", "restart"])
+def test_parser_exposes_worker_service_commands(worker_command: str) -> None:
+    args = cli.build_parser().parse_args(["worker", worker_command])
+
+    assert args.command == "worker"
+    assert args.worker_command == worker_command

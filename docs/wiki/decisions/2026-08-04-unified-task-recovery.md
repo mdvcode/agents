@@ -23,8 +23,12 @@ The queue already reclaimed expired leases and the workflow already had bounded 
 
 ## Safety bounds
 
-Recovery has total-attempt, class-attempt, resume-attempt, consecutive-failure, duration, and output-repair limits. Observability is fail-open and excludes prompts, source contents, credentials, authorization headers, and raw secrets.
+Recovery has total-attempt, class-attempt, resume-attempt, consecutive-failure, duration, token, output-repair, subprocess-concurrency, open-file, output-byte, and artifact-byte limits. Persistent worker-pool restart recovery also has attempt, elapsed-time, backoff, and terminal stop bounds. Observability is fail-open and excludes prompts, source contents, credentials, authorization headers, and raw secrets.
 
 ## Consequences
 
 A timeout or temporary runtime failure no longer makes the task terminal. Another worker can continue the same run and worktree from a checkpoint. Exhausted or unsafe recovery remains visible as `dead_letter` or terminal `failed`, and humans can inspect or explicitly retry/resume/abort it through the CLI.
+
+## Production runtime extension — 2026-08-05
+
+Workflow, role-adapter, primary Codex, and output-repair processes now use bounded file-backed stdout/stderr, distinct process sessions, recursive descendant termination, SIGTERM-to-SIGKILL escalation, active cancellation flags, workflow/idle/output/artifact/open-file limits, and graceful service interruption that requeues the same run. SQLite write contention uses finite backoff; expired-lease disk/telemetry work happens only after transaction commit; checkpoints and failure records are fsync-backed. Queue records expose an explicit `lease_owner` while preserving the compatible `worker_id` field. Publication reconciliation checks commit markers, exact remote heads, head branches, run markers, and idempotency keys and refuses changed inputs after an irreversible step. Readiness remains gated by both the deterministic chaos suite and a real 30-task, multi-hour soak report with service, identity, lease, commit, and PR invariants; unit tests alone cannot close that operational gate.

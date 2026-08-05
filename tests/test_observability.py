@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from ai_harness.observability import NoOpTelemetryRuntime, TelemetryRuntime
 from ai_harness.observability import telemetry as telemetry_module
 from ai_harness.observability.store import recent_spans, trace_summary
@@ -60,7 +62,8 @@ def test_telemetry_initialization_failure_is_fail_open(monkeypatch: object) -> N
 
     monkeypatch.setattr(telemetry_module, "TelemetryRuntime", fail)
 
-    runtime = telemetry_module.safe_telemetry_runtime(service_name="test")
+    with pytest.warns(RuntimeWarning, match="telemetry initialization failed"):
+        runtime = telemetry_module.safe_telemetry_runtime(service_name="test")
 
     assert isinstance(runtime, NoOpTelemetryRuntime)
     with runtime.span("still-runs"):

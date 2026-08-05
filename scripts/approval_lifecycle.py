@@ -15,6 +15,7 @@ from typing import Any
 
 from runtime_contracts import load_json as load_schema, validate_contract
 from task_queue import DEFAULT_DB, TaskQueue, TaskRecord
+from ai_harness.recovery.policy import load_recovery_policy
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -168,8 +169,10 @@ def request_approval(
     *,
     reason: str,
     scope: dict[str, Any] | None = None,
-    ttl_seconds: int = 3600,
+    ttl_seconds: int | None = None,
 ) -> dict[str, Any]:
+    if ttl_seconds is None:
+        ttl_seconds = load_recovery_policy().runtime_limits.approval_timeout_seconds
     if ttl_seconds <= 0 or ttl_seconds > 86400:
         raise ApprovalError("approval ttl_seconds must be between 1 and 86400")
     with approval_lock(run_dir):

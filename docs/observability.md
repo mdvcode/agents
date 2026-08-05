@@ -34,7 +34,7 @@ The operational snapshot contract is `schemas/observability_snapshot.schema.json
 
 ## OpenTelemetry
 
-The worker starts `ai_harness.worker.task`, injects W3C Trace Context into the workflow subprocess, and the workflow creates `ai_harness.workflow` plus child `ai_harness.workflow.step` spans. Recovery adds `ai_harness.recovery.classify`, `.retry`, `.repair`, `.resume`, and `.dead_letter`. Metrics include `recovery_attempts_total`, `recovery_success_total`, `recovery_exhausted_total`, `task_retries_total`, `output_repairs_total`, `resume_success_total`, and `worker_crashes_total` alongside task, loop, failure, and duration signals.
+The worker starts `ai_harness.worker.task`, injects W3C Trace Context into the workflow subprocess, and the workflow creates `ai_harness.workflow` plus child `ai_harness.workflow.step` spans. Role execution adds `ai_harness.runtime.execute` and `.timeout`; recovery adds `ai_harness.recovery.classify`, `.retry`, `.repair`, `.resume`, and `.dead_letter`. An isolated worker failure emits `ai_harness.worker.crash`, and every publication reconciliation emits `ai_harness.publication.idempotency_check` with only the names of prevented side-effect steps. Metrics include `runtime_executions_total`, `runtime_failures_total`, `runtime_timeouts_total`, `recovery_attempts_total`, `recovery_success_total`, `recovery_exhausted_total`, `task_retries_total`, `output_repairs_total`, `resume_attempts_total`, `resume_success_total`, `worker_crashes_total`, `dead_letters_total`, `duplicate_side_effects_prevented_total`, and `queue_lease_expirations_total` alongside task, loop, failure, and duration signals. These counters are emitted on their authoritative runtime, queue, worker, or publication transitions rather than inferred only for the dashboard.
 
 The runtime works without a collector. Configure standard OpenTelemetry environment variables to export over OTLP/HTTP:
 
@@ -44,7 +44,7 @@ export OTEL_SERVICE_NAME=ai-harness
 make queue-worker
 ```
 
-`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` may be configured separately. Exporter setup and delivery are fail-open: loss of monitoring cannot fail an engineering workflow.
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` may be configured separately. Exporter setup and delivery are fail-open: loss of monitoring produces a content-free runtime warning but cannot fail an engineering workflow.
 
 ## Privacy and bounds
 

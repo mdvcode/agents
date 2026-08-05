@@ -57,6 +57,8 @@
     "run_dir": "str",
     "input_fingerprint": "str",
     "idempotency_key": "str",
+    "completed_steps": "list",
+    "reconciled_steps": "list",
     "pr_comment_posted": "bool",
     "command_results": "list",
     "warnings": "list",
