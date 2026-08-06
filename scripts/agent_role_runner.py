@@ -338,6 +338,32 @@ def awaiting_approval_result(summary: str, blockers: list[str]) -> dict[str, Any
     }
 
 
+def set_attention(
+    state: dict[str, Any],
+    *,
+    summary: str,
+    details: list[str],
+    role: str,
+    action: str,
+) -> None:
+    """Persist one concise, user-facing explanation for a paused workflow."""
+
+    normalized = list(
+        dict.fromkeys(str(item).strip() for item in details if str(item).strip())
+    )
+    if not normalized:
+        normalized = [summary]
+    state["attention"] = {
+        "required": True,
+        "summary": summary,
+        "details": normalized,
+        "role": role,
+        "action": action,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    state["blockers"] = normalized
+
+
 def validate_role_result(result: dict[str, Any], role: str) -> list[str]:
     return validate_contract(result, load_json(SCHEMAS / "role_result.schema.json"), f"{role} role_result")
 
@@ -1305,7 +1331,13 @@ def run_roles(
         return state
     if setup_errors:
         state["execution_status"] = "blocked"
-        state["blockers"] = setup_errors
+        set_attention(
+            state,
+            summary="Task workspace setup needs attention.",
+            details=setup_errors,
+            role="issue-intake",
+            action="fix_then_retry",
+        )
         write_json(layout.workflow, state)
         append_trace(layout, {"event": "workflow_blocked", "blockers": setup_errors})
         record_failure(
@@ -1330,7 +1362,13 @@ def run_roles(
     if runtime_preflight.get("execution_status") != "completed":
         blockers = [str(item) for item in runtime_preflight.get("blockers", [])]
         state["execution_status"] = "blocked"
-        state["blockers"] = blockers or ["Configured runtime is unavailable."]
+        set_attention(
+            state,
+            summary="Configured runtime is unavailable.",
+            details=blockers or ["Configured runtime is unavailable."],
+            role="issue-intake",
+            action="fix_then_retry",
+        )
         write_json(layout.workflow, state)
         append_trace(layout, {"event": "workflow_blocked", "blockers": state["blockers"]})
         record_failure(
@@ -1650,11 +1688,27 @@ def run_roles(
             write_metrics(layout, state)
             append_trace(layout, {"event": "role_recovery_scheduled", "role": role, **recovery_event})
             if state["execution_status"] == "awaiting_approval":
+                set_attention(
+                    state,
+                    summary=str(result.get("summary", state.get("recovery_reason", "User input is required."))),
+                    details=[str(item) for item in result.get("blockers", [])],
+                    role=role,
+                    action="answer_or_approve",
+                )
                 try:
-                    request_approval(layout.root, reason=str(state.get("recovery_reason", "recovery approval required")))
+                    request_approval(
+                        layout.root,
+                        reason=str(state["attention"]["summary"]),
+                    )
                 except ApprovalError as exc:
                     state["execution_status"] = "blocked"
-                    state["blockers"] = [f"approval request failed: {exc}"]
+                    set_attention(
+                        state,
+                        summary="The approval request could not be created.",
+                        details=[f"approval request failed: {exc}"],
+                        role="approval-gate",
+                        action="fix_then_retry",
+                    )
                     persist_control_failure(
                         layout, state, role="approval-gate", stage="approval",
                         kind="internal_error", error_type="ApprovalRequestFailed", message=str(exc),
@@ -1753,6 +1807,27 @@ def run_roles(
             if route["next_role"] == "approval-gate":
                 state["execution_status"] = "awaiting_approval"
                 approval = awaiting_approval_result(route["reason"], route.get("warnings", []))
+                attention_details = [
+                    *[str(item) for item in result.get("blockers", [])],
+                    *[str(item) for item in route.get("warnings", [])],
+                ]
+                attention_summary = (
+                    str(result.get("summary", "")).strip()
+                    if result.get("status") in {"blocked", "failed", "awaiting_approval"}
+                    else ""
+                ) or route["reason"]
+                attention_action = (
+                    "answer_or_approve"
+                    if result.get("status") in {"blocked", "failed", "awaiting_approval"}
+                    else "approve"
+                )
+                set_attention(
+                    state,
+                    summary=attention_summary,
+                    details=attention_details,
+                    role=role,
+                    action=attention_action,
+                )
                 approval_checkpoint = {
                     "time": datetime.now(timezone.utc).isoformat(),
                     "role": "approval-gate",
@@ -1767,10 +1842,16 @@ def run_roles(
                 write_json(layout.role_results / "approval-gate-1.json", approval_checkpoint)
                 write_json(layout.workflow, state)
                 try:
-                    request_approval(layout.root, reason=route["reason"])
+                    request_approval(layout.root, reason=attention_summary)
                 except ApprovalError as exc:
                     state["execution_status"] = "blocked"
-                    state["blockers"] = [f"approval request failed: {exc}"]
+                    set_attention(
+                        state,
+                        summary="The approval request could not be created.",
+                        details=[f"approval request failed: {exc}"],
+                        role="approval-gate",
+                        action="fix_then_retry",
+                    )
                     record_failure(
                         layout,
                         stage="approval",
@@ -1794,7 +1875,13 @@ def run_roles(
                 state["execution_status"] = "completed"
             else:
                 state["execution_status"] = "blocked"
-                state["blockers"] = [route["reason"], *route.get("warnings", [])]
+                set_attention(
+                    state,
+                    summary=route["reason"],
+                    details=[route["reason"], *route.get("warnings", [])],
+                    role=role,
+                    action="fix_then_retry",
+                )
                 append_trace(layout, {"event": "workflow_blocked", "reason": route["reason"]})
                 record_failure(
                     layout,

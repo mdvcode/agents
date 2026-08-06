@@ -369,7 +369,36 @@ def test_approved_run_resumes_same_worktree_from_checkpoint(tmp_path: Path, monk
     assert (run_dir / "role-results" / f"{checkpoint_role}-2.json").exists()
     renewed = json.loads((run_dir / "artifacts" / "approval.json").read_text(encoding="utf-8"))
     assert renewed["approval_id"] != approval["approval_id"]
-    assert "Workflow blockers" in renewed["reason"]
+    assert renewed["reason"] == "Publication executor blocked or failed."
+    assert resumed["attention"]["summary"] == renewed["reason"]
+
+
+def test_approval_request_failure_replaces_stale_question_with_actionable_attention(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    runs = tmp_path / ".agent-runs"
+    monkeypatch.setattr(agent_role_runner, "RUNS", runs)
+    command = fake_adapter_script(tmp_path / "fake_adapter.py")
+
+    def reject_approval(*args: object, **kwargs: object) -> None:
+        raise agent_role_runner.ApprovalError("approval store unavailable")
+
+    monkeypatch.setattr(agent_role_runner, "request_approval", reject_approval)
+
+    state = agent_role_runner.run_roles(
+        run_id="approval-request-failure",
+        repository=tmp_path,
+        adapter_command=command,
+        dry_run=True,
+    )
+
+    assert state["execution_status"] == "blocked"
+    assert state["attention"]["summary"] == "The approval request could not be created."
+    assert state["attention"]["action"] == "fix_then_retry"
+    assert state["attention"]["details"] == [
+        "approval request failed: approval store unavailable"
+    ]
 
 
 def test_unfinished_run_cannot_be_restarted_without_resume(tmp_path: Path, monkeypatch: object) -> None:

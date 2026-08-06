@@ -12,6 +12,8 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
+import tomllib
 from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -21,9 +23,9 @@ from typing import Any, Sequence
 from . import __version__
 from .paths import HarnessNotFoundError, harness_home
 from .project import (
-    ALLOWED_BRANCH_PREFIXES,
     SUPPORTED_PROFILES,
     ProjectConfigError,
+    CONFIG_RELATIVE_PATH,
     default_config,
     discover_repository,
     load_project_config,
@@ -33,6 +35,7 @@ from .project import (
     slug,
     write_project_config,
 )
+from .recovery.models import sanitized_message
 
 
 AGENTS_TEMPLATE = """# AGENTS.md
@@ -43,7 +46,7 @@ This repository is initialized for the local AI Harness. Project metadata lives 
 
 ## Working rules
 
-- Make minimal, reviewable changes in the task worktree.
+- Make minimal, reviewable changes in the task branch.
 - Never commit directly to the default branch.
 - Run the project checks selected by the Harness before review or publication.
 - Do not expose secrets, private data, raw traces, or local Harness state.
@@ -61,6 +64,28 @@ class DoctorCheck:
     name: str
     status: str
     detail: str
+
+
+RUNTIME_IMPORTS = (
+    "yaml",
+    "opentelemetry.trace",
+    "opentelemetry.sdk.trace",
+)
+DEFAULT_UPDATE_SOURCE = "git+https://github.com/mdvcode/agents.git"
+
+
+def dependency_repair_hint() -> str:
+    return "run `agent update`, then `agent doctor --full`"
+
+
+def missing_runtime_imports() -> list[str]:
+    missing: list[str] = []
+    for name in RUNTIME_IMPORTS:
+        try:
+            importlib.import_module(name)
+        except ImportError:
+            missing.append(name)
+    return missing
 
 
 def emit(payload: dict[str, Any], *, as_json: bool, lines: Sequence[str]) -> None:
@@ -87,25 +112,50 @@ def install_harness_import_path(root: Path) -> None:
 
 def load_harness_module(root: Path, name: str) -> Any:
     install_harness_import_path(root)
-    return importlib.import_module(name)
+    try:
+        return importlib.import_module(name)
+    except ImportError as exc:
+        missing = str(getattr(exc, "name", "") or name)
+        raise CLIError(
+            f"Harness module {name!r} could not load because {missing!r} is unavailable; "
+            f"{dependency_repair_hint()}"
+        ) from exc
 
 
 def handle_init(args: argparse.Namespace) -> int:
     repository = repository_from_arg(args.repo, require_initialized=False)
-    config = default_config(
-        repository,
-        project_id=args.project_id,
-        profile=args.profile,
-        base_branch=args.base_branch,
-        branch_prefix=args.branch_prefix,
+    existing_config = (
+        load_project_config(repository)
+        if (repository / CONFIG_RELATIVE_PATH).is_file()
+        else None
     )
-    config_created = write_project_config(config, force=args.force)
+    requested_config = default_config(
+        repository,
+        project_id=args.project_id or (existing_config.project_id if existing_config else ""),
+        profile=(
+            existing_config.profile
+            if existing_config is not None and args.profile == "auto"
+            else args.profile
+        ),
+        base_branch=(
+            existing_config.base_branch
+            if existing_config is not None and args.base_branch == "auto"
+            else args.base_branch
+        ),
+        branch_prefix=args.branch_prefix or (existing_config.branch_prefix if existing_config else "feat/"),
+    )
+    if existing_config is not None and not args.force:
+        config = existing_config
+        config_created = False
+    else:
+        config = requested_config
+        config_created = write_project_config(config, force=args.force)
     trust_path = register_local_project(config)
     agents_path = repository / "AGENTS.md"
     agents_created = False
     if agents_path.is_symlink():
         raise CLIError("refusing to write AGENTS.md through a symbolic link")
-    if args.force or not agents_path.exists():
+    if args.replace_agents or not agents_path.exists():
         agents_path.write_text(AGENTS_TEMPLATE, encoding="utf-8")
         agents_created = True
     payload = {
@@ -114,6 +164,7 @@ def handle_init(args: argparse.Namespace) -> int:
         "project_config": str(config.path),
         "project_id": config.project_id,
         "profile": config.profile,
+        "base_branch": config.base_branch,
         "runtime_provider": config.runtime_provider,
         "local_trust": str(trust_path),
         "created": {
@@ -127,8 +178,9 @@ def handle_init(args: argparse.Namespace) -> int:
         lines=(
             f"Initialized {config.project_id} ({config.profile})",
             f"  config: {config.path}",
+            f"  base branch: {config.base_branch}",
             f"  instructions: {agents_path}{' (kept existing)' if not agents_created else ''}",
-            "Next: agent task \"Describe the change\"",
+            "Next: agent doctor --full",
         ),
     )
     return 0
@@ -145,10 +197,6 @@ def handle_task(args: argparse.Namespace) -> int:
     config = load_project_config(repository)
     if not project_is_trusted(config):
         raise CLIError("project configuration is not locally trusted; run `agent init` again")
-    root = harness_home()
-    event_ingestion = load_harness_module(root, "event_ingestion")
-    task_queue = load_harness_module(root, "task_queue")
-    worktree_manager = load_harness_module(root, "worktree_manager")
     goal = " ".join(args.goal).strip()
     if not goal:
         raise CLIError("task goal is required")
@@ -159,8 +207,14 @@ def handle_task(args: argparse.Namespace) -> int:
         raise CLIError("--task-id must contain at least one letter or number")
     if args.current_branch and args.branch:
         raise CLIError("--current-branch cannot be combined with --branch")
-    workspace_mode = "current_branch" if args.current_branch else "isolated"
+    if args.current_branch and args.worktree:
+        raise CLIError("--current-branch cannot be combined with --worktree")
+    workspace_mode = "isolated" if args.worktree else "current_branch"
+    root = harness_home()
+    event_ingestion = load_harness_module(root, "event_ingestion")
+    worktree_manager = load_harness_module(root, "worktree_manager") if not args.worktree else None
     if args.current_branch:
+        assert worktree_manager is not None
         checkout = worktree_manager.inspect_current_checkout(
             repository,
             protected_branches={config.base_branch, "main", "master", "trunk"},
@@ -176,8 +230,6 @@ def handle_task(args: argparse.Namespace) -> int:
         raise CLIError("task branch must be a safe git branch name")
     if branch in {config.base_branch, "main", "master", "trunk"}:
         raise CLIError("task branch must not be a protected/default branch")
-    if not args.current_branch and not any(branch.startswith(prefix) for prefix in ALLOWED_BRANCH_PREFIXES):
-        raise CLIError(f"task branch must use one of {sorted(ALLOWED_BRANCH_PREFIXES)}")
     external_id = f"{config.project_id}:{task_id}"
     payload = {
         "external_id": external_id,
@@ -190,12 +242,15 @@ def handle_task(args: argparse.Namespace) -> int:
         "priority": args.priority,
         "max_retries": args.max_retries,
     }
-    envelope = event_ingestion.normalize_event(
-        source="cli",
-        payload=payload,
-        repository=repository,
-        project=config.profile,
-    )
+    try:
+        envelope = event_ingestion.normalize_event(
+            source="cli",
+            payload=payload,
+            repository=repository,
+            project=config.profile,
+        )
+    except event_ingestion.EventError as exc:
+        raise CLIError(f"task request is invalid: {exc}") from exc
     if args.dry_run:
         emit(
             {"status": "dry_run", "envelope": envelope},
@@ -203,14 +258,53 @@ def handle_task(args: argparse.Namespace) -> int:
             lines=(
                 f"Dry run: {task_id}",
                 f"  repository: {repository}",
+                f"  base branch: {config.base_branch}",
                 f"  branch: {branch}",
-                f"  workspace: {'current checkout' if args.current_branch else 'isolated worktree'}",
+                f"  workspace: {task_workspace_label(args)}",
                 "No queue state was changed.",
             ),
         )
         return 0
+    task_queue = load_harness_module(root, "task_queue")
     queue_path = root / ".agent-queue" / "tasks.db"
-    record = event_ingestion.enqueue_envelope(task_queue.TaskQueue(queue_path), envelope)
+    try:
+        queue = task_queue.TaskQueue(queue_path) if queue_path.is_file() else None
+    except (sqlite3.Error, ValueError) as exc:
+        raise CLIError(f"task queue could not be opened: {exc}") from exc
+    current_branch_conflicts = [
+        item
+        for item in (queue.list() if queue is not None else [])
+        if item.task_key != envelope["task_key"]
+        and item.status not in {"completed", "cancelled"}
+        and item.payload.get("workspace_mode") == "current_branch"
+        and bool(item.payload.get("repository"))
+        and Path(str(item.payload["repository"])).resolve() == repository.resolve()
+    ]
+    if workspace_mode == "current_branch" and current_branch_conflicts:
+        conflict = current_branch_conflicts[0]
+        raise CLIError(
+            f"task {conflict.payload.get('task_id', conflict.id)!r} still owns this checkout "
+            f"with status {conflict.status!r}; inspect it with `agent status`, then complete or abort it "
+            "before starting another branch task (use --worktree for parallel tasks)"
+        )
+    missing = missing_runtime_imports()
+    if missing:
+        raise CLIError(f"missing runtime dependencies: {', '.join(missing)}; {dependency_repair_hint()}")
+    branch_warnings: list[str] = []
+    if not args.current_branch and workspace_mode == "current_branch":
+        assert worktree_manager is not None
+        prepared = worktree_manager.prepare_task_branch(repository, branch, config.base_branch)
+        preparation_errors = [str(item) for item in prepared.get("errors", [])]
+        branch_warnings = [str(item) for item in prepared.get("warnings", [])]
+        if preparation_errors:
+            raise CLIError("; ".join(preparation_errors))
+    service = worker_service_status(root)
+    worker = service if service["alive"] else run_worker_command(root, "start", workers=3)
+    try:
+        queue = queue or task_queue.TaskQueue(queue_path)
+        record = event_ingestion.enqueue_envelope(queue, envelope)
+    except (sqlite3.Error, ValueError) as exc:
+        raise CLIError(f"task could not be queued: {exc}") from exc
     stored_branch = str(record.payload.get("branch", branch))
     result = {
         "status": record.status,
@@ -222,6 +316,11 @@ def handle_task(args: argparse.Namespace) -> int:
         "workspace_mode": str(record.payload.get("workspace_mode", workspace_mode)),
         "queue_db": str(queue_path),
         "idempotent": record.payload.get("event_id") == envelope["event_id"],
+        "worker": {
+            "status": str(worker.get("status", "starting")),
+            "pid": safe_int(worker.get("pid", 0)),
+        },
+        "warnings": branch_warnings,
     }
     emit(
         result,
@@ -229,13 +328,25 @@ def handle_task(args: argparse.Namespace) -> int:
         lines=(
             f"Task queued: {task_id}",
             f"  queue id: {record.id}",
+            f"  base branch: {config.base_branch}",
             f"  branch: {stored_branch}",
-            f"  workspace: {'current checkout' if args.current_branch else 'isolated worktree'}",
+            f"  workspace: {task_workspace_label(args)}",
             f"  status: {record.status}",
-            "Inspect it with: agent status",
+            f"  worker: {worker.get('status', 'starting')}",
+            *(f"  warning: {warning}" for warning in branch_warnings),
+            f"Follow it with: agent watch --repo {repository} --task-id {task_id}",
+            "If input is needed, watch/status will print ATTENTION REQUIRED and the exact answer command.",
         ),
     )
     return 0
+
+
+def task_workspace_label(args: argparse.Namespace) -> str:
+    if args.worktree:
+        return "isolated worktree"
+    if args.current_branch:
+        return "existing branch in current checkout"
+    return "dedicated branch in current checkout"
 
 
 def read_json_object(path: Path) -> dict[str, Any]:
@@ -244,6 +355,13 @@ def read_json_object(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value or default)
+    except (TypeError, ValueError):
+        return default
 
 
 def process_alive(pid: int) -> bool:
@@ -256,15 +374,53 @@ def process_alive(pid: int) -> bool:
     return True
 
 
+def last_worker_error(root: Path) -> dict[str, Any]:
+    path = root / ".agent-queue" / "worker-service.log"
+    try:
+        with path.open("rb") as handle:
+            size = handle.seek(0, os.SEEK_END)
+            start = max(0, size - 65_536)
+            handle.seek(start)
+            lines = handle.read().decode("utf-8", errors="replace").splitlines()
+            if start and lines:
+                lines = lines[1:]
+    except OSError:
+        return {}
+    for line in reversed(lines[-100:]):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict) and value.get("error_type"):
+            return {
+                "error_type": str(value.get("error_type", "")),
+                "message": str(value.get("message", "")),
+                "time": str(value.get("time", "")),
+            }
+    return {}
+
+
 def worker_service_status(root: Path) -> dict[str, Any]:
     state = read_json_object(root / ".agent-queue" / "worker-service.json")
-    pid = int(state.get("pid", 0) or 0)
+    pid = safe_int(state.get("pid", 0))
+    alive = process_alive(pid)
+    recorded_status = str(state.get("status", "not_started"))
+    if not state:
+        status = "not_started"
+    elif alive:
+        status = recorded_status
+    elif recorded_status in {"stopped", "stopping"}:
+        status = "stopped"
+    else:
+        status = "unhealthy"
     return {
         "configured": bool(state),
-        "alive": process_alive(pid),
+        "alive": alive,
         "pid": pid,
         "service_id": str(state.get("service_id", "")),
-        "status": str(state.get("status", "not_started")),
+        "status": status,
+        "log": str(root / ".agent-queue" / "worker-service.log"),
+        "last_error": last_worker_error(root) if status == "unhealthy" else {},
     }
 
 
@@ -317,6 +473,49 @@ def project_tasks(db_path: Path, repository: Path) -> list[dict[str, Any]]:
             }
         )
     return selected
+
+
+def workflow_attention(workflow: dict[str, Any]) -> dict[str, Any]:
+    raw = workflow.get("attention")
+    if isinstance(raw, dict) and raw.get("required") is True:
+        details = raw.get("details", [])
+        return {
+            "required": True,
+            "summary": str(raw.get("summary", "Attention is required.")),
+            "details": [str(item) for item in details] if isinstance(details, list) else [],
+            "role": str(raw.get("role", workflow.get("current_role", ""))),
+            "action": str(raw.get("action", "")),
+        }
+    status = str(workflow.get("execution_status", ""))
+    if status not in {"awaiting_approval", "blocked", "dead_letter", "failed"}:
+        return {"required": False, "summary": "", "details": [], "role": "", "action": ""}
+    values: list[str] = []
+    blockers = workflow.get("blockers", [])
+    if isinstance(blockers, list):
+        values.extend(str(item) for item in blockers)
+    values.append(str(workflow.get("recovery_reason", "")))
+    roles = workflow.get("roles", [])
+    if isinstance(roles, list):
+        for checkpoint in reversed(roles):
+            result = checkpoint.get("result") if isinstance(checkpoint, dict) else None
+            if not isinstance(result, dict) or result.get("status") == "completed":
+                continue
+            values.insert(0, str(result.get("summary", "")))
+            result_blockers = result.get("blockers", [])
+            if isinstance(result_blockers, list):
+                values.extend(str(item) for item in result_blockers)
+            break
+    details = list(dict.fromkeys(value.strip() for value in values if value.strip()))
+    return {
+        "required": True,
+        "summary": details[0] if details else status,
+        "details": details[1:],
+        "role": str(workflow.get("current_role", "")),
+        # Older runs did not record what kind of attention they require. Treat
+        # an unknown approval gate conservatively: an informational answer must
+        # never stand in for a risk or security decision.
+        "action": "approve" if status == "awaiting_approval" else "fix_then_retry",
+    }
 
 
 def project_runs(runs_dir: Path, repository: Path) -> list[dict[str, Any]]:
@@ -376,9 +575,32 @@ def project_runs(runs_dir: Path, repository: Path) -> list[dict[str, Any]]:
                     "gate": str(approval.get("checkpoint_role", "")),
                     "registration_required": registration_required,
                 },
+                "attention": workflow_attention(workflow),
             }
         )
     return selected
+
+
+def git_ref_exists(repository: Path, ref: str) -> bool:
+    try:
+        completed = subprocess.run(
+            ["git", "show-ref", "--verify", "--quiet", ref],
+            cwd=repository,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
+
+
+def available_base_ref(repository: Path, base_branch: str) -> str:
+    for ref in (f"refs/remotes/origin/{base_branch}", f"refs/heads/{base_branch}"):
+        if git_ref_exists(repository, ref):
+            return ref.removeprefix("refs/remotes/").removeprefix("refs/heads/")
+    return ""
 
 
 def handle_approve(args: argparse.Namespace) -> int:
@@ -448,6 +670,220 @@ def handle_approve(args: argparse.Namespace) -> int:
     return 0
 
 
+def record_human_input(run_dir: Path, *, run_id: str, actor: str, response: str) -> Path:
+    path = run_dir / "human-input.json"
+    temporary = path.with_suffix(".json.tmp")
+    if path.is_symlink() or temporary.is_symlink():
+        raise CLIError("refusing to write human input through a symbolic link")
+    existing = read_json_object(path)
+    entries = existing.get("entries", []) if isinstance(existing, dict) else []
+    if not isinstance(entries, list):
+        entries = []
+    entries.append(
+        {
+            "time": datetime.now(timezone.utc).isoformat(),
+            "actor": sanitized_message(actor, limit=128),
+            "response": sanitized_message(response, limit=10_000),
+        }
+    )
+    payload = {"version": 1, "run_id": run_id, "entries": entries[-50:]}
+    with temporary.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.chmod(0o600)
+    temporary.replace(path)
+    return path
+
+
+def resolve_answer_attention(run_dir: Path) -> None:
+    """Archive the answered question and clear only its active blockers."""
+    path = run_dir / "workflow.json"
+    temporary = path.with_suffix(".json.tmp")
+    if path.is_symlink() or temporary.is_symlink():
+        raise CLIError("refusing to update workflow state through a symbolic link")
+    workflow = read_json_object(path)
+    attention = workflow.get("attention")
+    if not isinstance(attention, dict) or attention.get("action") != "answer_or_approve":
+        raise CLIError("the workflow question changed before the answer could be applied")
+    attention_details = attention.get("details", [])
+    active_values = {str(attention.get("summary", "")).strip()}
+    if isinstance(attention_details, list):
+        active_values.update(str(item).strip() for item in attention_details)
+    active_values.discard("")
+    history = workflow.get("attention_history", [])
+    if not isinstance(history, list):
+        history = []
+    history.append(
+        {
+            **attention,
+            "required": False,
+            "resolved_at": datetime.now(timezone.utc).isoformat(),
+            "resolution": "answer_recorded",
+        }
+    )
+    workflow["attention_history"] = history[-50:]
+    workflow.pop("attention", None)
+    blockers = workflow.get("blockers", [])
+    if isinstance(blockers, list):
+        workflow["blockers"] = [
+            item for item in blockers if str(item).strip() not in active_values
+        ]
+    with temporary.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps(workflow, indent=2, ensure_ascii=False) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(path)
+
+
+def handle_answer(args: argparse.Namespace) -> int:
+    repository = repository_from_arg(args.repo, require_initialized=True)
+    config = load_project_config(repository)
+    if not project_is_trusted(config):
+        raise CLIError("project configuration is not locally trusted; run `agent init` again")
+    response = " ".join(args.response).strip()
+    if not response:
+        raise CLIError("an answer is required")
+    if len(response) > 10_000:
+        raise CLIError("the answer must not exceed 10000 characters")
+    root = harness_home()
+    matching = [run for run in project_runs(root / ".agent-runs", repository) if run["run_id"] == args.run_id]
+    if not matching:
+        raise CLIError(f"run {args.run_id!r} was not found for this project")
+    selected = matching[0]
+    if selected["approval"]["status"] != "pending":
+        raise CLIError("this run does not have a pending question or approval")
+    run_dir = root / ".agent-runs" / args.run_id
+    workflow = read_json_object(run_dir / "workflow.json")
+    attention = workflow.get("attention", {})
+    if not isinstance(attention, dict) or attention.get("action") != "answer_or_approve":
+        raise CLIError(
+            "this gate requires an explicit approval decision, not an informational answer; use `agent approve`"
+        )
+    record_human_input(
+        run_dir,
+        run_id=args.run_id,
+        actor=args.actor,
+        response=response,
+    )
+    approval_lifecycle = load_harness_module(root, "approval_lifecycle")
+    task_queue = load_harness_module(root, "task_queue")
+    try:
+        approval = approval_lifecycle.approve_run(
+            run_dir,
+            actor=args.actor,
+            reason="User supplied the information requested by the paused workflow.",
+        )
+        resolve_answer_attention(run_dir)
+        transition, record = approval_lifecycle.resume_run(
+            run_dir,
+            queue=task_queue.TaskQueue(root / ".agent-queue" / "tasks.db"),
+        )
+    except approval_lifecycle.ApprovalError as exc:
+        raise CLIError(str(exc)) from exc
+    payload = {
+        "status": "queued",
+        "run_id": args.run_id,
+        "approval_id": approval["approval_id"],
+        "checkpoint_role": approval["checkpoint_role"],
+        "queue_task_id": record.id,
+        "task_id": record.payload.get("task_id", ""),
+        "execution_status": transition["workflow"]["execution_status"],
+        "answer_recorded": True,
+    }
+    emit(
+        payload,
+        as_json=args.json,
+        lines=(
+            f"Answer recorded for {args.run_id}.",
+            f"  checkpoint: {approval['checkpoint_role']}",
+            "  the same run is queued to continue",
+            f"Watch it with: agent watch --repo {repository} --run-id {args.run_id}",
+        ),
+    )
+    return 0
+
+
+def attention_items(
+    tasks: list[dict[str, Any]],
+    runs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    runs_by_id = {str(run["run_id"]): run for run in runs if run.get("run_id")}
+    items: list[dict[str, Any]] = []
+    seen_runs: set[str] = set()
+    for task in tasks:
+        if not task["requires_human"] and task["status"] not in {
+            "awaiting_approval",
+            "blocked",
+            "dead_letter",
+            "failed",
+        }:
+            continue
+        run_id = str(task.get("run_id", ""))
+        run = runs_by_id.get(run_id, {})
+        attention = run.get("attention", {}) if isinstance(run, dict) else {}
+        summary = str(task.get("exception_reason", "")).strip()
+        if not summary and isinstance(attention, dict):
+            summary = str(attention.get("summary", "")).strip()
+        items.append(
+            {
+                "queue_task_id": task["queue_task_id"],
+                "task_id": task["task_id"],
+                "run_id": run_id,
+                "status": task["status"],
+                "role": str(run.get("current_role", "")) if isinstance(run, dict) else "",
+                "summary": summary or "The task requires attention.",
+                "details": list(attention.get("details", [])) if isinstance(attention, dict) else [],
+                "action": str(attention.get("action", "")) if isinstance(attention, dict) else "",
+                "approval_pending": bool(
+                    isinstance(run, dict) and run.get("approval", {}).get("status") == "pending"
+                ),
+            }
+        )
+        if run_id:
+            seen_runs.add(run_id)
+    for run in runs:
+        run_id = str(run.get("run_id", ""))
+        attention = run.get("attention", {})
+        if run_id in seen_runs or not isinstance(attention, dict) or not attention.get("required"):
+            continue
+        items.append(
+            {
+                "queue_task_id": 0,
+                "task_id": run.get("task_id", ""),
+                "run_id": run_id,
+                "status": run.get("status", ""),
+                "role": attention.get("role", run.get("current_role", "")),
+                "summary": attention.get("summary", "The task requires attention."),
+                "details": list(attention.get("details", [])),
+                "action": str(attention.get("action", "")),
+                "approval_pending": run.get("approval", {}).get("status") == "pending",
+            }
+        )
+    return items
+
+
+def attention_output_lines(items: list[dict[str, Any]], repository: Path) -> list[str]:
+    lines: list[str] = []
+    for item in items:
+        lines.append(f"ATTENTION REQUIRED: {item['task_id']} [{item['status']}]")
+        if item["role"]:
+            lines.append(f"  role: {item['role']}")
+        lines.append(f"  question/cause: {item['summary']}")
+        for detail in item["details"]:
+            if str(detail).strip() and str(detail).strip() != item["summary"]:
+                lines.append(f"  needed: {detail}")
+        run_id = str(item["run_id"])
+        if item["approval_pending"] and run_id and item.get("action") == "answer_or_approve":
+            lines.append(f'  answer: agent answer --repo {shlex.quote(str(repository))} {run_id} "Your answer"')
+        elif item["approval_pending"] and run_id:
+            lines.append(f"  approve if acceptable: agent approve --repo {shlex.quote(str(repository))} --run-id {run_id}")
+        elif run_id:
+            lines.append(f"  inspect: agent failures --repo {shlex.quote(str(repository))} --run-id {run_id}")
+            lines.append(f"  after fixing the cause: agent retry --repo {shlex.quote(str(repository))} {run_id}")
+    return lines
+
+
 def handle_status(args: argparse.Namespace) -> int:
     repository = repository_from_arg(args.repo, require_initialized=True)
     config = load_project_config(repository)
@@ -459,24 +895,29 @@ def handle_status(args: argparse.Namespace) -> int:
     task_counts = dict(Counter(item["status"] for item in tasks))
     run_counts = dict(Counter(item["status"] for item in runs))
     service = worker_service_status(root)
+    attention = attention_items(tasks, runs)
     payload = {
         "project": {
             "id": config.project_id,
             "profile": config.profile,
             "repository": str(repository),
             "runtime_provider": config.runtime_provider,
+            "base_branch": config.base_branch,
         },
         "queue": {"counts": task_counts, "items": tasks[: args.limit]},
         "runs": {"counts": run_counts, "items": runs[: args.limit]},
+        "attention": attention,
         "worker_service": service,
     }
     lines = [
         f"Project: {config.project_id} ({config.profile})",
         f"Repository: {repository}",
+        f"Base branch: {config.base_branch}",
         "Queue: " + (", ".join(f"{key}={value}" for key, value in sorted(task_counts.items())) or "empty"),
         "Runs: " + (", ".join(f"{key}={value}" for key, value in sorted(run_counts.items())) or "none"),
         f"Worker service: {service['status']} ({'running' if service['alive'] else 'not running'})",
     ]
+    lines.extend(attention_output_lines(attention, repository))
     for item in tasks[: args.limit]:
         marker = " !" if item["requires_human"] else ""
         lines.append(
@@ -518,12 +959,103 @@ def handle_status(args: argparse.Namespace) -> int:
             f"  approval {run['run_id']}: {run['approval']['detail']} "
             f"(gate: {run['approval']['gate']})"
         )
-        if run["approval"]["registration_required"]:
+        run_attention = run.get("attention", {})
+        if isinstance(run_attention, dict) and run_attention.get("action") == "answer_or_approve":
+            lines.append("    answer the question shown above; approval alone cannot supply missing information")
+        elif run["approval"]["registration_required"]:
             lines.append("    publication requires trusted repository registration")
         else:
             lines.append(f"    agent approve --repo {repository} --run-id {run['run_id']}")
+    if task_counts.get("queued", 0) and not service["alive"]:
+        lines.append(f"Next: agent start --repo {repository}")
+    elif not tasks and not runs:
+        lines.append('Next: agent task "Describe the change"')
     emit(payload, as_json=args.json, lines=lines)
     return 0
+
+
+def handle_watch(args: argparse.Namespace) -> int:
+    repository = repository_from_arg(args.repo, require_initialized=True)
+    config = load_project_config(repository)
+    if not project_is_trusted(config):
+        raise CLIError("project configuration is not locally trusted; run `agent init` again")
+    if args.interval < 0.2 or args.interval > 60:
+        raise CLIError("--interval must be between 0.2 and 60 seconds")
+    if args.timeout < 0:
+        raise CLIError("--timeout must be zero or positive")
+    root = harness_home()
+    started = time.monotonic()
+    last_signature = ""
+    while True:
+        tasks = project_tasks(root / ".agent-queue" / "tasks.db", repository)
+        runs = project_runs(root / ".agent-runs", repository)
+        if args.task_id:
+            tasks = [item for item in tasks if item["task_id"] == args.task_id]
+        if args.run_id:
+            tasks = [item for item in tasks if item["run_id"] == args.run_id]
+            runs = [item for item in runs if item["run_id"] == args.run_id]
+        selected_task = tasks[0] if tasks else None
+        selected_run = None
+        if selected_task and selected_task["run_id"]:
+            selected_run = next(
+                (run for run in runs if run["run_id"] == selected_task["run_id"]),
+                None,
+            )
+        elif runs:
+            selected_run = runs[0]
+        if selected_task is None and selected_run is None:
+            target = args.run_id or args.task_id or "latest task"
+            raise CLIError(f"{target!r} was not found for this project")
+        task_status = str(selected_task["status"]) if selected_task else ""
+        run_status = str(selected_run["status"]) if selected_run else ""
+        role = str(selected_run["current_role"]) if selected_run else ""
+        run_id = str(selected_run["run_id"]) if selected_run else str(selected_task["run_id"])
+        task_id = str(selected_task["task_id"]) if selected_task else str(selected_run["task_id"])
+        attention = attention_items(
+            [selected_task] if selected_task else [],
+            [selected_run] if selected_run else [],
+        )
+        snapshot = {
+            "task_id": task_id,
+            "run_id": run_id,
+            "queue_status": task_status,
+            "run_status": run_status,
+            "current_role": role,
+            "attention": attention,
+        }
+        signature = json.dumps(snapshot, sort_keys=True, ensure_ascii=False)
+        if not args.json and signature != last_signature:
+            print(
+                f"Task {task_id}: queue={task_status or '-'} run={run_status or '-'} "
+                f"role={role or '-'}"
+            )
+            last_signature = signature
+        if attention:
+            emit(
+                snapshot,
+                as_json=args.json,
+                lines=attention_output_lines(attention, repository),
+            )
+            return 0
+        terminal = task_status in {"completed", "cancelled"} or run_status == "completed"
+        if terminal:
+            emit(
+                snapshot,
+                as_json=args.json,
+                lines=(f"Task {task_id} finished with status {task_status or run_status}.",),
+            )
+            return 0
+        if args.timeout and time.monotonic() - started >= args.timeout:
+            emit(
+                snapshot,
+                as_json=args.json,
+                lines=(
+                    f"Watch timeout reached; task {task_id} is still {task_status or run_status}.",
+                    "Run the same agent watch command to continue following it.",
+                ),
+            )
+            return 0
+        time.sleep(args.interval)
 
 
 def failure_records(run_dir: Path) -> list[dict[str, Any]]:
@@ -549,10 +1081,17 @@ def handle_failures(args: argparse.Namespace) -> int:
     payload = {"count": len(items), "items": items}
     lines = [f"Failures: {len(items)}"]
     for item in items[-args.limit :]:
+        run_id = str(item.get("run_id", ""))
         lines.append(
-            f"  {item.get('run_id', '')}: {item.get('kind', '')}/{item.get('error_type', '')} "
+            f"  {run_id}: {item.get('kind', '')}/{item.get('error_type', '')} "
             f"attempt {item.get('attempt', 0)}/{item.get('max_attempts', 0)} at {item.get('role', '') or item.get('stage', '')}"
         )
+        if item.get("message"):
+            lines.append(f"    cause: {item['message']}")
+        if item.get("retryable"):
+            lines.append(f"    after fixing the cause: agent retry {run_id}")
+        elif item.get("checkpoint"):
+            lines.append(f"    recorded checkpoint: {item['checkpoint']}; inspect `agent status` before resuming")
     emit(payload, as_json=args.json, lines=lines)
     return 0
 
@@ -566,10 +1105,58 @@ def handle_dead_letters(args: argparse.Namespace) -> int:
         as_json=args.json,
         lines=(
             f"Dead letters: {len(items)}",
-            *(f"  {item['run_id'] or item['task_id']}: {item['exception_reason'] or item['failure_kind']}" for item in items[: args.limit]),
+            *(
+                f"  {item['run_id'] or item['task_id']}: {item['exception_reason'] or item['failure_kind']}"
+                for item in items[: args.limit]
+            ),
+            *(
+                f"    inspect: agent failures --run-id {item['run_id']}"
+                for item in items[: args.limit]
+                if item["run_id"]
+            ),
         ),
     )
     return 0
+
+
+def worker_subprocess_error(completed: subprocess.CompletedProcess[str]) -> str:
+    output = (completed.stderr or completed.stdout or "worker service command failed").strip()
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if any("Traceback (most recent call last)" in line for line in lines):
+        cause = lines[-1] if lines else "worker service failed"
+        return f"{cause}; {dependency_repair_hint()}"
+    return output
+
+
+def run_worker_command(root: Path, action: str, *, workers: int = 0) -> dict[str, Any]:
+    state = read_json_object(root / ".agent-queue" / "worker-service.json")
+    command = [sys.executable, str(root / "scripts" / "worker_service.py"), action]
+    if action in {"start", "restart"}:
+        if state.get("db"):
+            command.extend(["--db", str(state["db"])])
+        selected_workers = workers
+        if selected_workers <= 0:
+            recorded_workers = state.get("workers")
+            selected_workers = len(recorded_workers) if isinstance(recorded_workers, list) else 3
+        command.extend(["--workers", str(selected_workers or 3)])
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CLIError(f"worker {action} failed: {exc}") from exc
+    if completed.returncode != 0:
+        raise CLIError(worker_subprocess_error(completed))
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        payload = worker_service_status(root)
+    return payload if isinstance(payload, dict) else worker_service_status(root)
 
 
 def handle_worker_command(args: argparse.Namespace) -> int:
@@ -587,34 +1174,59 @@ def handle_worker_command(args: argparse.Namespace) -> int:
             ),
         )
         return 0 if status["alive"] else 1
-    state = read_json_object(root / ".agent-queue" / "worker-service.json")
-    command = [sys.executable, str(root / "scripts" / "worker_service.py"), "restart"]
-    if state.get("db"):
-        command.extend(["--db", str(state["db"])])
-    workers = state.get("workers")
-    if isinstance(workers, list) and workers:
-        command.extend(["--workers", str(len(workers))])
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=root,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=120,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise CLIError(f"worker restart failed: {exc}") from exc
-    if completed.returncode != 0:
-        raise CLIError((completed.stderr or completed.stdout or "worker restart failed").strip())
-    try:
-        payload = json.loads(completed.stdout)
-    except json.JSONDecodeError:
-        payload = worker_service_status(root)
+    payload = run_worker_command(root, args.worker_command, workers=int(getattr(args, "workers", 0) or 0))
     emit(
-        payload if isinstance(payload, dict) else worker_service_status(root),
+        payload,
         as_json=args.json,
-        lines=("Worker service restart requested.",),
+        lines=(
+            f"Worker service {args.worker_command}: {payload.get('status', 'requested')}",
+            f"  pid: {payload.get('pid', '-')}",
+            f"  log: {root / '.agent-queue' / 'worker-service.log'}",
+        ),
+    )
+    return 0
+
+
+def handle_start(args: argparse.Namespace) -> int:
+    repository = repository_from_arg(args.repo, require_initialized=True)
+    config = load_project_config(repository)
+    if not project_is_trusted(config):
+        raise CLIError("project configuration is not locally trusted; run `agent init` again")
+    missing = missing_runtime_imports()
+    if missing:
+        raise CLIError(f"missing runtime dependencies: {', '.join(missing)}; {dependency_repair_hint()}")
+    base_ref = available_base_ref(repository, config.base_branch)
+    if not base_ref:
+        raise CLIError(
+            f"configured base branch {config.base_branch!r} was not found locally or under origin; "
+            "fetch it or run `agent init --force --base-branch <branch>`"
+        )
+    root = harness_home()
+    payload = run_worker_command(root, "start", workers=args.workers)
+    emit(
+        payload,
+        as_json=args.json,
+        lines=(
+            f"AI Harness started for {config.project_id}.",
+            f"  worker: {payload.get('status', 'starting')}",
+            f"  base branch: {config.base_branch} ({base_ref})",
+            f"  log: {root / '.agent-queue' / 'worker-service.log'}",
+            'Next: agent task "Describe the change"',
+        ),
+    )
+    return 0
+
+
+def handle_stop(args: argparse.Namespace) -> int:
+    root = harness_home()
+    payload = run_worker_command(root, "stop")
+    emit(
+        payload,
+        as_json=args.json,
+        lines=(
+            f"AI Harness stop: {payload.get('status', 'requested')}",
+            "Use `agent worker status` to confirm shutdown.",
+        ),
     )
     return 0
 
@@ -681,6 +1293,221 @@ def handle_recovery_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def update_process(
+    command: Sequence[str],
+    *,
+    label: str,
+    timeout: int = 180,
+) -> subprocess.CompletedProcess[str]:
+    """Run one bounded install/update step with a concise user-facing error."""
+
+    try:
+        completed = subprocess.run(
+            list(command),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CLIError(f"{label} failed: {exc}") from exc
+    if completed.returncode != 0:
+        detail = sanitized_message(
+            (completed.stderr or completed.stdout or f"exit {completed.returncode}").strip(),
+            limit=1500,
+        )
+        raise CLIError(f"{label} failed: {detail}")
+    return completed
+
+
+def pipx_executable() -> str:
+    configured = os.environ.get("AI_HARNESS_PIPX", "").strip()
+    executable = configured or shutil.which("pipx") or ""
+    if not executable:
+        raise CLIError("pipx is not available; download the system and run `./install.sh` again")
+    return executable
+
+
+def pipx_installed_source(pipx: str) -> str:
+    completed = update_process([pipx, "list", "--json"], label="reading installation information", timeout=30)
+    try:
+        document = json.loads(completed.stdout)
+        source = document["venvs"]["ai-harness"]["metadata"]["main_package"]["package_or_url"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise CLIError(
+            "this installation is not managed by pipx; download the system and run `./install.sh` once"
+        ) from exc
+    if not isinstance(source, str) or not source.strip():
+        raise CLIError("pipx did not report the installed package source; run `./install.sh` again")
+    return source.strip()
+
+
+def local_update_source(value: str) -> Path | None:
+    candidate = Path(value).expanduser()
+    return candidate.resolve() if candidate.is_dir() else None
+
+
+def validate_local_update_source(source: Path) -> None:
+    pyproject = source / "pyproject.toml"
+    try:
+        document = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise CLIError(f"{source} is not an AI Harness download: {exc}") from exc
+    project = document.get("project", {})
+    if not isinstance(project, dict) or project.get("name") != "ai-harness":
+        raise CLIError(f"{source} is not an AI Harness download")
+
+
+def refresh_git_source(source: Path) -> None:
+    status = update_process(
+        ["git", "-C", str(source), "status", "--porcelain=v1", "--untracked-files=normal"],
+        label="checking the downloaded system",
+        timeout=30,
+    )
+    dirty = [line[3:].strip() for line in status.stdout.splitlines() if line.strip()]
+    if dirty:
+        visible = ", ".join(dirty[:5])
+        raise CLIError(
+            f"update stopped because the downloaded system has local changes: {visible}; "
+            "commit or stash them, then run `agent update` again"
+        )
+    update_process(
+        ["git", "-C", str(source), "pull", "--ff-only"],
+        label="downloading the update",
+        timeout=180,
+    )
+
+
+def installed_agent_executable() -> str:
+    adjacent = Path(sys.executable).with_name("agent")
+    if adjacent.is_file() and os.access(adjacent, os.X_OK):
+        return str(adjacent)
+    executable = shutil.which("agent")
+    if not executable:
+        raise CLIError("the updated agent executable was not found; run `./install.sh` again")
+    return executable
+
+
+def selected_update_source(requested: str, installed: str) -> tuple[str, Path | None, str]:
+    """Return install spec, optional local path, and user-facing source kind."""
+
+    if requested:
+        local = local_update_source(requested)
+        if local is not None:
+            validate_local_update_source(local)
+            return str(local), local, "downloaded folder"
+        if requested.startswith(("git+https://", "git+ssh://")):
+            return requested, None, "Git repository"
+        raise CLIError("--source must be an AI Harness folder or a git+https/git+ssh URL")
+    local = local_update_source(installed)
+    if local is not None:
+        validate_local_update_source(local)
+        if (local / ".git").exists():
+            return str(local), local, "Git checkout"
+        return DEFAULT_UPDATE_SOURCE, None, "official repository"
+    return installed, None, "installed package source"
+
+
+def pause_worker_for_update() -> tuple[Path | None, bool]:
+    """Stop a running worker before replacing its installed code."""
+
+    try:
+        root = harness_home()
+    except HarnessNotFoundError:
+        return None, False
+    if not worker_service_status(root)["alive"]:
+        return root, False
+    run_worker_command(root, "stop")
+    return root, True
+
+
+def restore_worker_after_failed_update(root: Path | None, was_running: bool) -> str:
+    if root is None or not was_running:
+        return ""
+    try:
+        run_worker_command(root, "start")
+    except CLIError as exc:
+        return f"; the previous worker could not be restarted: {exc}"
+    return "; the previous worker was restarted"
+
+
+def handle_update(args: argparse.Namespace) -> int:
+    pipx = pipx_executable()
+    installed_source = pipx_installed_source(pipx)
+    install_spec, local_source, source_kind = selected_update_source(args.source, installed_source)
+    git_updated = False
+    if local_source is not None and (local_source / ".git").exists():
+        refresh_git_source(local_source)
+        git_updated = True
+    worker_root, worker_was_running = pause_worker_for_update()
+    try:
+        if local_source is not None or args.source or install_spec == DEFAULT_UPDATE_SOURCE:
+            update_process(
+                [pipx, "install", "--force", install_spec],
+                label="installing the update",
+                timeout=300,
+            )
+        else:
+            update_process(
+                [pipx, "upgrade", "--force", "ai-harness"],
+                label="installing the update",
+                timeout=300,
+            )
+    except CLIError as exc:
+        recovery = restore_worker_after_failed_update(worker_root, worker_was_running)
+        raise CLIError(f"{exc}{recovery}") from exc
+    agent_executable = installed_agent_executable()
+    version = update_process(
+        [agent_executable, "--version"],
+        label="verifying the updated command",
+        timeout=30,
+    ).stdout.strip()
+    try:
+        update_process(
+            [agent_executable, "worker", "restart", "--json"],
+            label="restarting the background service",
+            timeout=180,
+        )
+    except CLIError as exc:
+        payload = {
+            "status": "updated_with_warning",
+            "version": version,
+            "source": source_kind,
+            "git_updated": git_updated,
+            "worker_restarted": False,
+            "warning": str(exc),
+        }
+        emit(
+            payload,
+            as_json=args.json,
+            lines=(
+                f"AI Harness updated: {version}",
+                f"  source: {source_kind}",
+                f"  warning: {exc}",
+                "Next: agent worker restart",
+            ),
+        )
+        return 1
+    payload = {
+        "status": "updated",
+        "version": version,
+        "source": source_kind,
+        "git_updated": git_updated,
+        "worker_restarted": True,
+    }
+    emit(
+        payload,
+        as_json=args.json,
+        lines=(
+            f"AI Harness updated: {version}",
+            f"  source: {source_kind}",
+            "  background service: restarted",
+            "Next: open your project and run `agent doctor --full`",
+        ),
+    )
+    return 0
+
+
 def configured_codex_command() -> str:
     configured = os.environ.get("AGENT_CODEX_CLI_COMMAND", "").strip()
     if configured:
@@ -689,19 +1516,26 @@ def configured_codex_command() -> str:
         except ValueError:
             return ""
         executable = parts[0] if parts else ""
-        return configured if Path(executable).exists() or shutil.which(executable) else ""
+        executable_path = Path(executable)
+        if (
+            (executable_path.is_file() and os.access(executable_path, os.X_OK))
+            or shutil.which(executable)
+        ):
+            return configured
+        return ""
     candidates = (
         Path("/Applications/ChatGPT.app/Contents/Resources/codex"),
         Path.home() / "Applications/ChatGPT.app/Contents/Resources/codex",
     )
     for candidate in candidates:
-        if candidate.is_file():
+        if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
     return shutil.which("codex") or ""
 
 
 def handle_doctor(args: argparse.Namespace) -> int:
     checks: list[DoctorCheck] = []
+    next_actions: list[str] = []
     repository: Path | None = None
     try:
         repository = repository_from_arg(args.repo, require_initialized=False)
@@ -714,6 +1548,8 @@ def handle_doctor(args: argparse.Namespace) -> int:
         checks.append(DoctorCheck("harness", "pass", str(root)))
     except HarnessNotFoundError as exc:
         checks.append(DoctorCheck("harness", "fail", str(exc)))
+    config = None
+    git_ready = False
     if repository is not None:
         try:
             config = load_project_config(repository)
@@ -728,22 +1564,90 @@ def handle_doctor(args: argparse.Namespace) -> int:
                     else "run `agent init` again",
                 )
             )
+            if not trusted:
+                next_actions.append(f"agent init --repo {repository}")
         except ProjectConfigError as exc:
             checks.append(DoctorCheck("project_config", "fail", str(exc)))
-        git = subprocess.run(
-            ["git", "rev-parse", "--is-inside-work-tree"],
-            cwd=repository,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+            next_actions.append(f"agent init --repo {repository}")
+        try:
+            git = subprocess.run(
+                ["git", "rev-parse", "--is-inside-work-tree"],
+                cwd=repository,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=5,
+            )
+            git_ready = git.returncode == 0 and git.stdout.strip() == "true"
+            git_detail = "git worktree" if git_ready else (git.stderr.strip() or "not a git repository")
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            git_ready = False
+            git_detail = f"git check failed: {exc}"
         checks.append(
             DoctorCheck(
                 "git_repository",
-                "pass" if git.returncode == 0 and git.stdout.strip() == "true" else "warn",
-                "git worktree" if git.returncode == 0 else "not a git repository",
+                "pass" if git_ready else "warn",
+                git_detail,
             )
         )
+        if not git_ready:
+            next_actions.append("initialize and commit the project as a Git repository")
+        if config is not None and git_ready:
+            base_ref = available_base_ref(repository, config.base_branch)
+            checks.append(
+                DoctorCheck(
+                    "base_branch",
+                    "pass" if base_ref else "fail",
+                    f"{config.base_branch} ({base_ref})"
+                    if base_ref
+                    else (
+                        f"{config.base_branch!r} was not found locally or under origin; fetch it or update "
+                        "the project config with `agent init --force --base-branch <branch>`"
+                    ),
+                )
+            )
+            if not base_ref:
+                next_actions.append("fetch the configured base branch or select an existing branch")
+            try:
+                checkout_status = subprocess.run(
+                    ["git", "status", "--porcelain=v1", "--untracked-files=normal"],
+                    cwd=repository,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=5,
+                )
+                dirty_paths = [line[3:] for line in checkout_status.stdout.splitlines() if line]
+                checkout_clean = checkout_status.returncode == 0 and not dirty_paths
+                checkout_detail = (
+                    "clean; task branch can be prepared"
+                    if checkout_clean
+                    else "uncommitted changes: " + ", ".join(dirty_paths[:5])
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                checkout_clean = False
+                checkout_detail = f"could not inspect checkout: {exc}"
+            checks.append(
+                DoctorCheck(
+                    "git_checkout",
+                    "pass" if checkout_clean else "warn",
+                    checkout_detail,
+                )
+            )
+            if not checkout_clean:
+                next_actions.append("commit or stash project changes before `agent task`")
+    missing = missing_runtime_imports()
+    checks.append(
+        DoctorCheck(
+            "python_runtime",
+            "fail" if missing else "pass",
+            f"missing: {', '.join(missing)}; {dependency_repair_hint()}"
+            if missing
+            else f"Python {sys.version_info.major}.{sys.version_info.minor}; runtime imports available",
+        )
+    )
+    if missing:
+        next_actions.append("agent update")
     codex = configured_codex_command()
     checks.append(
         DoctorCheck(
@@ -752,7 +1656,7 @@ def handle_doctor(args: argparse.Namespace) -> int:
             codex or "Codex CLI was not found",
         )
     )
-    if args.full and root is not None and repository is not None and codex:
+    if args.full and root is not None and repository is not None and codex and not missing:
         environment = os.environ.copy()
         environment["AGENT_CODEX_CLI_COMMAND"] = codex
         try:
@@ -765,7 +1669,29 @@ def handle_doctor(args: argparse.Namespace) -> int:
                 check=False,
                 timeout=90,
             )
-            detail = probe.stdout.strip() or probe.stderr.strip() or f"exit {probe.returncode}"
+            raw_detail = probe.stdout.strip() or probe.stderr.strip() or f"exit {probe.returncode}"
+            try:
+                preflight = json.loads(probe.stdout)
+            except json.JSONDecodeError:
+                preflight = {}
+            if isinstance(preflight, dict) and preflight:
+                blockers = preflight.get("blockers", [])
+                warnings = preflight.get("warnings", [])
+                runtime = preflight.get("runtime", {})
+                runtime_provider = runtime.get("provider", "runtime") if isinstance(runtime, dict) else "runtime"
+                if probe.returncode == 0:
+                    detail = (
+                        f"{runtime_provider} ready; "
+                        f"sandbox={preflight.get('sandbox', 'unknown')}; repository accessible"
+                    )
+                    if isinstance(warnings, list) and warnings:
+                        detail += f"; warning: {warnings[0]}"
+                elif isinstance(blockers, list) and blockers:
+                    detail = str(blockers[0])
+                else:
+                    detail = raw_detail
+            else:
+                detail = raw_detail
             checks.append(
                 DoctorCheck("runtime_preflight", "pass" if probe.returncode == 0 else "fail", detail)
             )
@@ -773,25 +1699,41 @@ def handle_doctor(args: argparse.Namespace) -> int:
             checks.append(DoctorCheck("runtime_preflight", "fail", "runtime preflight timed out after 90s"))
     if root is not None:
         service = worker_service_status(root)
+        service_detail = (
+            f"running pid={service['pid']}"
+            if service["alive"]
+            else f"{service['status']}; tasks remain queued; run `agent start --repo {repository or Path.cwd()}`"
+        )
+        if service["last_error"]:
+            service_detail += (
+                f"; last error: {service['last_error'].get('error_type', '')}: "
+                f"{service['last_error'].get('message', '')}"
+            )
         checks.append(
             DoctorCheck(
                 "worker_service",
                 "pass" if service["alive"] else "warn",
-                f"running pid={service['pid']}" if service["alive"] else "not running; tasks remain queued",
+                service_detail,
             )
         )
+        if not service["alive"]:
+            next_actions.append(f"agent start --repo {repository or Path.cwd()}")
     failed = any(check.status == "fail" for check in checks)
+    warned = any(check.status == "warn" for check in checks)
+    next_actions = list(dict.fromkeys(next_actions))
     payload = {
         "status": "fail" if failed else "pass",
         "version": __version__,
         "checks": [asdict(check) for check in checks],
+        "next_actions": next_actions,
     }
     emit(
         payload,
         as_json=args.json,
         lines=(
-            f"AI Harness {__version__}: {'problems found' if failed else 'ready'}",
+            f"AI Harness {__version__}: {'problems found' if failed else ('ready with warnings' if warned else 'ready')}",
             *(f"  [{check.status.upper()}] {check.name}: {check.detail}" for check in checks),
+            *(f"Next: {action}" for action in next_actions),
         ),
     )
     return 1 if failed else 0
@@ -802,13 +1744,31 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    update_parser = subparsers.add_parser("update", help="download and install the latest system update")
+    update_parser.add_argument(
+        "--source",
+        default="",
+        help="updated AI Harness folder or git+https/git+ssh source (normally not needed)",
+    )
+    update_parser.add_argument("--json", action="store_true")
+    update_parser.set_defaults(handler=handle_update)
+
     init_parser = subparsers.add_parser("init", help="initialize a local project")
     init_parser.add_argument("--repo", default="", help="project directory (default: current directory)")
     init_parser.add_argument("--project-id", default="")
     init_parser.add_argument("--profile", choices=["auto", *sorted(SUPPORTED_PROFILES)], default="auto")
-    init_parser.add_argument("--base-branch", default="main")
-    init_parser.add_argument("--branch-prefix", choices=sorted(ALLOWED_BRANCH_PREFIXES), default="tast/")
+    init_parser.add_argument("--base-branch", default="auto")
+    init_parser.add_argument(
+        "--branch-prefix",
+        default="",
+        help="safe Git branch prefix for generated task branches (for example feat/, chore/, team/mobile/)",
+    )
     init_parser.add_argument("--force", action="store_true")
+    init_parser.add_argument(
+        "--replace-agents",
+        action="store_true",
+        help="replace an existing AGENTS.md as well as project configuration",
+    )
     init_parser.add_argument("--json", action="store_true")
     init_parser.set_defaults(handler=handle_init)
 
@@ -820,7 +1780,12 @@ def build_parser() -> argparse.ArgumentParser:
     task_parser.add_argument(
         "--current-branch",
         action="store_true",
-        help="run in the clean currently checked-out branch without creating a worktree",
+        help="use the clean already checked-out non-default branch instead of creating a task branch",
+    )
+    task_parser.add_argument(
+        "--worktree",
+        action="store_true",
+        help="opt into an isolated Git worktree (useful for parallel tasks)",
     )
     task_parser.add_argument("--priority", type=int, choices=range(-100, 101), default=0)
     task_parser.add_argument("--max-retries", type=int, choices=range(0, 11), default=2)
@@ -828,11 +1793,30 @@ def build_parser() -> argparse.ArgumentParser:
     task_parser.add_argument("--json", action="store_true")
     task_parser.set_defaults(handler=handle_task)
 
+    start_parser = subparsers.add_parser("start", help="validate this project and start autonomous workers")
+    start_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")
+    start_parser.add_argument("--workers", type=int, choices=range(1, 33), default=3)
+    start_parser.add_argument("--json", action="store_true")
+    start_parser.set_defaults(handler=handle_start)
+
+    stop_parser = subparsers.add_parser("stop", help="stop the autonomous worker service")
+    stop_parser.add_argument("--json", action="store_true")
+    stop_parser.set_defaults(handler=handle_stop)
+
     status_parser = subparsers.add_parser("status", help="show compact project queue and run status")
     status_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")
     status_parser.add_argument("--limit", type=int, choices=range(1, 101), default=10)
     status_parser.add_argument("--json", action="store_true")
     status_parser.set_defaults(handler=handle_status)
+
+    watch_parser = subparsers.add_parser("watch", help="follow one task until completion or user attention")
+    watch_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")
+    watch_parser.add_argument("--task-id", default="")
+    watch_parser.add_argument("--run-id", default="")
+    watch_parser.add_argument("--interval", type=float, default=2.0)
+    watch_parser.add_argument("--timeout", type=float, default=0.0, help="seconds; zero waits indefinitely")
+    watch_parser.add_argument("--json", action="store_true")
+    watch_parser.set_defaults(handler=handle_watch)
 
     failures_parser = subparsers.add_parser("failures", help="list structured task failures")
     failures_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")
@@ -847,10 +1831,12 @@ def build_parser() -> argparse.ArgumentParser:
     dead_parser.add_argument("--json", action="store_true")
     dead_parser.set_defaults(handler=handle_dead_letters)
 
-    worker_parser = subparsers.add_parser("worker", help="inspect or restart the persistent worker service")
+    worker_parser = subparsers.add_parser("worker", help="inspect or control the persistent worker service")
     worker_subparsers = worker_parser.add_subparsers(dest="worker_command", required=True)
-    for worker_command in ("status", "restart"):
+    for worker_command in ("status", "start", "restart", "stop"):
         worker_action = worker_subparsers.add_parser(worker_command)
+        if worker_command in {"start", "restart"}:
+            worker_action.add_argument("--workers", type=int, choices=range(1, 33), default=0)
         worker_action.add_argument("--json", action="store_true")
         worker_action.set_defaults(handler=handle_worker_command)
 
@@ -872,6 +1858,17 @@ def build_parser() -> argparse.ArgumentParser:
     approve_parser.add_argument("--json", action="store_true")
     approve_parser.set_defaults(handler=handle_approve)
 
+    answer_parser = subparsers.add_parser(
+        "answer",
+        help="answer a paused workflow question and resume the same run",
+    )
+    answer_parser.add_argument("run_id")
+    answer_parser.add_argument("response", nargs="+")
+    answer_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")
+    answer_parser.add_argument("--actor", default="user")
+    answer_parser.add_argument("--json", action="store_true")
+    answer_parser.set_defaults(handler=handle_answer)
+
     doctor_parser = subparsers.add_parser("doctor", help="diagnose the project and runtime installation")
     doctor_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")
     doctor_parser.add_argument("--full", action="store_true", help="run the authenticated Runtime preflight")
@@ -890,6 +1887,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False))
         else:
             print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except ImportError as exc:
+        missing = str(getattr(exc, "name", "") or "unknown Python module")
+        message = f"required Python module {missing!r} is unavailable; {dependency_repair_hint()}"
+        if getattr(args, "json", False):
+            print(json.dumps({"status": "error", "error": message}, ensure_ascii=False))
+        else:
+            print(f"error: {message}", file=sys.stderr)
         return 2
 
 

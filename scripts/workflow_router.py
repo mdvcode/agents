@@ -758,6 +758,12 @@ def decide_next_role(
     if budget_blockers and not (bypass_approval or budget_approved):
         return _approval("Workflow budget exceeded; execution is awaiting approval.", warnings + budget_blockers)
 
+    if result.get("status") in {"blocked", "failed", "awaiting_approval"}:
+        return _approval(
+            str(result.get("summary", f"Role {current_role} did not complete successfully.")),
+            warnings + _list_values(result.get("blockers")),
+        )
+
     quality = quality_status(state, artifacts_dir)
     if current_role == "quality-runner" and quality == "fail":
         if ci_status(state, artifacts_dir) == "fail":
@@ -822,9 +828,6 @@ def decide_next_role(
     blockers = workflow_blockers(state, result, artifacts_dir)
     if blockers:
         return _approval("Workflow blockers are present; execution is awaiting approval.", warnings + blockers)
-
-    if result.get("status") in {"blocked", "failed", "awaiting_approval"}:
-        return _approval(f"Role {current_role} did not complete successfully.", warnings + _list_values(result.get("blockers")))
 
     code = code_changed(state, artifacts_dir)
     ui = ui_changed(state, artifacts_dir)

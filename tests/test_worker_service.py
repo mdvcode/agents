@@ -47,6 +47,25 @@ def test_worker_service_registers_reports_health_and_stops_gracefully(tmp_path: 
     assert {record.status for record in workers} == {"stopped"}
 
 
+def test_worker_service_writes_failures_next_to_its_state_file(tmp_path: Path) -> None:
+    queue = TaskQueue(tmp_path / "queue.db")
+    state_path = tmp_path / "service.json"
+    service = WorkerService(
+        queue=queue,
+        service_id="service-test",
+        workers=1,
+        lease_seconds=30,
+        heartbeat_seconds=1,
+        state_path=state_path,
+    )
+
+    service.write_service_error(RuntimeError("visible startup failure"))
+
+    log_path = tmp_path / "worker-service.log"
+    assert log_path.is_file()
+    assert "visible startup failure" in log_path.read_text(encoding="utf-8")
+
+
 def test_service_restart_reclaims_active_task_and_continues_same_run(tmp_path: Path, monkeypatch: object) -> None:
     monkeypatch.setattr(worker_pool, "RUNS_DIR", tmp_path / ".agent-runs")
     queue = TaskQueue(tmp_path / "queue.db")

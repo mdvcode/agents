@@ -61,6 +61,15 @@ RECOVERY_EXIT_CODES = {
     "dead_letter": EXIT_DEAD_LETTER,
     "fail": EXIT_UNRECOVERABLE_FAILURE,
 }
+AUTHORITATIVE_PAUSE_STATUSES = {
+    "awaiting_approval",
+    "blocked",
+    "retry_wait",
+    "repairing",
+    "resuming",
+    "dead_letter",
+    "failed",
+}
 
 
 @dataclass
@@ -165,6 +174,12 @@ def write_workflow_state(path: Path, state: dict[str, Any]) -> None:
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     temporary.replace(path)
+
+
+def workflow_pause_scheduled(path: Path) -> bool:
+    """Return whether the authoritative child workflow already selected its next action."""
+
+    return str(read_workflow_state(path).get("execution_status", "")) in AUTHORITATIVE_PAUSE_STATUSES
 
 
 def recovery_attempt(state: dict[str, Any], kind: str) -> int:
@@ -529,6 +544,8 @@ def run_workflow(
                     ),
                 )
                 if returncode == 0:
+                    break
+                if workflow_pause_scheduled(workflow_state_path):
                     break
                 if attempt <= max_retries:
                     time.sleep(backoff_seconds)

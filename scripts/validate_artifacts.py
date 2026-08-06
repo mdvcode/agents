@@ -15,7 +15,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from repository_registry import validate_registry_data
+from repository_registry import validate_branch_prefixes, validate_registry_data
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -275,12 +275,12 @@ def validate_policy_data(policy: Any, label: str = ".agent-policy.yaml") -> list
     if not isinstance(publication, dict):
         errors.append(f"{label}: projects.nextjs_web.publication must be an object")
     else:
-        allowed_prefixes = publication.get("allowed_branch_prefixes")
-        expected_prefixes = ["feat/", "fix/", "issue/", "tast/"]
-        if allowed_prefixes != expected_prefixes:
-            errors.append(
-                f"{label}: projects.nextjs_web.publication.allowed_branch_prefixes must be {expected_prefixes!r}"
+        errors.extend(
+            validate_branch_prefixes(
+                publication.get("allowed_branch_prefixes"),
+                f"{label}: projects.nextjs_web.publication.allowed_branch_prefixes",
             )
+        )
         for risk_class in ("low", "medium", "high"):
             rules = publication.get(risk_class)
             if not isinstance(rules, dict):

@@ -95,6 +95,56 @@ def test_compiled_context_package_is_the_only_reference_read(tmp_path: Path) -> 
     assert "must-not-be-read-directly" not in contents
 
 
+def test_role_prompt_includes_interaction_policy_and_recorded_user_answer(tmp_path: Path) -> None:
+    request = role_request(tmp_path)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (tmp_path / "human-input.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "run_id": "run-1",
+                "entries": [{"response": "Use the staging environment."}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    prompt = codex_cli_executor.role_prompt_payload(
+        request=request,
+        prompt_text="Planner prompt",
+        manifest=context_manifest_payload(tmp_path),
+        output_contract={"required": [], "types": {}},
+    )
+
+    assert "Use the staging environment." in prompt
+    assert "do not perform empty retries" in prompt
+    assert "status=awaiting_approval" in prompt
+
+
+def test_noncompleted_role_result_gets_a_nonempty_attention_reason() -> None:
+    result = codex_cli_executor.parse_role_result(
+        json.dumps(
+            {
+                "status": "awaiting_approval",
+                "next_action": "awaiting_approval",
+                "summary": "Which environment should be used?",
+                "artifacts_created": [],
+                "blockers": [],
+                "warnings": [],
+                "tokens_used": 1,
+            }
+        ),
+        codex_cli_executor.load_json(
+            Path(__file__).resolve().parents[1] / "schemas" / "role_result.schema.json"
+        ),
+        1,
+    )
+
+    assert result["status"] == "awaiting_approval"
+    assert result["blockers"] == ["Which environment should be used?"]
+
+
 def test_json_contract_supports_nullable_nested_objects() -> None:
     schema = {
         "type": "object",

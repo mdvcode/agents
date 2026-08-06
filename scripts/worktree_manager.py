@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create and record task-scoped git worktrees."""
+"""Prepare and record task-scoped Git branches or worktrees."""
 
 from __future__ import annotations
 
@@ -21,7 +21,18 @@ def slug(value: str) -> str:
 
 
 def run_git(repo: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", *args], cwd=repo, text=True, capture_output=True, check=False)
+    command = ["git", *args]
+    try:
+        return subprocess.run(
+            command,
+            cwd=repo,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return subprocess.CompletedProcess(command, 1, "", str(exc))
 
 
 def inspect_current_checkout(
@@ -97,6 +108,78 @@ def use_current_checkout(
     return result
 
 
+def resolve_base_ref(repo: Path, base_branch: str) -> tuple[str, list[str]]:
+    """Fetch when possible and select an existing remote or local base ref."""
+
+    warnings: list[str] = []
+    fetch = run_git(repo, ["fetch", "--prune", "origin"])
+    if fetch.returncode != 0:
+        warnings.append("git fetch was unavailable; using an existing local reference")
+    origin_ref = f"origin/{base_branch}"
+    if run_git(repo, ["rev-parse", "--verify", origin_ref]).returncode == 0:
+        return origin_ref, warnings
+    if run_git(repo, ["rev-parse", "--verify", base_branch]).returncode == 0:
+        warnings.append(f"origin/{base_branch} does not exist; using local branch {base_branch}")
+        return base_branch, warnings
+    return "", warnings
+
+
+def prepare_task_branch(
+    repo: Path,
+    branch: str,
+    base_branch: str,
+) -> dict[str, object]:
+    """Create or select one task branch in the current clean checkout."""
+
+    repo = repo.resolve()
+    checkout = inspect_current_checkout(repo, require_clean=True)
+    errors = [str(item) for item in checkout["errors"]]
+    warnings: list[str] = []
+    branch_check = run_git(repo, ["check-ref-format", "--branch", branch])
+    if branch_check.returncode != 0:
+        errors.append(branch_check.stderr.strip() or branch_check.stdout.strip() or "invalid task branch")
+    if errors:
+        return {
+            "repository": str(repo),
+            "branch": branch,
+            "base_branch": base_branch,
+            "workspace_mode": "current_branch",
+            "execution_status": "blocked",
+            "errors": errors,
+            "warnings": warnings,
+        }
+    current_branch = str(checkout["branch"])
+    if current_branch != branch:
+        base_ref, warnings = resolve_base_ref(repo, base_branch)
+        if not base_ref:
+            errors.append(
+                f"base branch {base_branch} does not exist locally or as origin/{base_branch}"
+            )
+        else:
+            branch_exists = run_git(repo, ["show-ref", "--verify", f"refs/heads/{branch}"]).returncode == 0
+            arguments = ["switch", branch] if branch_exists else ["switch", "-c", branch, base_ref]
+            switched = run_git(repo, arguments)
+            if switched.returncode != 0:
+                errors.append(switched.stderr.strip() or switched.stdout.strip() or "cannot switch task branch")
+    if not errors:
+        verified = inspect_current_checkout(
+            repo,
+            expected_branch=branch,
+            protected_branches={base_branch, "main", "master", "trunk"},
+            require_clean=True,
+        )
+        errors.extend(str(item) for item in verified["errors"])
+    return {
+        "repository": str(repo),
+        "branch": branch,
+        "base_branch": base_branch,
+        "workspace_mode": "current_branch",
+        "execution_status": "blocked" if errors else "completed",
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
 def create_worktree(
     repo: Path,
     task_id: str,
@@ -122,20 +205,18 @@ def create_worktree(
         "errors": [],
         "warnings": [],
     }
-    fetch = run_git(repo, ["fetch", "--prune", "origin"])
-    if fetch.returncode != 0:
-        result["warnings"] = [
-            "git fetch was unavailable; using the existing local origin reference",
-        ]
-    verify = run_git(repo, ["rev-parse", "--verify", f"origin/{base_branch}"])
-    if verify.returncode != 0:
+    base_ref, warnings = resolve_base_ref(repo, base_branch)
+    result["warnings"] = warnings
+    if not base_ref:
         result["execution_status"] = "blocked"
-        result["errors"] = [f"base branch origin/{base_branch} does not exist"]
+        result["errors"] = [
+            f"base branch {base_branch} does not exist locally or as origin/{base_branch}"
+        ]
     elif not worktree.exists():
         branch_exists = run_git(repo, ["show-ref", "--verify", f"refs/heads/{branch}"]).returncode == 0
         args = ["worktree", "add", str(worktree), branch]
         if not branch_exists:
-            args = ["worktree", "add", "-b", branch, str(worktree), f"origin/{base_branch}"]
+            args = ["worktree", "add", "-b", branch, str(worktree), base_ref]
         add = run_git(repo, args)
         if add.returncode != 0:
             result["execution_status"] = "failed"

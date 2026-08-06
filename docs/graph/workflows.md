@@ -2,11 +2,11 @@
 
 ## User CLI Flow
 
-`pipx install ai-harness` -> `agent init` -> `.agent/project.yaml` + `AGENTS.md` -> `agent task "Goal"` -> normalized Task envelope -> SQLite queue -> worker/worktree/workflow -> `agent status` -> PR or compact exception.
+`./install.sh` -> `agent init` -> `.agent/project.yaml` + `AGENTS.md` -> commit initialization -> `agent task "Goal"` -> dedicated branch in current checkout + worker auto-start + normalized Task envelope -> SQLite queue -> workflow -> `agent status` -> PR or compact exception. Later, `agent update` refreshes the installed package and restarts the worker without overwriting a dirty source checkout.
 
-`agent task --current-branch "Goal"` follows the same queue, worker, recovery, and status flow but binds the run to the clean current checkout. The queue reserves a checkout for its earliest unfinished current-branch task until completion or explicit cancellation, and execution stops if the checked-out branch changed after intake.
+`agent task --current-branch "Goal"` binds the run to an already prepared clean branch. `agent task --worktree "Goal"` explicitly selects isolated parallel execution. The queue reserves a current checkout for its unfinished branch task until completion or explicit cancellation, and execution stops if the checked-out branch changed after intake.
 
-Project-local configuration authorizes onboarding into isolated execution only. Central Harness policy and repository trust remain mandatory for publication.
+Project-local configuration authorizes local execution only. Central Harness policy and repository trust remain mandatory for publication.
 
 ## GitHub Issue Flow
 User gives project + GitHub issue -> branch -> `docs/projects/<project>/issues/issue-<number>.md` -> one `.agent-runs/<run-id>/` -> plan -> risk -> patch -> tests -> quality -> security -> review -> verdict -> PR/handoff -> project wiki/memory update.
@@ -19,9 +19,11 @@ Within one `.agent-runs/<run-id>/`: `plan.md` -> `risk.json` -> implementation -
 
 ## Concurrent Task Flow
 
-Task enqueue -> SQLite lease -> worker heartbeat -> Task Intake creates worktree -> authoritative router -> implementation and bounded repair loops -> independent verification plane -> publication from the same worktree or compact exception -> terminal queue status.
+Task enqueue -> SQLite lease -> worker heartbeat -> Task Intake binds the prepared branch or creates an opted-in worktree -> authoritative router -> implementation and bounded repair loops -> independent verification plane -> publication from the same workspace or compact exception -> terminal queue status.
 
 Approval required -> run-scoped request and checkpoint fingerprint -> exact-scope human decision -> consume once -> queue existing run id -> resume same worktree/checkpoint -> continue deterministic gates.
+
+Missing information -> role returns `awaiting_approval` with a concrete question -> workflow and queue preserve `ATTENTION REQUIRED` details -> `agent watch`/`agent status` prints the question -> `agent answer <run-id> ...` records sanitized private input -> consumes only the matching scoped continuation gate -> same run/checkpoint resumes with the answer in its role prompt.
 
 Worker process dies -> heartbeat stops -> lease expires -> task requeued with existing run id -> replacement worker detects running/resuming workflow -> `--resume` from checkpoint.
 

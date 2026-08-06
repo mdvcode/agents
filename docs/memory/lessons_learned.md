@@ -78,3 +78,21 @@
   Example bad pattern: `SavedHttpRequest.objects.filter(path__icontains="webflow-ajax")[:5000]`.
   Example good pattern: fetch recent `id/path/full_path` rows ordered by indexed primary key, filter in Python, then load only the few matching rows needed for replay.
   Scope: py311 test-stand sweeps
+
+- Date: 2026-08-05
+  Agent: Codex
+  Failure: The installed `agent` command passed `agent doctor` but the first `agent task` crashed with a raw `ModuleNotFoundError` because the long-lived pipx environment no longer matched the source checkout's declared runtime dependencies.
+  Root cause: The health check verified resource paths and the Codex executable, but did not import the same Python modules used by task intake; the CLI also allowed import failures to escape its user-facing error boundary.
+  Prevention rule: A readiness command must exercise every lazy import boundary required by the next advertised command, and the command boundary must convert dependency/import failures into a concise cause plus a repair command.
+  Example bad pattern: report “ready” after checking only executable paths, then import queue/runtime modules for the first time after task submission.
+  Example good pattern: have `agent doctor` import the task runtime dependencies, make `agent start` refuse an incomplete environment, and direct stale installs to the product-level `agent update` command.
+  Scope: agent control-plane CLI and packaged runtime
+
+- Date: 2026-08-06
+  Agent: Codex
+  Failure: A background workflow could preserve a useful role question internally while the queue and CLI showed only generic `blocked` or `approval required`, leaving no safe command to provide the missing information to the same run.
+  Root cause: Human attention was treated only as an approval state; role summaries, blockers, informational answers, and authority-granting decisions were not carried as separate end-to-end contracts.
+  Prevention rule: Every paused autonomous task must preserve an actionable summary and concrete missing items through workflow, worker, queue, and CLI; informational answers must resume the same checkpoint, while risk/security/publication authority must remain an explicit scoped approval.
+  Example bad pattern: retry a role or tell the user only that approval is required, without showing the question or accepting a run-bound answer.
+  Example good pattern: print `ATTENTION REQUIRED`, show the exact question and `agent answer <run-id> ...`, then resume the same run with the sanitized answer available to the role.
+  Scope: agent control-plane workflow, recovery, and CLI UX

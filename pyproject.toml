@@ -41,6 +41,7 @@ include = ["ai_harness*"]
   ".agent-tool-policy.yaml",
   ".agent-workflows.yaml",
   "AGENTS.md",
+  "install.sh",
   "Makefile",
   "packaging/.agent-repositories.yaml",
 ]

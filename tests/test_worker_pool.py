@@ -10,7 +10,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from task_queue import TaskQueue, TaskRecord
-from worker_pool import WorkerOutcome, WorkflowWorkerPool, safe_payload, telemetry_run_dir
+from worker_pool import (
+    WorkerOutcome,
+    WorkflowWorkerPool,
+    safe_payload,
+    telemetry_run_dir,
+    workflow_attention_reason,
+)
 import worker_pool
 
 
@@ -158,6 +164,23 @@ def test_worker_rejects_unknown_workspace_mode(tmp_path: Path) -> None:
         assert "workspace_mode must be isolated or current_branch" in str(exc)
     else:
         raise AssertionError("unknown workspace modes must be rejected")
+
+
+def test_worker_preserves_exact_attention_question() -> None:
+    workflow = {
+        "execution_status": "awaiting_approval",
+        "attention": {
+            "required": True,
+            "summary": "Which region should be used?",
+            "details": ["Choose eu-west-1 or eu-central-1."],
+            "role": "planner",
+            "action": "answer_or_approve",
+        },
+    }
+
+    reason = workflow_attention_reason(workflow, "approval required")
+
+    assert reason == "Which region should be used?; Choose eu-west-1 or eu-central-1."
 
 
 def test_worker_telemetry_rejects_run_paths_outside_run_store(

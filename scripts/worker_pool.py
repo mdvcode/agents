@@ -138,6 +138,37 @@ def safe_payload(record: TaskRecord) -> dict[str, str]:
     return {key: str(value) for key, value in record.payload.items()}
 
 
+def workflow_attention_reason(workflow: dict[str, object], fallback: str) -> str:
+    """Extract the most actionable paused-run explanation for queue/status output."""
+
+    values: list[str] = []
+    attention = workflow.get("attention")
+    if isinstance(attention, dict):
+        values.append(str(attention.get("summary", "")))
+        details = attention.get("details", [])
+        if isinstance(details, list):
+            values.extend(str(item) for item in details)
+    values.append(str(workflow.get("recovery_reason", "")))
+    blockers = workflow.get("blockers", [])
+    if isinstance(blockers, list):
+        values.extend(str(item) for item in blockers)
+    roles = workflow.get("roles", [])
+    if isinstance(roles, list):
+        for checkpoint in reversed(roles):
+            if not isinstance(checkpoint, dict):
+                continue
+            result = checkpoint.get("result")
+            if not isinstance(result, dict) or result.get("status") == "completed":
+                continue
+            values.append(str(result.get("summary", "")))
+            result_blockers = result.get("blockers", [])
+            if isinstance(result_blockers, list):
+                values.extend(str(item) for item in result_blockers)
+            break
+    normalized = list(dict.fromkeys(value.strip() for value in values if value.strip()))
+    return sanitized_message("; ".join(normalized) or fallback)
+
+
 class WorkflowWorkerPool:
     def __init__(
         self,
@@ -228,7 +259,8 @@ class WorkflowWorkerPool:
                     status="blocked",
                     run_id=run_id,
                     requires_human=True,
-                    exception_reason="approval required",
+                    exception_reason=workflow_attention_reason(workflow, "approval required"),
+                    recovery_action="approval",
                 )
             elif status == "completed":
                 return WorkerOutcome(status="completed", run_id=run_id)
@@ -351,14 +383,13 @@ class WorkflowWorkerPool:
                 resume_checkpoint=str(workflow.get("resume_from", "")),
             )
         if execution_status in {"awaiting_approval", "blocked"}:
-            blockers = workflow.get("blockers", [])
-            reason = "; ".join(str(item) for item in blockers) if isinstance(blockers, list) else execution_status
+            reason = workflow_attention_reason(workflow, execution_status)
             return WorkerOutcome(
                 status="blocked",
                 run_id=run_id,
                 error=(stderr or stdout).strip(),
                 requires_human=True,
-                exception_reason=reason or execution_status,
+                exception_reason=reason,
                 recovery_action="approval" if execution_status == "awaiting_approval" else "",
             )
         if execution_status == "dead_letter" or process.returncode == 30:
@@ -369,7 +400,7 @@ class WorkflowWorkerPool:
                 failure_kind=str(workflow.get("failure_kind", "")),
                 recovery_action="dead_letter",
                 requires_human=True,
-                exception_reason=str(workflow.get("recovery_reason", "recovery budget exhausted")),
+                exception_reason=workflow_attention_reason(workflow, "recovery budget exhausted"),
                 failure_id=str(workflow.get("failure_id", "")),
             )
         if execution_status == "failed" or process.returncode in {40, 50}:
@@ -380,7 +411,7 @@ class WorkflowWorkerPool:
                 failure_kind=str(workflow.get("failure_kind", "unrecoverable")),
                 recovery_action="fail",
                 requires_human=True,
-                exception_reason=str(workflow.get("recovery_reason", "unrecoverable workflow failure")),
+                exception_reason=workflow_attention_reason(workflow, "unrecoverable workflow failure"),
                 failure_id=str(workflow.get("failure_id", "")),
             )
         return self._recovery_outcome(
