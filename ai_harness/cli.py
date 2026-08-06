@@ -223,6 +223,17 @@ def generated_task_id(goal: str) -> str:
     return f"{timestamp}-{slug(goal, 'task')[:32]}-{digest}"
 
 
+def generated_task_branch(branch_prefix: str, task_id: str) -> str:
+    """Build a deterministic safe branch without exposing prompt quirks to users."""
+
+    task_slug = slug(task_id, "task")
+    candidate = f"{branch_prefix}{task_slug}"
+    if safe_branch(candidate):
+        return candidate
+    digest = hashlib.sha256(task_id.encode("utf-8")).hexdigest()[:12]
+    return f"task/{digest}"
+
+
 def handle_task(args: argparse.Namespace) -> int:
     repository = repository_from_arg(args.repo, require_initialized=True)
     config = load_project_config(repository)
@@ -256,9 +267,13 @@ def handle_task(args: argparse.Namespace) -> int:
             raise CLIError("; ".join(checkout_errors))
         branch = str(checkout.get("branch", ""))
     else:
-        branch = args.branch or f"{config.branch_prefix}{slug(task_id, 'task')}"
+        branch = args.branch or generated_task_branch(config.branch_prefix, task_id)
     if not safe_branch(branch):
-        raise CLIError("task branch must be a safe git branch name")
+        source = "current" if args.current_branch else "requested"
+        raise CLIError(
+            f"{source} branch {branch!r} is not a valid Git branch name; "
+            "remove --branch to let agent create one automatically, or switch to a valid existing branch"
+        )
     if branch in {config.base_branch, "main", "master", "trunk"}:
         raise CLIError("task branch must not be a protected/default branch")
     external_id = f"{config.project_id}:{task_id}"

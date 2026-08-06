@@ -79,6 +79,8 @@ Generated branches use the prefix selected during initialization and never use t
 agent init --force --branch-prefix chore/
 ```
 
+Prompt length and punctuation never become a branch-name failure: generated names are normalized, bounded, and receive a deterministic fallback automatically. Existing branches are checked against Git's own ref rules rather than a narrower ASCII-only list, so valid names containing Unicode or punctuation such as `+`, `=`, `&`, and `,` are accepted. Ambiguous or unsafe ref forms such as `../`, `@{`, repeated `/`, control characters, and `.lock` remain blocked.
+
 `--current-branch` uses an already checked-out clean non-default branch without creating or renaming it. `--worktree` is the explicit opt-in for isolated parallel task execution. The worker revalidates current-checkout branches immediately before execution. Status, retry, resume, and abort preserve the same authoritative run and workspace.
 
 Use `--dry-run --json` to inspect the envelope without switching branches, starting workers, or changing queue state. `agent start` remains available for proactively starting the service, but it is no longer required before `agent task`.
