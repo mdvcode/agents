@@ -243,6 +243,68 @@ def test_agent_role_runner_preflights_configured_runtime_before_roles(tmp_path: 
     assert state["runtime"]["provider"] == "codex-cli"
 
 
+def test_current_branch_mode_uses_source_checkout_and_revalidates_branch(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    (tmp_path / "README.md").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "switch", "-c", "feature/current"], cwd=tmp_path, check=True, capture_output=True)
+    runs = tmp_path.parent / "current-branch-runs"
+    monkeypatch.setattr(agent_role_runner, "RUNS", runs)
+
+    worktree, branch, base, errors = agent_role_runner.prepare_worktree(
+        tmp_path,
+        "current-task",
+        "",
+        "run-current",
+        "feature/current",
+        "main",
+        True,
+        True,
+    )
+
+    assert errors == []
+    assert worktree == tmp_path.resolve()
+    assert branch == "feature/current"
+    assert base == "main"
+    assert not (tmp_path / ".agent-worktrees").exists()
+    recorded = json.loads((runs / "run-current" / "worktree.json").read_text(encoding="utf-8"))
+    assert recorded["workspace_mode"] == "current_branch"
+    assert recorded["worktree"] == str(tmp_path.resolve())
+
+    subprocess.run(["git", "switch", "main"], cwd=tmp_path, check=True, capture_output=True)
+    _, _, _, changed_errors = agent_role_runner.prepare_worktree(
+        tmp_path,
+        "current-task",
+        "",
+        "run-changed",
+        "feature/current",
+        "main",
+        True,
+        True,
+    )
+    assert any("current branch changed before execution" in error for error in changed_errors)
+
+    subprocess.run(["git", "switch", "feature/current"], cwd=tmp_path, check=True, capture_output=True)
+    (tmp_path / "README.md").write_text("changed after intake\n", encoding="utf-8")
+    _, _, _, dirty_errors = agent_role_runner.prepare_worktree(
+        tmp_path,
+        "current-task",
+        "",
+        "run-dirty",
+        "feature/current",
+        "main",
+        True,
+        True,
+    )
+    assert any("uncommitted changes" in error for error in dirty_errors)
+
+
 def test_agent_role_runner_invokes_adapter_for_core_roles(tmp_path: Path, monkeypatch: object) -> None:
     monkeypatch.setattr(agent_role_runner, "RUNS", tmp_path / ".agent-runs")
     command = fake_adapter_script(tmp_path / "fake_adapter.py")
@@ -307,7 +369,36 @@ def test_approved_run_resumes_same_worktree_from_checkpoint(tmp_path: Path, monk
     assert (run_dir / "role-results" / f"{checkpoint_role}-2.json").exists()
     renewed = json.loads((run_dir / "artifacts" / "approval.json").read_text(encoding="utf-8"))
     assert renewed["approval_id"] != approval["approval_id"]
-    assert "Workflow blockers" in renewed["reason"]
+    assert renewed["reason"] == "Publication executor blocked or failed."
+    assert resumed["attention"]["summary"] == renewed["reason"]
+
+
+def test_approval_request_failure_replaces_stale_question_with_actionable_attention(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    runs = tmp_path / ".agent-runs"
+    monkeypatch.setattr(agent_role_runner, "RUNS", runs)
+    command = fake_adapter_script(tmp_path / "fake_adapter.py")
+
+    def reject_approval(*args: object, **kwargs: object) -> None:
+        raise agent_role_runner.ApprovalError("approval store unavailable")
+
+    monkeypatch.setattr(agent_role_runner, "request_approval", reject_approval)
+
+    state = agent_role_runner.run_roles(
+        run_id="approval-request-failure",
+        repository=tmp_path,
+        adapter_command=command,
+        dry_run=True,
+    )
+
+    assert state["execution_status"] == "blocked"
+    assert state["attention"]["summary"] == "The approval request could not be created."
+    assert state["attention"]["action"] == "fix_then_retry"
+    assert state["attention"]["details"] == [
+        "approval request failed: approval store unavailable"
+    ]
 
 
 def test_unfinished_run_cannot_be_restarted_without_resume(tmp_path: Path, monkeypatch: object) -> None:

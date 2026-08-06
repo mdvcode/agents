@@ -23,6 +23,8 @@ Unlike `artifacts/`, this directory is not cleared between tasks. Agents update 
 - `decisions/2026-08-03-observability-platform.md`: outer-loop tracing, operational metrics, sanitized local evidence, optional OTLP export, and loopback dashboard.
 - `decisions/2026-08-03-production-evaluation-corpus.md`: version-2 deterministic corpus, candidate-independent fingerprints, non-compensating critical metrics, frozen baseline, and CI gate.
 - `decisions/2026-08-04-unified-task-recovery.md`: failure records, bounded retry/repair/resume, same-run checkpoints, queue recovery states, worker isolation, and idempotent continuation.
+- `decisions/2026-08-06-explicit-task-attention.md`: visible task questions, private run-bound answers, live watch output, and no-progress retry stops.
+- `decisions/2026-08-06-ordinary-user-install-update.md`: downloaded-folder installation, safe product-level updates, and worker refresh without pipx knowledge.
 - `contradictions.md`: claims or practices that need reconciliation.
 
 ## Update Rules

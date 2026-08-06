@@ -11,7 +11,7 @@
         "profile": {"type": "string", "enum": ["agent_workspace", "django", "nextjs_web"]},
         "repository": {"type": "string", "enum": ["."]},
         "base_branch": {"type": "string"},
-        "branch_prefix": {"type": "string", "enum": ["feat/", "fix/", "issue/", "tast/"]}
+        "branch_prefix": {"type": "string"}
       },
       "additionalProperties": false
     },

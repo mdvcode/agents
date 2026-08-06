@@ -10,6 +10,12 @@ repositories:
       - "fix/"
       - "issue/"
       - "tast/"
+      - "chore/"
+      - "docs/"
+      - "refactor/"
+      - "test/"
+      - "release/"
+      - "perf/"
     protected_paths:
       - ".env"
       - ".env.*"

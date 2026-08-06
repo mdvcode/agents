@@ -8,6 +8,7 @@ This repository is the local operating base for agents working across supported 
 - `docs/evaluation-framework.md`: versioned run scoring, 30-case production corpus, frozen comparisons, CI regression gate, coverage, and leaderboard workflow.
 - `docs/observability.md`: OpenTelemetry traces and metrics, operational snapshot, privacy boundaries, and loopback dashboard.
 - `docs/cli.md`: install and use the `agent` product CLI from any project.
+- `docs/operator-runbook.md`: one copyable start path plus failure, approval, and recovery actions.
 - `docs/git-and-logs.md`: git, logs, docs, and artifact expectations.
 - `docs/issues/README.md`: per-GitHub-issue history and branch tracking.
 - `docs/projects/README.md`: multi-project private memory layout and privacy rules.
@@ -58,10 +59,17 @@ This repository is the local operating base for agents working across supported 
 
 ## Product CLI
 
-- `pipx install .`: install the local `ai-harness` distribution once.
+- `./install.sh`: install the downloaded system and expose the `agent` command without requiring pipx knowledge or `sudo`.
+- `agent update`: safely download and install updates, verify the command, and restart the worker service.
 - `agent init`: create `.agent/project.yaml` and safe project instructions.
-- `agent task "Goal"`: enqueue a normalized task for the current project.
+- `agent task "Goal"`: create a dedicated task branch in the current checkout, start workers when needed, and queue autonomous work.
+- `agent start`: optionally validate the current project and start the autonomous worker service in advance.
+- `agent stop`: stop the autonomous worker service gracefully.
+- `agent task --current-branch "Goal"`: use the clean, already checked-out non-default branch.
+- `agent task --worktree "Goal"`: explicitly opt into an isolated worktree for parallel work.
 - `agent status`: show compact project queue/run state.
+- `agent watch`: follow task transitions until completion or a required user action.
+- `agent answer <run-id> "Answer"`: provide requested information and resume the same scoped run.
 - `agent doctor [--full]`: validate packaging, project config, Codex CLI, and optionally runtime authentication.
 
 ## Runtime State

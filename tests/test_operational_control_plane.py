@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from approval_lifecycle import request_approval
-from control_plane_api import handler_factory
+from control_plane_api import ControlPlaneHandler, handler_factory
 from operational_metrics import collect_metrics
 from task_queue import TaskQueue
 
@@ -174,8 +174,12 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         with urlopen(f"{base}/dashboard", timeout=5) as response:
             dashboard = response.read().decode("utf-8")
             assert response.headers["Content-Security-Policy"]
-        assert "Outer loop, visible." in dashboard
+        assert "Agent Control" in dashboard
+        assert "Новая задача" in dashboard
         assert "api-run" not in dashboard
+
+        config = api_request(f"{base}/config", access_key)
+        assert config["default_repository"] == str(ROOT)
 
         approved = api_request(
             f"{base}/runs/api-run/approve",
@@ -207,3 +211,99 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
     assert task["envelope"]["source"] == "api"
     assert metrics["queue"]["counts"]["queued"] == 2
     assert traces["count"] == 0
+
+
+def test_dashboard_task_and_run_controls_delegate_to_product_cli(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    calls: list[tuple[Path, list[str]]] = []
+
+    def command(
+        _handler: object,
+        repository: Path,
+        arguments: list[str],
+        *,
+        timeout: int = 120,
+    ) -> dict[str, object]:
+        calls.append((repository, arguments))
+        return {"status": "queued", "task_id": "kc-432", "timeout": timeout}
+
+    monkeypatch.setattr(ControlPlaneHandler, "agent_command", command)
+    queue = TaskQueue(tmp_path / "queue.db")
+    token = "dashboard-test-token"
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        handler_factory(
+            queue=queue,
+            runs_dir=tmp_path / "runs",
+            auth_token=token,
+            webhook_secret="",
+            default_repository=tmp_path,
+        ),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        launched = api_request(
+            f"{base}/ui/tasks",
+            token,
+            method="POST",
+            body={"repository": str(tmp_path), "goal": "Implement KC-432", "mode": "new_branch"},
+        )
+        aborted = api_request(
+            f"{base}/ui/runs/run-432/abort",
+            token,
+            method="POST",
+            body={"repository": str(tmp_path)},
+        )
+        answered = api_request(
+            f"{base}/ui/runs/run-432/answer",
+            token,
+            method="POST",
+            body={"repository": str(tmp_path), "response": "Use the existing allowlist."},
+        )
+        approved = api_request(
+            f"{base}/ui/runs/run-432/approve",
+            token,
+            method="POST",
+            body={"repository": str(tmp_path), "reason": "Reviewed locally."},
+        )
+        retried = api_request(
+            f"{base}/ui/runs/run-432/retry",
+            token,
+            method="POST",
+            body={"repository": str(tmp_path)},
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert launched["task_id"] == "kc-432"
+    assert aborted["status"] == "queued"
+    assert answered["status"] == "queued"
+    assert approved["status"] == "queued"
+    assert retried["status"] == "queued"
+    assert calls == [
+        (tmp_path, ["task", "Implement KC-432"]),
+        (tmp_path, ["abort", "run-432"]),
+        (
+            tmp_path,
+            ["answer", "run-432", "Use the existing allowlist.", "--actor", "dashboard"],
+        ),
+        (
+            tmp_path,
+            [
+                "approve",
+                "--run-id",
+                "run-432",
+                "--actor",
+                "dashboard",
+                "--reason",
+                "Reviewed locally.",
+            ],
+        ),
+        (tmp_path, ["retry", "run-432"]),
+    ]

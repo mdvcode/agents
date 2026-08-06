@@ -1,0 +1,9 @@
+version: 1
+project:
+  id: agents
+  profile: agent_workspace
+  repository: .
+  base_branch: main
+  branch_prefix: feat/
+runtime:
+  provider: codex-cli

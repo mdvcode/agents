@@ -438,9 +438,21 @@ class TaskQueue:
             lease_recoveries = self.reclaim_expired(connection, now)
             row = connection.execute(
                 """
-                SELECT * FROM tasks
-                WHERE status IN ('queued','retry_wait','repairing','resuming') AND available_at <= ?
-                ORDER BY priority DESC, id ASC LIMIT 1
+                SELECT candidate.* FROM tasks AS candidate
+                WHERE candidate.status IN ('queued','retry_wait','repairing','resuming')
+                  AND candidate.available_at <= ?
+                  AND (
+                    COALESCE(json_extract(candidate.payload_json, '$.workspace_mode'), 'isolated') != 'current_branch'
+                    OR NOT EXISTS (
+                      SELECT 1 FROM tasks AS predecessor
+                      WHERE predecessor.id < candidate.id
+                        AND predecessor.status NOT IN ('completed','cancelled')
+                        AND COALESCE(json_extract(predecessor.payload_json, '$.workspace_mode'), 'isolated') = 'current_branch'
+                        AND json_extract(predecessor.payload_json, '$.repository') =
+                            json_extract(candidate.payload_json, '$.repository')
+                    )
+                  )
+                ORDER BY candidate.priority DESC, candidate.id ASC LIMIT 1
                 """,
                 (now,),
             ).fetchone()

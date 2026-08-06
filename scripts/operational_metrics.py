@@ -125,6 +125,16 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
     if isinstance(metrics.get("duration_ms"), (int, float)):
         elapsed_seconds = float(metrics["duration_ms"]) / 1000
     publication = read_json(run_dir / "artifacts" / "publication.json") or read_json(run_dir / "publication.json")
+    raw_attention = workflow.get("attention")
+    attention = {"required": False, "summary": "", "details": [], "action": ""}
+    if isinstance(raw_attention, dict) and raw_attention.get("required") is True:
+        details = raw_attention.get("details", [])
+        attention = {
+            "required": True,
+            "summary": str(raw_attention.get("summary", "Attention required"))[:1000],
+            "details": [str(item)[:1000] for item in details[:10]] if isinstance(details, list) else [],
+            "action": str(raw_attention.get("action", "")),
+        }
     runtime_spans = [span for span in spans if span.get("name") == "ai_harness.runtime.execute"]
     runtime_timeouts = sum(span.get("name") == "ai_harness.runtime.timeout" for span in spans)
     runtime_failures = sum(span.get("status") == "error" for span in runtime_spans)
@@ -140,7 +150,11 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
         "run_id": run_dir.name,
         "task_id": str(workflow.get("task_id", "")),
         "project": str(workflow.get("project", "")),
+        "repository": str(workflow.get("repository", "")),
+        "branch": str(workflow.get("branch", "")),
+        "current_role": str(workflow.get("current_role", "")),
         "status": str(workflow.get("execution_status", "unknown")),
+        "attention": attention,
         "risk_class": str(workflow.get("risk_class", "")),
         "role_count": int(workflow.get("role_count", 0) or 0),
         "tokens_used": int(workflow.get("tokens_used", metrics.get("tokens_used", 0)) or 0),

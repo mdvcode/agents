@@ -15,7 +15,8 @@
     "base_branch_sha_after"
   ],
   "enums": {
-    "execution_status": ["planned", "created", "running", "role_pending", "role_running", "role_output_received", "role_validating", "role_completed", "retry_wait", "repairing", "resuming", "awaiting_approval", "completed", "blocked", "dead_letter", "failed", "cancelled"]
+    "execution_status": ["planned", "created", "running", "role_pending", "role_running", "role_output_received", "role_validating", "role_completed", "retry_wait", "repairing", "resuming", "awaiting_approval", "completed", "blocked", "dead_letter", "failed", "cancelled"],
+    "workspace_mode": ["isolated", "current_branch"]
   },
   "types": {
     "run_id": "str",
@@ -31,6 +32,7 @@
     "input_fingerprint": "str",
     "base_branch_sha_before": "str",
     "base_branch_sha_after": "str",
+    "workspace_mode": "str",
     "resume_count": "int",
     "resume_role": "str",
     "resumed_at": "str",

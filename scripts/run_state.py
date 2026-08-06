@@ -206,13 +206,22 @@ def write_metrics(layout: RunLayout, state: dict[str, Any]) -> None:
     )
 
 
-def task_fingerprint(*, task_id: str, goal: str, repository: Path, branch: str, base_branch: str) -> str:
+def task_fingerprint(
+    *,
+    task_id: str,
+    goal: str,
+    repository: Path,
+    branch: str,
+    base_branch: str,
+    workspace_mode: str = "isolated",
+) -> str:
     payload = {
         "task_id": task_id,
         "goal": goal,
         "repository": str(repository.resolve()),
         "branch": branch,
         "base_branch": base_branch,
+        "workspace_mode": workspace_mode,
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")

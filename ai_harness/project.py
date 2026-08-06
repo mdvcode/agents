@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,8 +15,7 @@ import yaml
 
 CONFIG_RELATIVE_PATH = Path(".agent/project.yaml")
 SUPPORTED_PROFILES = {"agent_workspace", "django", "nextjs_web"}
-ALLOWED_BRANCH_PREFIXES = {"feat/", "fix/", "issue/", "tast/"}
-BRANCH_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+FORBIDDEN_BRANCH_CHARACTERS = frozenset(" ~^:?*[\\")
 
 
 class ProjectConfigError(ValueError):
@@ -55,12 +55,38 @@ def slug(value: str, fallback: str = "project") -> str:
 
 
 def safe_branch(value: str) -> bool:
-    return bool(
-        BRANCH_PATTERN.fullmatch(value)
-        and ".." not in value
-        and "@{" not in value
-        and not value.endswith(("/", "."))
+    """Return whether ``value`` follows Git's branch ref format rules.
+
+    Git permits useful branch characters outside ASCII letters and punctuation,
+    including Unicode, ``+``, ``=``, ``&``, and ``,``.  Keep the validation
+    focused on ref ambiguity and filesystem-unsafe forms instead of maintaining
+    a narrower product-specific allowlist.
+    """
+
+    if not value or value == "@" or value.startswith("-"):
+        return False
+    if ".." in value or "@{" in value or "//" in value or value.endswith(("/", ".")):
+        return False
+    if any(
+        ord(character) < 32
+        or ord(character) == 127
+        or character in FORBIDDEN_BRANCH_CHARACTERS
+        for character in value
+    ):
+        return False
+    components = value.split("/")
+    return all(
+        component
+        and not component.startswith(".")
+        and not component.endswith((".", ".lock"))
+        for component in components
     )
+
+
+def safe_branch_prefix(value: str) -> bool:
+    """Return whether a configurable prefix can form a safe task branch."""
+
+    return bool(value and len(value) <= 128 and safe_branch(f"{value}task"))
 
 
 def detect_profile(repository: Path) -> str:
@@ -71,6 +97,40 @@ def detect_profile(repository: Path) -> str:
     if (repository / ".agent-policy.yaml").is_file() and (repository / ".agents").is_dir():
         return "agent_workspace"
     return "agent_workspace"
+
+
+def git_output(repository: Path, arguments: list[str]) -> str:
+    """Return one successful git result without leaking diagnostics to the CLI."""
+
+    try:
+        completed = subprocess.run(
+            ["git", *arguments],
+            cwd=repository,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return completed.stdout.strip() if completed.returncode == 0 else ""
+
+
+def detect_base_branch(repository: Path) -> str:
+    """Choose the repository's existing default branch, with a safe fallback."""
+
+    remote_head = git_output(repository, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
+    if remote_head.startswith("origin/"):
+        candidate = remote_head.removeprefix("origin/")
+        if safe_branch(candidate):
+            return candidate
+    for candidate in ("main", "master", "trunk"):
+        if git_output(repository, ["show-ref", "--verify", f"refs/remotes/origin/{candidate}"]):
+            return candidate
+        if git_output(repository, ["show-ref", "--verify", f"refs/heads/{candidate}"]):
+            return candidate
+    current = git_output(repository, ["symbolic-ref", "--quiet", "--short", "HEAD"])
+    return current if safe_branch(current) else "main"
 
 
 def discover_repository(start: Path, explicit: bool = False) -> Path:
@@ -90,15 +150,16 @@ def default_config(
     *,
     project_id: str = "",
     profile: str = "auto",
-    base_branch: str = "main",
-    branch_prefix: str = "tast/",
+    base_branch: str = "auto",
+    branch_prefix: str = "feat/",
 ) -> ProjectConfig:
     selected_profile = detect_profile(repository) if profile == "auto" else profile
+    selected_base_branch = detect_base_branch(repository) if base_branch == "auto" else base_branch.strip()
     return ProjectConfig(
         repository=repository.resolve(),
         project_id=slug(project_id or repository.name),
         profile=selected_profile,
-        base_branch=base_branch.strip(),
+        base_branch=selected_base_branch,
         branch_prefix=branch_prefix.strip(),
         runtime_provider="codex-cli",
     )
@@ -112,8 +173,8 @@ def validate_config(config: ProjectConfig) -> list[str]:
         errors.append(f"project.profile must be one of {sorted(SUPPORTED_PROFILES)}")
     if not safe_branch(config.base_branch):
         errors.append("project.base_branch must be a safe git branch name")
-    if config.branch_prefix not in ALLOWED_BRANCH_PREFIXES:
-        errors.append(f"project.branch_prefix must be one of {sorted(ALLOWED_BRANCH_PREFIXES)}")
+    if not safe_branch_prefix(config.branch_prefix):
+        errors.append("project.branch_prefix must form a safe Git branch name")
     if config.runtime_provider != "codex-cli":
         errors.append("runtime.provider must be codex-cli in Step 2")
     return errors

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,10 +16,32 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ai_harness.project import ProjectConfigError, load_project_config, project_is_trusted
+from ai_harness.project import (
+    ProjectConfigError,
+    load_project_config,
+    project_is_trusted,
+    safe_branch_prefix,
+)
 
 
 REGISTRY = ROOT / ".agent-repositories.yaml"
+FORBIDDEN_PUBLIC_BRANCH_TOKENS = {"agent", "agents", "ai", "automation", "codex"}
+
+
+def safe_public_branch_prefix(value: str) -> bool:
+    """Accept configurable Git-safe prefixes without exposing internal tooling names."""
+
+    tokens = {token for token in re.split(r"[._/-]+", value.lower()) if token}
+    return safe_branch_prefix(value) and not tokens.intersection(FORBIDDEN_PUBLIC_BRANCH_TOKENS)
+
+
+def validate_branch_prefixes(value: Any, label: str) -> list[str]:
+    if not isinstance(value, list) or not value:
+        return [f"{label} must be a non-empty list"]
+    if len(value) != len(set(item for item in value if isinstance(item, str))):
+        return [f"{label} must not contain duplicates"]
+    invalid = [item for item in value if not isinstance(item, str) or not safe_public_branch_prefix(item)]
+    return [f"{label} contains an unsafe prefix: {item!r}" for item in invalid]
 
 
 @dataclass(frozen=True)
@@ -98,7 +121,6 @@ def validate_registry_data(data: Any, label: str = ".agent-repositories.yaml") -
     repositories = data.get("repositories")
     if not isinstance(repositories, dict):
         return errors + [f"{label}: repositories must be an object"]
-    expected_prefixes = ["feat/", "fix/", "issue/", "tast/"]
     for repository_id, raw in repositories.items():
         if not isinstance(raw, dict):
             errors.append(f"{label}: repositories.{repository_id} must be an object")
@@ -110,10 +132,12 @@ def validate_registry_data(data: Any, label: str = ".agent-repositories.yaml") -
             errors.append(f"{label}: repositories.{repository_id}.expected_remotes must be a non-empty list")
         if not isinstance(raw.get("base_branch"), str) or not raw.get("base_branch"):
             errors.append(f"{label}: repositories.{repository_id}.base_branch must be a non-empty string")
-        if raw.get("allowed_branch_prefixes") != expected_prefixes:
-            errors.append(
-                f"{label}: repositories.{repository_id}.allowed_branch_prefixes must be {expected_prefixes!r}"
+        errors.extend(
+            validate_branch_prefixes(
+                raw.get("allowed_branch_prefixes"),
+                f"{label}: repositories.{repository_id}.allowed_branch_prefixes",
             )
+        )
         protected_paths = raw.get("protected_paths")
         if not isinstance(protected_paths, list) or not protected_paths:
             errors.append(f"{label}: repositories.{repository_id}.protected_paths must be a non-empty list")

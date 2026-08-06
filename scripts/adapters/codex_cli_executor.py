@@ -377,6 +377,27 @@ def context_reference_contents(manifest: dict[str, Any]) -> str:
     return "\n\n".join(chunks)
 
 
+def human_input_contents(request: dict[str, Any]) -> str:
+    """Return bounded user answers recorded for this authoritative run."""
+
+    path = Path(str(request.get("artifacts_dir", ""))).resolve().parent / "human-input.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "No user answer has been recorded for this run."
+    entries = value.get("entries", []) if isinstance(value, dict) else []
+    if not isinstance(entries, list) or not entries:
+        return "No user answer has been recorded for this run."
+    lines: list[str] = []
+    for entry in entries[-10:]:
+        if not isinstance(entry, dict):
+            continue
+        response = str(entry.get("response", "")).strip()
+        if response:
+            lines.append(f"- {response[:2000]}")
+    return "\n".join(lines)[:10_000] or "No user answer has been recorded for this run."
+
+
 def role_prompt_payload(
     *,
     request: dict[str, Any],
@@ -393,6 +414,16 @@ def role_prompt_payload(
             json.dumps(manifest, indent=2, ensure_ascii=False),
             "Context file contents available to this sandboxed run:",
             context_reference_contents(manifest),
+            "User answers recorded for this run:",
+            human_input_contents(request),
+            "Human-interaction policy:",
+            (
+                "Continue autonomously when a safe in-scope choice can be inferred. If essential information, "
+                "a user decision, access, or external state is genuinely required, do not invent it and do not "
+                "perform empty retries. Return status=awaiting_approval, next_action=awaiting_approval, put one "
+                "concise question or required action in summary, and put every concrete missing item in blockers. "
+                "Never return blocked or awaiting_approval with an empty blockers list."
+            ),
             "Required JSON response schema:",
             json.dumps(standard_role_result_schema(output_contract), indent=2, ensure_ascii=False),
             (
@@ -420,6 +451,13 @@ def parse_role_result(stdout: str, output_contract: dict[str, Any], duration_ms:
         if isinstance(warnings, list):
             warnings.append(f"Ignored non-contract next_action: {next_action}")
         result["next_action"] = "continue" if result.get("status") == "completed" else "blocked"
+    if result.get("status") in {"blocked", "failed", "awaiting_approval"}:
+        blockers = result.get("blockers")
+        if not isinstance(blockers, list) or not any(str(item).strip() for item in blockers):
+            summary = str(result.get("summary", "The role requires attention.")).strip()
+            result["blockers"] = [summary or "The role requires attention."]
+        if result.get("status") == "awaiting_approval":
+            result["next_action"] = "awaiting_approval"
     errors = validate_contract(result, output_contract, "role_result")
     if errors:
         return blocked_result("Codex CLI result failed schema validation.", errors)

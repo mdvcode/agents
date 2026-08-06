@@ -47,6 +47,12 @@ projects:
         - "fix/"
         - "issue/"
         - "tast/"
+        - "chore/"
+        - "docs/"
+        - "refactor/"
+        - "test/"
+        - "release/"
+        - "perf/"
       low:
         commit: true
         push: true

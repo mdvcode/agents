@@ -292,6 +292,29 @@ def test_quality_failure_starts_bounded_repair(tmp_path: Path) -> None:
     assert result["loop"]["progress_detected"] is True
 
 
+def test_role_question_stops_before_quality_repair_loop(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    artifact(artifacts_dir / "quality.json", {"overall_status": "fail", "failed_command": "make check"})
+    state = completed_state(diff_hash="diff-1")
+
+    result = route(
+        tmp_path,
+        state,
+        "quality-runner",
+        {
+            "status": "awaiting_approval",
+            "next_action": "awaiting_approval",
+            "summary": "Which database service should run the integration checks?",
+            "blockers": ["Choose the local or staging database."],
+        },
+    )
+
+    assert result["next_role"] == "approval-gate"
+    assert result["stop"] is True
+    assert result["reason"] == "Which database service should run the integration checks?"
+    assert state["loops"]["quality_repair"]["iterations"] == 0  # type: ignore[index]
+
+
 def test_review_blocker_starts_review_repair(tmp_path: Path) -> None:
     artifacts_dir = setup_artifacts(tmp_path)
     artifact(

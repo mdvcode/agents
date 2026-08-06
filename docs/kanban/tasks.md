@@ -14,6 +14,10 @@
 - Milestone PR1 production runtime: every locally verifiable requirement, all 20 chaos scenarios, runtime preflight, and real Codex smoke are complete; only the user-excluded real 30-task multi-hour soak remains the production-readiness gate.
 
 ## Done
+- Ordinary-user distribution: one downloaded-folder installer, product-level safe update command, worker refresh, and a root quick start now replace pipx-first operating instructions.
+- Explicit task attention: background questions and prerequisites now surface through status/watch, informational answers resume the same checkpoint, approval authority remains separate, and authoritative pause states suppress empty step retries.
+- Harness startup recovery: packaged dependency drift now produces actionable diagnostics instead of tracebacks; explicit start/stop lifecycle, base-branch readiness, safe re-initialization, and an operator runbook are verified.
+- Current-branch task mode: safe queued execution in the clean already checked-out branch without creating a task worktree, with stable-branch validation, recovery identity, and per-checkout serialization.
 - Milestone R1 completion hardening: publication crash reconciliation, atomic approval replay, owned-artifact repair, fail-open workflow telemetry, structured control failures, recovery-rich CLI status, and direct regression coverage.
 - Milestone R1 — Unified Task Recovery Layer: deterministic failure policy, bounded retry/repair/resume, queue recovery states, worker/service isolation, checkpoints, idempotency, CLI/observability, and failure-injection coverage.
 - Qdrant Content Manager bonuses: thin service-layer routing, a reproducible five-service Docker Compose stack, isolated Qdrant tests, live smoke verification, and three local commits; no publication.

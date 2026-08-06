@@ -192,9 +192,10 @@ class WorkerService:
         return result_code
 
     def write_service_error(self, exception: Exception) -> None:
+        service_log = self.state_path.parent / "worker-service.log"
         try:
-            SERVICE_LOG.parent.mkdir(parents=True, exist_ok=True)
-            with SERVICE_LOG.open("a", encoding="utf-8") as handle:
+            service_log.parent.mkdir(parents=True, exist_ok=True)
+            with service_log.open("a", encoding="utf-8") as handle:
                 handle.write(
                     json.dumps(
                         {
@@ -254,7 +255,7 @@ def parse_args() -> argparse.Namespace:
 def start_background(args: argparse.Namespace) -> int:
     state = read_state()
     if process_alive(int(state.get("pid", 0) or 0)):
-        print(json.dumps({"status": "already_running", **state}, indent=2))
+        print(json.dumps({**state, "status": "already_running"}, indent=2))
         return 0
     service_id = args.service_id or f"worker-service-{uuid.uuid4().hex[:8]}"
     command = [

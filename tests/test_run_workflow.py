@@ -114,6 +114,59 @@ workflows:
     assert calls == [17]
 
 
+def test_workflow_runner_does_not_retry_after_authoritative_attention_pause(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    workflows_path = tmp_path / ".agent-workflows.yaml"
+    workflows_path.write_text(
+        """
+version: 1
+workflows:
+  sample:
+    max_iterations: 1
+    retry:
+      max_retries: 3
+      backoff_seconds: 0
+    steps:
+      - name: "planner"
+        command: "role-command"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    runs = tmp_path / ".agent-runs"
+    monkeypatch.setattr(run_workflow, "WORKFLOWS", workflows_path)
+    monkeypatch.setattr(run_workflow, "RUNS_DIR", runs)
+    calls = 0
+
+    def pause_for_question(_command: str, _cwd: Path, _timeout: int) -> tuple[int, str, str]:
+        nonlocal calls
+        calls += 1
+        workflow_path = runs / "run-question" / "workflow.json"
+        state = json.loads(workflow_path.read_text(encoding="utf-8"))
+        state.update(
+            {
+                "execution_status": "awaiting_approval",
+                "recovery_action": "approval",
+                "blockers": ["Which region should be used?"],
+            }
+        )
+        workflow_path.write_text(json.dumps(state), encoding="utf-8")
+        return 10, "", "input required"
+
+    monkeypatch.setattr(run_workflow, "run_command", pause_for_question)
+
+    result = run_workflow.run_workflow(
+        "sample",
+        root=tmp_path,
+        run_id="run-question",
+        task_id="question-task",
+    )
+
+    assert result == run_workflow.EXIT_AWAITING_APPROVAL
+    assert calls == 1
+
+
 def test_timeout_creates_failure_record_and_returns_retryable_exit(tmp_path: Path, monkeypatch: object) -> None:
     workflows_path = tmp_path / ".agent-workflows.yaml"
     workflows_path.write_text(
@@ -226,6 +279,37 @@ workflows:
     assert result == 0
     assert len(commands) == 1
     assert shlex.split(commands[0])[-2:] == ["--goal", goal]
+
+
+def test_workflow_runner_passes_current_branch_mode_to_agent_role_runner(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    workflows_path = tmp_path / ".agent-workflows.yaml"
+    workflows_path.write_text(
+        """
+version: 1
+workflows:
+  sample:
+    steps:
+      - name: "roles"
+        command: "python3 scripts/agent_role_runner.py --workflow sample"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run_workflow, "WORKFLOWS", workflows_path)
+    monkeypatch.setattr(run_workflow, "RUNS_DIR", tmp_path / ".agent-runs")
+    commands: list[str] = []
+    monkeypatch.setattr(
+        run_workflow,
+        "run_command",
+        lambda command, _cwd, _timeout: (commands.append(command) or 0, "ok", ""),
+    )
+
+    result = run_workflow.run_workflow("sample", root=tmp_path, current_branch=True)
+
+    assert result == 0
+    assert shlex.split(commands[0])[-1] == "--current-branch"
 
 
 def test_workflow_runner_cli_accepts_goal(monkeypatch: object) -> None:

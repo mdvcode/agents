@@ -110,7 +110,7 @@ def test_step2_runtime_config_allows_only_local_codex_cli_without_router() -> No
 
 
 def policy_payload(branch_prefixes: list[str] | None = None) -> dict[str, Any]:
-    allowed = branch_prefixes or ["feat/", "fix/", "issue/", "tast/"]
+    allowed = branch_prefixes if branch_prefixes is not None else ["feat/", "fix/", "issue/", "tast/"]
     publication = {
         "allowed_branch_prefixes": allowed,
         "low": {"commit": True, "push": True, "open_pr": True, "update_pr": True},
@@ -182,8 +182,9 @@ def test_valid_high_risk_invariants_pass() -> None:
     assert validator.validate_risk_invariants(risk_payload("high")) == []
 
 
-def test_policy_requires_requested_branch_prefixes() -> None:
+def test_policy_accepts_configured_safe_branch_prefixes() -> None:
     assert validator.validate_policy_data(policy_payload()) == []
+    assert validator.validate_policy_data(policy_payload(["chore/", "release/2026/", "team/mobile/"])) == []
 
 
 def test_policy_rejects_old_codex_branch_prefix() -> None:
@@ -192,7 +193,7 @@ def test_policy_rejects_old_codex_branch_prefix() -> None:
     assert any("allowed_branch_prefixes" in error for error in errors)
 
 
-def test_repository_registry_requires_trusted_branch_prefixes() -> None:
+def test_repository_registry_requires_safe_configured_branch_prefixes() -> None:
     registry = {
         "version": 1,
         "repositories": {
@@ -207,7 +208,17 @@ def test_repository_registry_requires_trusted_branch_prefixes() -> None:
     }
     assert validator.validate_registry_data(registry) == []
     registry["repositories"]["nextjs_web"]["allowed_branch_prefixes"] = ["feat/", "fix/", "issue/", "legacy/"]
-    assert any("allowed_branch_prefixes" in error for error in validator.validate_registry_data(registry))
+    assert validator.validate_registry_data(registry) == []
+    registry["repositories"]["nextjs_web"]["allowed_branch_prefixes"] = ["feat/", "bad prefix/"]
+    assert any("unsafe prefix" in error for error in validator.validate_registry_data(registry))
+
+
+def test_policy_requires_nonempty_unique_branch_prefixes() -> None:
+    assert any("non-empty list" in error for error in validator.validate_policy_data(policy_payload([])))
+    assert any(
+        "duplicates" in error
+        for error in validator.validate_policy_data(policy_payload(["feat/", "feat/"]))
+    )
 
 
 def test_empty_central_repository_registry_is_safe_by_default() -> None:

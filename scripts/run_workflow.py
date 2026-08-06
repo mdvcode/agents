@@ -61,6 +61,15 @@ RECOVERY_EXIT_CODES = {
     "dead_letter": EXIT_DEAD_LETTER,
     "fail": EXIT_UNRECOVERABLE_FAILURE,
 }
+AUTHORITATIVE_PAUSE_STATUSES = {
+    "awaiting_approval",
+    "blocked",
+    "retry_wait",
+    "repairing",
+    "resuming",
+    "dead_letter",
+    "failed",
+}
 
 
 @dataclass
@@ -167,6 +176,12 @@ def write_workflow_state(path: Path, state: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def workflow_pause_scheduled(path: Path) -> bool:
+    """Return whether the authoritative child workflow already selected its next action."""
+
+    return str(read_workflow_state(path).get("execution_status", "")) in AUTHORITATIVE_PAUSE_STATUSES
+
+
 def recovery_attempt(state: dict[str, Any], kind: str) -> int:
     recovery = state.get("recovery", {})
     by_kind = recovery.get("attempts_by_kind", {}) if isinstance(recovery, dict) else {}
@@ -256,6 +271,7 @@ def run_workflow(
     repository: Path | None = None,
     branch: str = "",
     base_branch: str = "main",
+    current_branch: bool = False,
     adapter_command: str = "",
     resume: bool = False,
     runtime_provider: str = "",
@@ -276,6 +292,7 @@ def run_workflow(
         repository=repository_value,
         branch=branch_value,
         base_branch=base_branch,
+        workspace_mode="current_branch" if current_branch else "isolated",
     )
     existing = find_completed_run(RUNS_DIR, fingerprint, exclude_run_id="") if not resume else None
     if existing is not None:
@@ -475,6 +492,12 @@ def run_workflow(
                 command = command + " --dry-run"
             if resume and command.startswith("python3 scripts/agent_role_runner.py") and "--resume" not in command:
                 command = command + " --resume"
+            if (
+                current_branch
+                and command.startswith("python3 scripts/agent_role_runner.py")
+                and "--current-branch" not in command
+            ):
+                command = command + " --current-branch"
             for attempt in range(1, max_retries + 2):
                 if attempt > 1:
                     total_retries += 1
@@ -521,6 +544,8 @@ def run_workflow(
                     ),
                 )
                 if returncode == 0:
+                    break
+                if workflow_pause_scheduled(workflow_state_path):
                     break
                 if attempt <= max_retries:
                     time.sleep(backoff_seconds)
@@ -637,6 +662,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo", type=Path, default=None)
     parser.add_argument("--branch", default="")
     parser.add_argument("--base-branch", default="main")
+    parser.add_argument("--current-branch", action="store_true")
     parser.add_argument("--adapter-command", default="")
     parser.add_argument("--runtime-provider", default="")
     parser.add_argument("--runtime-command", default="")
@@ -658,6 +684,7 @@ def main() -> int:
             repository=args.repo,
             branch=args.branch,
             base_branch=args.base_branch,
+            current_branch=args.current_branch,
             adapter_command=args.adapter_command,
             resume=args.resume,
             runtime_provider=args.runtime_provider,
