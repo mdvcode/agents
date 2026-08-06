@@ -25,6 +25,8 @@ agent doctor --full
 
 `agent update` uses the installed package source. A clean Git checkout is updated with a fast-forward-only pull; a ZIP/folder installation moves to the official repository source; a remote package installation is upgraded in place. It then verifies the new `agent` command and restarts the background worker. A dirty source checkout is never overwritten. To install a separately downloaded build explicitly, use `agent update --source /path/to/new-folder`.
 
+An installation old enough not to recognize `agent update` must be bootstrapped once with the current `install.sh`, either from a fresh download or through the remote installer above. Refresh the shell command cache with `hash -r`; future updates then use `agent update`.
+
 Contributors may still use `pip install -e .` or direct pipx commands, but users do not need to manage those environments themselves.
 
 The installation bundles the policy, workflow, schemas, prompts, scripts, and sole Step 2 Codex CLI runtime under an isolated environment. `AI_HARNESS_HOME` may point at a source checkout when developing or diagnosing a custom installation.
@@ -69,7 +71,7 @@ agent watch --task-id fix-login
 
 `agent task` is the ordinary start command: it validates the request, starts the persistent worker service when necessary, prepares the task workspace, and idempotently enqueues the normalized Task envelope. Repeating the same explicit `--task-id` returns the existing queue item.
 
-By default, the command creates or selects a dedicated task branch in the current checkout from the configured base branch. It does not create a worktree. The checkout must be clean; commit the files created by `agent init` and any other intended changes, or stash them, before starting the first task. Only one unfinished current-checkout task may own a repository at a time. This prevents concurrent workers from switching the same directory between branches.
+By default, the command creates or selects a dedicated task branch in the current checkout from the configured base branch. It does not create a worktree. The checkout must be clean. Setup files intentionally ignored by Git may stay local and must not be force-added; otherwise commit or intentionally ignore new setup files and commit or stash other intended changes before starting the first task. Only one unfinished current-checkout task may own a repository at a time. This prevents concurrent workers from switching the same directory between branches.
 
 Generated branches use the prefix selected during initialization and never use the default branch. The prefix is not restricted to a fixed list: any safe Git prefix is accepted, including `feat/`, `fix/`, `chore/`, `release/2026/`, or `team/mobile/`:
 

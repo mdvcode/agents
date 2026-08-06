@@ -86,6 +86,33 @@ def test_agent_init_creates_local_config_and_preserves_existing_agents_file(
     assert repeated["created"] == {"project_config": False, "agents_md": False}
 
 
+def test_agent_init_accepts_gitignored_local_setup_without_force_add_guidance(
+    tmp_path: Path,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    (repository / ".gitignore").write_text(".agent/\nAGENTS.md\n", encoding="utf-8")
+    subprocess.run(["git", "add", ".gitignore"], cwd=repository, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "ignore local agent setup"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert cli.main(["init", "--repo", str(repository), "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["git"]["ignored_setup_files"] == [".agent/project.yaml", "AGENTS.md"]
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    output = capsys.readouterr().out
+    assert "ignored by Git" in output
+    assert "no git add -f is needed" in output
+
+
 def test_agent_init_retrusts_existing_nondefault_config_without_replacing_it(
     tmp_path: Path,
     capsys: object,

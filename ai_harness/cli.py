@@ -122,6 +122,23 @@ def load_harness_module(root: Path, name: str) -> Any:
         ) from exc
 
 
+def ignored_setup_files(repository: Path) -> list[str]:
+    candidates = [str(CONFIG_RELATIVE_PATH), "AGENTS.md"]
+    try:
+        completed = subprocess.run(
+            ["git", "check-ignore", "--", *candidates],
+            cwd=repository,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    ignored = {line.strip() for line in completed.stdout.splitlines() if line.strip()}
+    return [path for path in candidates if path in ignored]
+
+
 def handle_init(args: argparse.Namespace) -> int:
     repository = repository_from_arg(args.repo, require_initialized=False)
     existing_config = (
@@ -158,6 +175,7 @@ def handle_init(args: argparse.Namespace) -> int:
     if args.replace_agents or not agents_path.exists():
         agents_path.write_text(AGENTS_TEMPLATE, encoding="utf-8")
         agents_created = True
+    ignored = ignored_setup_files(repository)
     payload = {
         "status": "initialized",
         "repository": str(repository),
@@ -171,7 +189,19 @@ def handle_init(args: argparse.Namespace) -> int:
             "project_config": config_created,
             "agents_md": agents_created,
         },
+        "git": {
+            "ignored_setup_files": ignored,
+        },
     }
+    git_guidance = (
+        (
+            "  local setup: "
+            + ", ".join(ignored)
+            + " are ignored by Git; this is valid and no git add -f is needed"
+        )
+        if ignored
+        else "  Git note: commit or intentionally ignore new setup files before the first task"
+    )
     emit(
         payload,
         as_json=args.json,
@@ -180,6 +210,7 @@ def handle_init(args: argparse.Namespace) -> int:
             f"  config: {config.path}",
             f"  base branch: {config.base_branch}",
             f"  instructions: {agents_path}{' (kept existing)' if not agents_created else ''}",
+            git_guidance,
             "Next: agent doctor --full",
         ),
     )

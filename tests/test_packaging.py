@@ -101,6 +101,8 @@ def test_install_script_installs_download_and_prints_ordinary_next_steps(tmp_pat
     assert f"install --force --python {python} {source}" in log.read_text(encoding="utf-8")
     assert "Installed: agent 0.1.0" in completed.stdout
     assert "agent init" in completed.stdout
-    assert "git add .agent/project.yaml AGENTS.md" in completed.stdout
+    assert "agent doctor --full" in completed.stdout
+    assert "leave them local; do not force-add them" in completed.stdout
+    assert "git add -f" not in completed.stdout
     assert 'agent task "Describe what to do"' in completed.stdout
     assert "Update later with: agent update" in completed.stdout
