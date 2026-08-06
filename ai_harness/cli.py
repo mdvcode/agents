@@ -7,6 +7,7 @@ import hashlib
 import importlib
 import json
 import os
+import secrets
 import shlex
 import shutil
 import sqlite3
@@ -14,6 +15,8 @@ import subprocess
 import sys
 import time
 import tomllib
+import urllib.parse
+import webbrowser
 from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -1322,6 +1325,53 @@ def handle_stop(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_dashboard(args: argparse.Namespace) -> int:
+    repository = repository_from_arg(args.repo, require_initialized=True)
+    config = load_project_config(repository)
+    if not project_is_trusted(config):
+        raise CLIError("project configuration is not locally trusted; run `agent init` again")
+    root = harness_home()
+    control_plane = load_harness_module(root, "control_plane_api")
+    token = secrets.token_urlsafe(24)
+
+    def ready(port: int) -> None:
+        fragment = urllib.parse.urlencode({"token": token, "repo": str(repository)})
+        url = f"http://127.0.0.1:{port}/dashboard#{fragment}"
+        print(f"Dashboard ready: {url.split('#', 1)[0]}", flush=True)
+        print("Press Ctrl+C in this Terminal window to stop it.", flush=True)
+        if not args.no_open:
+            webbrowser.open(url)
+
+    try:
+        control_plane.serve_control_plane(
+            host="127.0.0.1",
+            port=args.port,
+            db_path=root / ".agent-queue" / "tasks.db",
+            runs_dir=root / ".agent-runs",
+            auth_token=token,
+            default_repository=repository,
+            on_ready=ready,
+        )
+    except KeyboardInterrupt:
+        print("\nDashboard stopped.")
+    except OSError as exc:
+        raise CLIError(
+            f"dashboard could not start on port {args.port}: {exc}; "
+            "choose another port with `agent dashboard --port 8766`"
+        ) from exc
+    return 0
+
+
+def dashboard_port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("port must be a number from 1 to 65535") from exc
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be a number from 1 to 65535")
+    return port
+
+
 def handle_recovery_command(args: argparse.Namespace) -> int:
     repository = repository_from_arg(args.repo, require_initialized=True)
     root = harness_home()
@@ -1898,6 +1948,15 @@ def build_parser() -> argparse.ArgumentParser:
     stop_parser = subparsers.add_parser("stop", help="stop the autonomous worker service")
     stop_parser.add_argument("--json", action="store_true")
     stop_parser.set_defaults(handler=handle_stop)
+
+    dashboard_parser = subparsers.add_parser(
+        "dashboard",
+        help="open the local task launch and control dashboard",
+    )
+    dashboard_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")
+    dashboard_parser.add_argument("--port", type=dashboard_port, metavar="PORT", default=8765)
+    dashboard_parser.add_argument("--no-open", action="store_true", help="start the server without opening a browser")
+    dashboard_parser.set_defaults(handler=handle_dashboard)
 
     status_parser = subparsers.add_parser("status", help="show compact project queue and run status")
     status_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")

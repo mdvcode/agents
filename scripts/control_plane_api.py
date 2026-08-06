@@ -6,11 +6,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
 
@@ -51,6 +53,7 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
     runs_dir: Path
     auth_token: str
     webhook_secret: str
+    default_repository: Path
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -98,6 +101,46 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             raise APIError(HTTPStatus.BAD_REQUEST, "request body must be an object")
         return raw, value
 
+    def agent_command(
+        self,
+        repository: Path,
+        arguments: list[str],
+        *,
+        timeout: int = 120,
+    ) -> dict[str, Any]:
+        command = [sys.executable, "-m", "ai_harness", *arguments, "--repo", str(repository), "--json"]
+        environment = os.environ.copy()
+        environment["AI_HARNESS_HOME"] = str(ROOT)
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=repository,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=timeout,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise APIError(HTTPStatus.BAD_REQUEST, f"agent command failed: {exc}") from exc
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "agent command failed").strip()[-2000:]
+            raise APIError(HTTPStatus.BAD_REQUEST, detail)
+        try:
+            value = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            raise APIError(HTTPStatus.INTERNAL_SERVER_ERROR, "agent returned an invalid response") from exc
+        if not isinstance(value, dict):
+            raise APIError(HTTPStatus.INTERNAL_SERVER_ERROR, "agent returned an invalid response")
+        return value
+
+    def request_repository(self, payload: dict[str, Any]) -> Path:
+        raw_repository = str(payload.get("repository", "")).strip()
+        repository = Path(raw_repository or self.default_repository).expanduser().resolve()
+        if not repository.is_dir():
+            raise APIError(HTTPStatus.BAD_REQUEST, "project folder does not exist")
+        return repository
+
     def do_GET(self) -> None:
         try:
             path = urlparse(self.path).path
@@ -110,6 +153,11 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.OK, {"status": "ok", "service": metrics["service"]})
             elif path == "/metrics":
                 self.send_json(HTTPStatus.OK, metrics)
+            elif path == "/config":
+                self.send_json(
+                    HTTPStatus.OK,
+                    {"default_repository": str(self.default_repository), "refresh_seconds": 5},
+                )
             elif path == "/runs":
                 self.send_json(HTTPStatus.OK, metrics["runs"])
             elif path == "/workers":
@@ -135,6 +183,25 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             if path != "/webhooks/github/actions":
                 self.authorize()
             raw, payload = self.body()
+            if path == "/ui/tasks":
+                repository = self.request_repository(payload)
+                goal = str(payload.get("goal", "")).strip()
+                if not goal:
+                    raise APIError(HTTPStatus.BAD_REQUEST, "describe the task before starting it")
+                mode = str(payload.get("mode", "new_branch"))
+                if mode not in {"new_branch", "current_branch", "worktree"}:
+                    raise APIError(HTTPStatus.BAD_REQUEST, "unknown workspace mode")
+                arguments = ["task", goal]
+                task_id = str(payload.get("task_id", "")).strip()
+                if task_id:
+                    arguments.extend(["--task-id", task_id])
+                if mode == "current_branch":
+                    arguments.append("--current-branch")
+                elif mode == "worktree":
+                    arguments.append("--worktree")
+                result = self.agent_command(repository, arguments)
+                self.send_json(HTTPStatus.ACCEPTED, result)
+                return
             if path in {"/tasks", "/events"}:
                 source = str(payload.get("source", "api"))
                 repository = Path(str(payload.get("repository", ROOT)))
@@ -161,6 +228,31 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.ACCEPTED, {"feedback": feedback, "queue_task": asdict(record)})
                 return
             parts = [part for part in path.split("/") if part]
+            if len(parts) == 4 and parts[:2] == ["ui", "runs"]:
+                run_id, action = parts[2], parts[3]
+                repository = self.request_repository(payload)
+                if action == "answer":
+                    response = str(payload.get("response", "")).strip()
+                    if not response:
+                        raise APIError(HTTPStatus.BAD_REQUEST, "enter an answer before continuing")
+                    arguments = ["answer", run_id, response, "--actor", "dashboard"]
+                elif action == "approve":
+                    arguments = [
+                        "approve",
+                        "--run-id",
+                        run_id,
+                        "--actor",
+                        "dashboard",
+                        "--reason",
+                        str(payload.get("reason", "Approved in the local dashboard.")),
+                    ]
+                elif action in {"retry", "abort"}:
+                    arguments = [action, run_id]
+                else:
+                    raise APIError(HTTPStatus.NOT_FOUND, "run action not found")
+                result = self.agent_command(repository, arguments)
+                self.send_json(HTTPStatus.ACCEPTED, result)
+                return
             if len(parts) != 3 or parts[0] != "runs":
                 raise APIError(HTTPStatus.NOT_FOUND, "endpoint not found")
             run_dir = run_path(self.runs_dir, parts[1])
@@ -188,7 +280,12 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
 
 
 def handler_factory(
-    *, queue: TaskQueue, runs_dir: Path, auth_token: str, webhook_secret: str
+    *,
+    queue: TaskQueue,
+    runs_dir: Path,
+    auth_token: str,
+    webhook_secret: str,
+    default_repository: Path = ROOT,
 ) -> type[ControlPlaneHandler]:
     class ConfiguredHandler(ControlPlaneHandler):
         pass
@@ -197,7 +294,39 @@ def handler_factory(
     ConfiguredHandler.runs_dir = runs_dir
     ConfiguredHandler.auth_token = auth_token
     ConfiguredHandler.webhook_secret = webhook_secret
+    ConfiguredHandler.default_repository = default_repository.resolve()
     return ConfiguredHandler
+
+
+def serve_control_plane(
+    *,
+    host: str,
+    port: int,
+    db_path: Path,
+    runs_dir: Path,
+    auth_token: str,
+    webhook_secret: str = "",
+    default_repository: Path = ROOT,
+    on_ready: Callable[[int], None] | None = None,
+) -> None:
+    if host not in {"127.0.0.1", "::1", "localhost"}:
+        raise ValueError("control-plane API may only bind to loopback")
+    server = ThreadingHTTPServer(
+        (host, port),
+        handler_factory(
+            queue=TaskQueue(db_path),
+            runs_dir=runs_dir.resolve(),
+            auth_token=auth_token,
+            webhook_secret=webhook_secret,
+            default_repository=default_repository,
+        ),
+    )
+    try:
+        if on_ready is not None:
+            on_ready(server.server_port)
+        server.serve_forever()
+    finally:
+        server.server_close()
 
 
 def parse_args() -> argparse.Namespace:
@@ -212,23 +341,17 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     auth_token = os.environ.get("AGENT_CONTROL_PLANE_TOKEN", "")
-    if args.host not in {"127.0.0.1", "::1", "localhost"}:
-        raise SystemExit("control-plane API may only bind to loopback")
-    server = ThreadingHTTPServer(
-        (args.host, args.port),
-        handler_factory(
-            queue=TaskQueue(args.db),
-            runs_dir=args.runs_dir.resolve(),
+    try:
+        serve_control_plane(
+            host=args.host,
+            port=args.port,
+            db_path=args.db,
+            runs_dir=args.runs_dir,
             auth_token=auth_token,
             webhook_secret=os.environ.get("AGENT_GITHUB_WEBHOOK_SECRET", ""),
-        ),
-    )
-    try:
-        server.serve_forever()
+        )
     except KeyboardInterrupt:
         pass
-    finally:
-        server.server_close()
     return 0
 
 

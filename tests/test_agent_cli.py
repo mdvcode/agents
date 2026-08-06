@@ -113,6 +113,38 @@ def test_agent_init_accepts_gitignored_local_setup_without_force_add_guidance(
     assert "no git add -f is needed" in output
 
 
+def test_agent_dashboard_opens_authenticated_local_control_center(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    capsys.readouterr()
+    opened: list[str] = []
+    served: list[dict[str, object]] = []
+
+    class ControlPlane:
+        @staticmethod
+        def serve_control_plane(**kwargs: object) -> None:
+            served.append(kwargs)
+            kwargs["on_ready"](9876)  # type: ignore[index,operator]
+
+    monkeypatch.setattr(cli, "load_harness_module", lambda _root, _name: ControlPlane)
+    monkeypatch.setattr(cli.webbrowser, "open", lambda url: opened.append(url) or True)
+
+    assert cli.main(["dashboard", "--repo", str(repository), "--port", "9876"]) == 0
+
+    assert served[0]["default_repository"] == repository
+    assert opened[0].startswith("http://127.0.0.1:9876/dashboard#token=")
+    assert "repo=" in opened[0]
+    output = capsys.readouterr().out
+    assert "Dashboard ready: http://127.0.0.1:9876/dashboard" in output
+    assert "token=" not in output
+
+
 def test_agent_init_retrusts_existing_nondefault_config_without_replacing_it(
     tmp_path: Path,
     capsys: object,

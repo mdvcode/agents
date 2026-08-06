@@ -1,75 +1,103 @@
-"""Static loopback dashboard shell; all operational data comes from authenticated APIs."""
+"""Authenticated loopback task-control dashboard shell."""
 
 from __future__ import annotations
 
 
 DASHBOARD_HTML = r'''<!doctype html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI Harness · Observability</title>
+  <title>Agent Control</title>
   <style>
-    :root { color-scheme: dark; --bg:#08111f; --panel:#101d2f; --line:#24364d; --muted:#91a2b8; --text:#eef5ff; --cyan:#59d8ff; --green:#67e8a5; --amber:#ffc56e; --red:#ff7e91; }
-    * { box-sizing:border-box; }
-    body { margin:0; min-height:100vh; color:var(--text); background:radial-gradient(circle at 85% -10%,#17365a 0,transparent 34%),var(--bg); font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
-    main { width:min(1480px,calc(100% - 32px)); margin:0 auto; padding:28px 0 48px; }
-    header { display:flex; justify-content:space-between; align-items:flex-end; gap:24px; margin-bottom:24px; }
-    h1 { margin:4px 0 0; font:700 clamp(28px,4vw,52px)/1.05 system-ui,sans-serif; letter-spacing:-.04em; }
-    h2 { margin:0 0 14px; font:650 16px/1.2 system-ui,sans-serif; }
-    .eyebrow { color:var(--cyan); letter-spacing:.14em; text-transform:uppercase; font-size:11px; }
-    .status { color:var(--muted); text-align:right; }
-    .status strong { color:var(--green); }
-    .toolbar { display:flex; gap:8px; flex-wrap:wrap; margin:0 0 22px; }
-    input,button { border:1px solid var(--line); border-radius:8px; padding:10px 12px; color:var(--text); background:#0b1728; font:inherit; }
-    input { flex:1; min-width:220px; }
-    button { cursor:pointer; background:#15324d; }
-    button:hover { border-color:var(--cyan); }
-    .grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
-    .card,.panel { border:1px solid var(--line); background:linear-gradient(145deg,rgba(19,36,58,.96),rgba(12,24,41,.96)); border-radius:12px; box-shadow:0 18px 50px rgba(0,0,0,.18); }
-    .card { padding:16px; min-height:118px; }
-    .label { color:var(--muted); text-transform:uppercase; letter-spacing:.09em; font-size:10px; }
-    .value { margin-top:10px; font:700 28px/1 system-ui,sans-serif; }
-    .detail { color:var(--muted); margin-top:8px; font-size:11px; }
-    .content { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px; }
-    .panel { padding:18px; min-width:0; }
-    .wide { grid-column:1/-1; }
-    .scroll { overflow:auto; max-height:360px; }
-    table { width:100%; border-collapse:collapse; white-space:nowrap; }
-    th,td { padding:9px 8px; border-bottom:1px solid var(--line); text-align:left; font-size:12px; }
-    th { color:var(--muted); font-weight:500; position:sticky; top:0; background:#101d2f; }
-    .pill { display:inline-block; border:1px solid var(--line); border-radius:99px; padding:2px 7px; }
-    .ok { color:var(--green); }.warn { color:var(--amber); }.bad { color:var(--red); }
-    .empty { color:var(--muted); padding:18px 0; }
-    @media (max-width:1000px) { .grid { grid-template-columns:repeat(2,1fr); }.content { grid-template-columns:1fr; }.wide { grid-column:auto; } }
-    @media (max-width:600px) { main { width:min(100% - 20px,1480px); padding-top:18px; }.grid { grid-template-columns:1fr; } header { align-items:flex-start; flex-direction:column; }.status { text-align:left; } }
+    :root {
+      color-scheme: light;
+      --ink:#17211b; --muted:#66736c; --paper:#f4f1e9; --panel:#fffdf8;
+      --line:#d9d8ce; --green:#1f6b4f; --green-soft:#dceee5; --lime:#dfff73;
+      --amber:#a76318; --amber-soft:#fff0cf; --red:#a63f3a; --red-soft:#fbe3df;
+      --blue:#2f5e87; --shadow:0 22px 70px rgba(32,48,39,.10);
+    }
+    *{box-sizing:border-box} body{margin:0;min-height:100vh;background:var(--paper);color:var(--ink);font:15px/1.5 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    button,input,textarea,select{font:inherit} button{cursor:pointer}
+    .shell{display:grid;grid-template-columns:230px minmax(0,1fr);min-height:100vh}
+    aside{position:sticky;top:0;height:100vh;padding:26px 20px;border-right:1px solid var(--line);background:#ebe9e0;display:flex;flex-direction:column}
+    .brand{display:flex;align-items:center;gap:11px;font-weight:800;font-size:18px;letter-spacing:-.03em}.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:var(--ink);color:var(--lime);font-weight:900}
+    nav{display:grid;gap:6px;margin-top:34px}.nav{border:0;background:transparent;text-align:left;padding:10px 12px;border-radius:10px;color:var(--muted)}.nav.active{background:var(--panel);color:var(--ink);font-weight:700;box-shadow:0 4px 18px rgba(32,48,39,.06)}
+    .aside-foot{margin-top:auto;color:var(--muted);font-size:12px}.health{display:flex;align-items:center;gap:8px;margin-bottom:8px}.dot{width:9px;height:9px;border-radius:50%;background:#96a09a}.dot.live{background:#39a56f;box-shadow:0 0 0 5px rgba(57,165,111,.12)}
+    main{min-width:0;padding:30px clamp(20px,4vw,54px) 60px}.top{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;margin-bottom:26px}.eyebrow{font-size:11px;font-weight:800;letter-spacing:.13em;text-transform:uppercase;color:var(--green)}h1{margin:5px 0 0;font-size:clamp(30px,4vw,48px);line-height:1;letter-spacing:-.055em}h2{font-size:18px;margin:0;letter-spacing:-.025em}.sub{color:var(--muted);margin:9px 0 0}.top-actions{display:flex;align-items:center;gap:8px}
+    .button{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:11px;padding:10px 14px;font-weight:700;transition:.16s ease}.button:hover{transform:translateY(-1px);border-color:#aeb7b1}.button.primary{background:var(--ink);color:white;border-color:var(--ink)}.button.primary:hover{background:var(--green)}.button.danger{color:var(--red)}.button.small{padding:7px 10px;font-size:12px}.button:disabled{opacity:.5;cursor:wait;transform:none}
+    .layout{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(300px,.65fr);gap:18px}.stack{display:grid;gap:18px;align-content:start}.panel{background:var(--panel);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);padding:22px;min-width:0}.panel-head{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:18px}.badge{display:inline-flex;align-items:center;border-radius:99px;padding:4px 9px;background:#efeee8;color:var(--muted);font-size:11px;font-weight:800}
+    label{display:grid;gap:7px;color:var(--muted);font-size:12px;font-weight:700}.field,textarea,select{width:100%;border:1px solid var(--line);border-radius:11px;background:white;color:var(--ink);padding:11px 12px;outline:none}.field:focus,textarea:focus,select:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(31,107,79,.1)}textarea{min-height:168px;resize:vertical;line-height:1.5}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.form-actions{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-top:15px}.hint{font-size:12px;color:var(--muted)}
+    .stats{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.stat{padding:15px;border:1px solid var(--line);border-radius:14px;background:#faf8f2}.stat-value{font-size:27px;font-weight:850;letter-spacing:-.04em}.stat-label{font-size:11px;color:var(--muted);margin-top:3px}
+    .attention-list,.task-list{display:grid;gap:10px}.empty{padding:22px;border:1px dashed var(--line);border-radius:13px;text-align:center;color:var(--muted)}.attention{border:1px solid #e8c782;background:var(--amber-soft);border-radius:14px;padding:15px}.attention-title{font-weight:800}.attention p{margin:6px 0;color:#755026}.attention textarea{min-height:82px;margin:10px 0;background:#fffdf8}.row-actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
+    .task{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;padding:15px 0;border-bottom:1px solid var(--line)}.task:last-child{border-bottom:0}.task-title{font-weight:800;overflow-wrap:anywhere}.task-goal{color:var(--muted);font-size:13px;margin-top:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.task-meta{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px;font-size:11px;color:var(--muted)}.task-side{text-align:right;min-width:118px}.status-pill{display:inline-flex;border-radius:99px;padding:4px 9px;font-size:11px;font-weight:850;background:#efeee8}.s-completed{background:var(--green-soft);color:var(--green)}.s-running,.s-claimed,.s-leased,.s-resuming,.s-repairing{background:#e0ebf5;color:var(--blue)}.s-awaiting_approval,.s-blocked{background:var(--amber-soft);color:var(--amber)}.s-failed,.s-dead_letter{background:var(--red-soft);color:var(--red)}.s-cancelled{color:var(--muted)}
+    .filters{display:flex;gap:7px;flex-wrap:wrap}.filter{border:1px solid var(--line);background:transparent;border-radius:99px;padding:6px 10px;font-size:11px;color:var(--muted)}.filter.active{background:var(--ink);border-color:var(--ink);color:white}
+    details.settings{margin-top:18px;border-top:1px solid var(--line);padding-top:14px;color:var(--muted)}details summary{cursor:pointer;font-weight:700}.settings-grid{display:grid;gap:10px;margin-top:12px}
+    .toast{position:fixed;right:24px;bottom:24px;z-index:20;max-width:min(430px,calc(100vw - 32px));padding:13px 16px;border-radius:12px;background:var(--ink);color:white;box-shadow:var(--shadow);opacity:0;transform:translateY(12px);pointer-events:none;transition:.2s}.toast.show{opacity:1;transform:none}.toast.error{background:var(--red)}
+    @media(max-width:980px){.shell{grid-template-columns:1fr}aside{position:static;height:auto;padding:14px 20px;display:flex;flex-direction:row;align-items:center;gap:20px}.aside-foot{margin-left:auto;margin-top:0}nav{display:none}.layout{grid-template-columns:1fr}.top{margin-top:8px}}
+    @media(max-width:620px){main{padding:22px 14px 44px}.top{display:grid}.top-actions{justify-content:space-between}.panel{padding:17px;border-radius:15px}.form-grid{grid-template-columns:1fr}.form-actions{align-items:stretch;flex-direction:column}.form-actions .button{width:100%}.task{grid-template-columns:1fr}.task-side{text-align:left}.stats{grid-template-columns:repeat(2,1fr)}.aside-foot .health span:last-child{display:none}}
   </style>
 </head>
 <body>
-<main>
-  <header><div><div class="eyebrow">Agent intelligence platform</div><h1>Outer loop, visible.</h1></div><div class="status" id="status">Waiting for metrics</div></header>
-  <div class="toolbar"><input id="token" type="password" autocomplete="off" placeholder="Control-plane bearer token (session only)"><button id="connect">Connect</button><button id="refresh">Refresh</button></div>
-  <section class="grid" id="cards"></section>
-  <section class="content">
-    <article class="panel"><h2>Workers</h2><div class="scroll" id="workers"></div></article>
-    <article class="panel"><h2>Queue</h2><div class="scroll" id="queue"></div></article>
-    <article class="panel wide"><h2>Runs</h2><div class="scroll" id="runs"></div></article>
-    <article class="panel wide"><h2>Recent spans</h2><div class="scroll" id="spans"></div></article>
-  </section>
-</main>
+<div class="shell">
+  <aside>
+    <div class="brand"><span class="mark">A</span><span>Agent Control</span></div>
+    <nav><button class="nav active">Задачи</button><button class="nav" id="jumpAttention">Нужно внимание</button><button class="nav" id="jumpHistory">История</button></nav>
+    <div class="aside-foot"><div class="health"><span class="dot" id="healthDot"></span><span id="healthText">Подключение…</span></div><div id="lastRefresh">Локальная система</div></div>
+  </aside>
+  <main>
+    <header class="top">
+      <div><div class="eyebrow">Рабочий центр</div><h1>Задание — в работу.</h1><p class="sub">Запускайте, наблюдайте и отвечайте системе в одном окне.</p></div>
+      <div class="top-actions"><button class="button" id="refresh">Обновить</button><button class="button primary" id="focusTask">Новая задача</button></div>
+    </header>
+    <div class="layout">
+      <div class="stack">
+        <section class="panel" id="newTaskPanel">
+          <div class="panel-head"><div><h2>Новая задача</h2><div class="hint">Система сама подготовит ветку и запустит worker.</div></div><span class="badge">⌘ Enter</span></div>
+          <form id="taskForm">
+            <label>Что нужно сделать<textarea id="goal" maxlength="20000" placeholder="Опишите результат, ограничения и критерии готовности…" required></textarea></label>
+            <div class="form-grid">
+              <label>Как работать<select id="mode"><option value="new_branch">Новая ветка в этом проекте</option><option value="current_branch">Текущая существующая ветка</option><option value="worktree">Отдельная папка для параллельной задачи</option></select></label>
+              <label>Номер задачи — необязательно<input class="field" id="taskId" placeholder="Например, KC-432"></label>
+            </div>
+            <div class="form-actions"><span class="hint" id="taskHint">Предыдущая остановленная задача будет сохранена и заменена новой.</span><button class="button primary" id="submitTask" type="submit">Запустить задачу</button></div>
+          </form>
+          <details class="settings"><summary>Настройки подключения</summary><div class="settings-grid"><label>Папка проекта<input class="field" id="repository" placeholder="/путь/к/проекту"></label><label>Токен локального сервера<input class="field" id="token" type="password" autocomplete="off"></label></div></details>
+        </section>
+        <section class="panel" id="attentionPanel"><div class="panel-head"><h2>Нужно ваше внимание</h2><span class="badge" id="attentionCount">0</span></div><div class="attention-list" id="attentionList"></div></section>
+        <section class="panel" id="historyPanel"><div class="panel-head"><h2>Задачи</h2><div class="filters" id="filters"><button class="filter active" data-filter="all">Все</button><button class="filter" data-filter="active">В работе</button><button class="filter" data-filter="attention">Ждут ответа</button><button class="filter" data-filter="done">Готово</button></div></div><div class="task-list" id="taskList"></div></section>
+      </div>
+      <div class="stack">
+        <section class="panel"><div class="panel-head"><h2>Сейчас</h2><span class="badge" id="serviceBadge">Проверяем</span></div><div class="stats" id="stats"></div></section>
+        <section class="panel"><div class="panel-head"><h2>Worker</h2><span class="badge" id="workerBadge">—</span></div><div id="workerInfo" class="hint">Нет данных</div></section>
+        <section class="panel"><div class="panel-head"><h2>Как это работает</h2></div><div class="hint">1. Опишите задачу.<br>2. Система создаст или выберет ветку.<br>3. Статус обновляется автоматически.<br>4. Если нужен ответ — он появится здесь.<br>5. Одобрение риска всегда остаётся вашим решением.</div></section>
+      </div>
+    </div>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
 <script>
-const $=id=>document.getElementById(id); const esc=v=>String(v??'—');
-function cell(text,cls=''){const td=document.createElement('td');td.textContent=esc(text);if(cls)td.className=cls;return td}
-function table(target,columns,rows){const host=$(target);host.replaceChildren();if(!rows.length){const d=document.createElement('div');d.className='empty';d.textContent='No evidence yet';host.append(d);return}const t=document.createElement('table'),h=document.createElement('thead'),hr=document.createElement('tr');columns.forEach(c=>{const th=document.createElement('th');th.textContent=c[0];hr.append(th)});h.append(hr);t.append(h);const b=document.createElement('tbody');rows.forEach(row=>{const tr=document.createElement('tr');columns.forEach(c=>tr.append(cell(c[1](row),c[2]?c[2](row):'')));b.append(tr)});t.append(b);host.append(t)}
-function fmt(value,suffix=''){return value===null||value===undefined?'unknown':`${Number(value).toLocaleString(undefined,{maximumFractionDigits:2})}${suffix}`}
-function render(data){const o=data.overview||{},lat=data.latency||{},cost=data.costs||{},cards=[['Queue depth',o.queue_depth,`active ${o.active_tasks||0}`],['Active workers',o.active_workers,`stalled ${o.stalled_workers||0}`],['Run latency p95',fmt(lat.run_seconds?.p95,'s'),`queue p95 ${fmt(lat.queue_wait_seconds?.p95,'s')}`],['Known cost',fmt(cost.known_usd,' USD'),`${cost.unknown_runs||0} runs unknown`],['Retries',data.retries?.total||0,`${data.retries?.tasks_retried||0} tasks`],['Loop iterations',data.loops?.total_iterations||0,`${data.loops?.runs_with_loops||0} runs`],['PR time p95',fmt(lat.pr_time_seconds?.p95,'s'),`${lat.pr_time_seconds?.samples||0} samples`],['Failures',data.failures?.total||0,`${o.human_interventions||0} human interventions`]];const host=$('cards');host.replaceChildren();cards.forEach(x=>{const a=document.createElement('article');a.className='card';for(const [cls,val] of [['label',x[0]],['value',x[1]],['detail',x[2]]]){const d=document.createElement('div');d.className=cls;d.textContent=esc(val);a.append(d)}host.append(a)});
-table('workers',[['Worker',r=>r.worker_id],['Status',r=>r.status,r=>['healthy','starting'].includes(r.status)?'ok':'warn'],['Task',r=>r.current_task_id||'—'],['Restarts',r=>r.restart_count]],data.workers?.items||[]);
-table('queue',[['ID',r=>r.id],['Task',r=>r.task_key],['Status',r=>r.status,r=>r.status==='completed'?'ok':r.status==='dead_letter'?'bad':'warn'],['Attempts',r=>r.attempts],['Run',r=>r.run_id||'—']],data.queue?.items||[]);
-table('runs',[['Run',r=>r.run_id],['Project',r=>r.project],['Status',r=>r.status,r=>r.status==='completed'?'ok':r.failure_count?'bad':'warn'],['Latency',r=>fmt(r.elapsed_seconds,'s')],['Tokens',r=>r.tokens_used],['Cost',r=>fmt(r.cost_usd,' USD')],['Loops',r=>r.loop_iterations],['Failures',r=>r.failure_count]],data.runs?.items||[]);
-table('spans',[['Span',r=>r.name],['Run',r=>r.run_id],['Status',r=>r.status,r=>r.status==='error'?'bad':'ok'],['Duration',r=>fmt(r.duration_ms,'ms')],['Trace',r=>(r.trace_id||'').slice(0,12)]],data.tracing?.items||[]);
-$('status').replaceChildren();const strong=document.createElement('strong');strong.textContent='LIVE';$('status').append(strong,document.createTextNode(` · ${new Date((data.generated_at||0)*1000).toLocaleTimeString()}`));}
-async function load(){const token=$('token').value.trim();if(token)sessionStorage.setItem('harness-token',token);const headers=token?{Authorization:`Bearer ${token}`}:{},res=await fetch('/metrics',{headers,cache:'no-store'});if(!res.ok)throw new Error(`metrics ${res.status}`);render(await res.json())}
-async function refresh(){try{await load()}catch(err){$('status').textContent=`Disconnected · ${err.message}`}}
-$('token').value=sessionStorage.getItem('harness-token')||'';$('connect').addEventListener('click',refresh);$('refresh').addEventListener('click',refresh);refresh();setInterval(refresh,15000);
+const $=id=>document.getElementById(id), state={data:null,filter:'all',busy:false};
+const statusNames={queued:'В очереди',claimed:'Запускается',leased:'Запускается',running:'Выполняется',retry_wait:'Повтор',repairing:'Исправляется',resuming:'Продолжается',awaiting_approval:'Ждёт решения',blocked:'Остановлена',dead_letter:'Нужна проверка',failed:'Ошибка',completed:'Готово',cancelled:'Отменена'};
+const active=new Set(['queued','claimed','leased','running','retry_wait','repairing','resuming']);
+function el(tag,cls,text){const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=String(text);return n}
+function auth(){const token=$('token').value.trim();return token?{Authorization:`Bearer ${token}`}:{}}
+async function api(path,{method='GET',body}={}){const headers={...auth()};if(body!==undefined)headers['Content-Type']='application/json';const r=await fetch(path,{method,headers,body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});let data={};try{data=await r.json()}catch{}if(!r.ok)throw new Error(data.error||`Ошибка ${r.status}`);return data}
+let toastTimer;function toast(message,error=false){const n=$('toast');n.textContent=message;n.className=`toast show${error?' error':''}`;clearTimeout(toastTimer);toastTimer=setTimeout(()=>n.className='toast',4200)}
+function metric(value,label){const n=el('div','stat');n.append(el('div','stat-value',value),el('div','stat-label',label));return n}
+function runById(id){return (state.data?.runs?.items||[]).find(x=>x.run_id===id)}
+function taskRepository(task){return task.payload?.repository||runById(task.run_id)?.repository||$('repository').value.trim()}
+function renderStats(){const d=state.data,o=d.overview||{},host=$('stats');host.replaceChildren(metric(o.active_tasks||0,'выполняются'),metric(o.queue_depth||0,'в очереди'),metric(o.completed_last_24h||0,'готово за сутки'),metric(o.human_interventions||0,'ждут вас'));const alive=Boolean(d.service?.alive);$('healthDot').className=`dot${alive?' live':''}`;$('healthText').textContent=alive?'Система работает':'Worker не запущен';$('serviceBadge').textContent=alive?'Онлайн':'Нужна проверка';$('workerBadge').textContent=`${o.active_workers||0} активных`;$('workerInfo').textContent=alive?`Фоновый сервис работает · PID ${d.service?.pid||'—'}`:'Новая задача попробует запустить worker автоматически.';$('lastRefresh').textContent=`Обновлено ${new Date((d.generated_at||Date.now()/1000)*1000).toLocaleTimeString('ru-RU')}`}
+function attentionAction(run,box){const action=run.attention?.action||'';if(action==='answer_or_approve'){const input=el('textarea');input.placeholder='Введите ответ системе…';box.append(input);const b=el('button','button primary small','Ответить и продолжить');b.addEventListener('click',()=>runAction(run,'answer',{response:input.value}));box.append(b)}else{const approve=el('button','button primary small','Одобрить и продолжить');approve.addEventListener('click',()=>runAction(run,'approve',{reason:'Одобрено в локальном дашборде.'}));box.append(approve)}const abort=el('button','button danger small','Отменить');abort.addEventListener('click',()=>runAction(run,'abort'));box.append(abort)}
+function renderAttention(){const runs=(state.data.runs?.items||[]).filter(r=>r.attention?.required||['awaiting_approval','blocked','dead_letter','failed'].includes(r.status));$('attentionCount').textContent=runs.length;const host=$('attentionList');host.replaceChildren();if(!runs.length){host.append(el('div','empty','Сейчас система не ждёт от вас решений.'));return}runs.sort((a,b)=>(b.updated_at||0)-(a.updated_at||0)).forEach(run=>{const card=el('article','attention');card.append(el('div','attention-title',run.task_id||run.run_id));const summary=run.attention?.summary||'Задача остановлена и требует решения.';card.append(el('p','',summary));(run.attention?.details||[]).slice(0,3).forEach(x=>card.append(el('p','hint',x)));const actions=el('div','row-actions');if(run.status==='blocked'||run.status==='dead_letter'||run.status==='failed'){const retry=el('button','button primary small','Исправлено — повторить');retry.addEventListener('click',()=>runAction(run,'retry'));actions.append(retry);const abort=el('button','button danger small','Отменить');abort.addEventListener('click',()=>runAction(run,'abort'));actions.append(abort)}else attentionAction(run,actions);card.append(actions);host.append(card)})}
+function visibleTask(task){if(state.filter==='all')return true;if(state.filter==='active')return active.has(task.status);if(state.filter==='attention')return ['awaiting_approval','blocked','dead_letter','failed'].includes(task.status);return state.filter==='done'&&['completed','cancelled'].includes(task.status)}
+function renderTasks(){const tasks=[...(state.data.queue?.items||[])].sort((a,b)=>b.id-a.id).filter(visibleTask);const host=$('taskList');host.replaceChildren();if(!tasks.length){host.append(el('div','empty','Задач в этой категории пока нет.'));return}tasks.slice(0,50).forEach(task=>{const row=el('article','task'),main=el('div'),side=el('div','task-side');main.append(el('div','task-title',task.payload?.task_id||task.task_key));main.append(el('div','task-goal',task.payload?.goal||'Описание скрыто или недоступно.'));const meta=el('div','task-meta');const run=runById(task.run_id);[task.payload?.branch,run?.current_role,task.run_id].filter(Boolean).forEach(x=>meta.append(el('span','badge',x)));main.append(meta);side.append(el('span',`status-pill s-${task.status}`,statusNames[task.status]||task.status));if(task.run_id&&!['completed','cancelled'].includes(task.status)){const actions=el('div','row-actions');if(['blocked','dead_letter','failed'].includes(task.status)){const retry=el('button','button small','Повторить');retry.addEventListener('click',()=>runAction({...run,run_id:task.run_id,repository:taskRepository(task)},'retry'));actions.append(retry)}const abort=el('button','button danger small','Остановить');abort.addEventListener('click',()=>runAction({...run,run_id:task.run_id,repository:taskRepository(task)},'abort'));actions.append(abort);side.append(actions)}row.append(main,side);host.append(row)})}
+function render(){if(!state.data)return;renderStats();renderAttention();renderTasks()}
+async function load(silent=false){try{state.data=await api('/metrics');render()}catch(e){$('healthDot').className='dot';$('healthText').textContent='Нет подключения';if(!silent)toast(e.message,true)}}
+async function runAction(run,action,extra={}){if(!run?.run_id)return toast('У задачи ещё нет run id.',true);if(action==='abort'&&!confirm('Остановить эту задачу? Ветка и файлы сохранятся.'))return;try{await api(`/ui/runs/${encodeURIComponent(run.run_id)}/${action}`,{method:'POST',body:{repository:run.repository||$('repository').value.trim(),...extra}});toast(action==='abort'?'Задача остановлена.':'Команда принята. Выполнение продолжится автоматически.');await load(true)}catch(e){toast(e.message,true)}}
+async function startTask(event){event.preventDefault();const goal=$('goal').value.trim();if(!goal)return toast('Сначала опишите задачу.',true);$('submitTask').disabled=true;$('submitTask').textContent='Запускаем…';try{const result=await api('/ui/tasks',{method:'POST',body:{repository:$('repository').value.trim(),goal,mode:$('mode').value,task_id:$('taskId').value.trim()}});$('goal').value='';$('taskId').value='';toast(`Задача ${result.task_id||''} принята и запущена.`);await load(true);$('historyPanel').scrollIntoView({behavior:'smooth'})}catch(e){toast(e.message,true)}finally{$('submitTask').disabled=false;$('submitTask').textContent='Запустить задачу'}}
+function bootstrap(){const hash=new URLSearchParams(location.hash.slice(1));if(hash.get('token'))sessionStorage.setItem('harness-token',hash.get('token'));if(hash.get('repo'))sessionStorage.setItem('harness-repo',hash.get('repo'));if(location.hash)history.replaceState(null,'',location.pathname);$('token').value=sessionStorage.getItem('harness-token')||'';$('repository').value=sessionStorage.getItem('harness-repo')||'';$('token').addEventListener('change',()=>{sessionStorage.setItem('harness-token',$('token').value.trim());load()});$('repository').addEventListener('change',()=>sessionStorage.setItem('harness-repo',$('repository').value.trim()));$('taskForm').addEventListener('submit',startTask);$('goal').addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Enter')$('taskForm').requestSubmit()});$('refresh').addEventListener('click',()=>load());$('focusTask').addEventListener('click',()=>{$('newTaskPanel').scrollIntoView({behavior:'smooth'});$('goal').focus()});$('jumpAttention').addEventListener('click',()=>$('attentionPanel').scrollIntoView({behavior:'smooth'}));$('jumpHistory').addEventListener('click',()=>$('historyPanel').scrollIntoView({behavior:'smooth'}));$('filters').addEventListener('click',e=>{const b=e.target.closest('[data-filter]');if(!b)return;state.filter=b.dataset.filter;document.querySelectorAll('.filter').forEach(x=>x.classList.toggle('active',x===b));renderTasks()});api('/config').then(config=>{if(!$('repository').value){$('repository').value=config.default_repository||'';sessionStorage.setItem('harness-repo',$('repository').value)}return load()}).catch(e=>toast(e.message,true));setInterval(()=>load(true),5000)}
+bootstrap();
 </script>
-</body></html>'''
+</body>
+</html>'''

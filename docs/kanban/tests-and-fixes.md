@@ -14,6 +14,7 @@
 - None.
 
 ## Done
+- Dashboard verification: three focused control tests, wheel inspection, security scan, and desktop/mobile browser checks with no console errors or horizontal overflow.
 - Task-branch resilience covers long security prompts, bounded automatic names, Git-valid Unicode and punctuation in existing branches, and actionable rejection of genuinely unsafe refs.
 - Ordinary-user install/update verification: installer syntax, executable mode, no-sudo behavior, paths with spaces, pipx boundary, ignored local setup, safe Git update refusal, package refresh, and worker restart have focused regression coverage.
 - Task-attention regressions cover exact worker reason preservation, status/watch commands, run-bound answers, approval separation, prompt injection of prior answers, non-empty attention details, and immediate retry suppression after authoritative pause.

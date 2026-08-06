@@ -4,6 +4,16 @@ AI Harness observability makes the outer engineering loop answerable: what enter
 
 ## Run it
 
+For ordinary use, open the task-control dashboard from an initialized project:
+
+```bash
+agent dashboard
+```
+
+This opens an authenticated local page that can launch tasks, show live queue/worker/run state, surface bounded questions, and answer, approve, retry, or abort a run through the same product CLI policy boundary. It binds only to loopback. The generated token stays in the browser session and is removed from the visible URL after startup.
+
+The lower-level contributor command remains available:
+
 ```bash
 make control-plane
 open http://127.0.0.1:8765/dashboard
