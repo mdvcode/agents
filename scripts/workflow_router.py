@@ -27,6 +27,7 @@ DEFAULT_BUDGETS = {
     "max_tokens": 300000,
 }
 LOOP_DEFAULTS = {
+    "security_repair": {"from": "security-agent", "to": "implementation-agent", "max_iterations": 3, "max_tokens": 60000, "max_duration_seconds": 1800},
     "quality_repair": {"from": "quality-runner", "to": "implementation-agent", "max_iterations": 3, "max_tokens": 60000, "max_duration_seconds": 1800},
     "review_repair": {"from": "reviewer", "to": "implementation-agent", "max_iterations": 3, "max_tokens": 60000, "max_duration_seconds": 1800},
     "ci_repair": {"from": "ci-repair-agent", "to": "quality-runner", "max_iterations": 3, "max_tokens": 60000, "max_duration_seconds": 1800},
@@ -416,6 +417,7 @@ def failure_fingerprint(
 
 def _loop_config(name: str, routing: dict[str, Any]) -> dict[str, Any]:
     routing_key = {
+        "security_repair": "security_failed",
         "quality_repair": "quality_failed",
         "review_repair": "review_blocked",
         "ci_repair": "ci_failed",
@@ -752,6 +754,15 @@ def decide_next_role(
         return _approval(
             f"A {severity.upper()} security finding requires human approval.",
             warnings + security,
+        )
+
+    if security and current_role == "security-agent" and bypass_approval:
+        return _repair_route(
+            "security_repair",
+            state=state,
+            role_result=result,
+            artifacts_dir=artifacts_dir,
+            routing=routing,
         )
 
     budget_blockers = _budget_blockers(state, workflows)

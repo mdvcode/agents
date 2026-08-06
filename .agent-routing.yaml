@@ -47,6 +47,19 @@ routing:
         - high
     next: approval-gate
     stop_publication: true
+  security_failed:
+    when:
+      security_status:
+        - fail
+        - blocked
+        - warn
+    loop:
+      name: security_repair
+      from: security-agent
+      to: implementation-agent
+      max_iterations: 3
+      max_tokens: 60000
+      max_duration_seconds: 1800
   quality_failed:
     when:
       quality_status:

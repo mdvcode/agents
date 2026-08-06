@@ -1076,7 +1076,7 @@ def run_roles(
     base_branch: str = "main",
     adapter_command: str = "",
     token_budget: int = 12000,
-    timeout_seconds: int = 600,
+    timeout_seconds: int = 1800,
     create_task_worktree: bool = False,
     current_branch: bool = False,
     resume: bool = False,
@@ -1922,7 +1922,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runtime-command", default="")
     parser.add_argument("--adapter-command", default="", help=argparse.SUPPRESS)
     parser.add_argument("--token-budget", type=int, default=12000)
-    parser.add_argument("--timeout-seconds", type=int, default=600)
+    parser.add_argument("--timeout-seconds", type=int, default=1800)
     parser.add_argument("--create-worktree", action="store_true")
     parser.add_argument("--current-branch", action="store_true")
     parser.add_argument("--resume", action="store_true")

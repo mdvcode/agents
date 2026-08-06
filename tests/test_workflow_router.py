@@ -43,6 +43,7 @@ def completed_state(**extra: object) -> dict[str, object]:
         "role_count": len(roles),
         "tokens_used": len(roles),
         "loops": {
+            "security_repair": {"iterations": 0},
             "quality_repair": {"iterations": 0},
             "review_repair": {"iterations": 0},
             "ci_repair": {"iterations": 0},
@@ -369,6 +370,36 @@ def test_medium_security_finding_routes_to_approval(tmp_path: Path) -> None:
 
     assert result["next_role"] == "approval-gate"
     assert result["stop"] is True
+
+
+def test_approved_medium_security_finding_routes_to_implementation(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    security = json.loads((artifacts_dir / "security.json").read_text(encoding="utf-8"))
+    security.update(
+        {
+            "verdict": "broken",
+            "status": "warn",
+            "highest_severity": "medium",
+            "findings": [{"id": "SEC-MEDIUM", "severity": "medium"}],
+            "blockers": ["SEC-MEDIUM"],
+            "blocker_ids": ["SEC-MEDIUM"],
+            "repair_required": True,
+        }
+    )
+    artifact(artifacts_dir / "security.json", security)
+    state = completed_state(
+        approval_override={
+            "approval_id": "security-repair-approval",
+            "gate": "security-agent",
+            "scope": {"actions": ["resume_workflow"], "gate": "security-agent"},
+        }
+    )
+
+    result = route(tmp_path, state, "security-agent")
+
+    assert result["next_role"] == "implementation-agent"
+    assert result["stop"] is False
+    assert result["loop"]["name"] == "security_repair"
 
 
 def test_missing_frontend_evidence_allows_draft_only_publication(tmp_path: Path) -> None:

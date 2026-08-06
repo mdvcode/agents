@@ -488,6 +488,24 @@ def test_agent_answer_records_requested_input_and_resumes_same_run(
         ],
     }
     (run_dir / "workflow.json").write_text(json.dumps(workflow), encoding="utf-8")
+    checkpoints = run_dir / "checkpoints"
+    checkpoints.mkdir()
+    (checkpoints / "planner.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-question",
+                "role": "planner",
+                "state": "role_validating",
+                "attempt": 1,
+                "worktree": str(repository),
+                "input_fingerprint": "input",
+                "output_fingerprint": "output",
+                "artifacts": ["plan.md"],
+                "side_effects": [],
+            }
+        ),
+        encoding="utf-8",
+    )
     approval_lifecycle.request_approval(run_dir, reason="Which export format should be used?")
 
     assert cli.main(
@@ -509,6 +527,10 @@ def test_agent_answer_records_requested_input_and_resumes_same_run(
     assert "attention" not in resumed
     assert resumed["blockers"] == []
     assert resumed["attention_history"][-1]["resolution"] == "answer_recorded"
+    checkpoint = json.loads((checkpoints / "planner.json").read_text(encoding="utf-8"))
+    assert checkpoint["state"] == "role_pending"
+    assert checkpoint["output_fingerprint"] == ""
+    assert checkpoint["artifacts"] == []
 
 
 def test_agent_answer_cannot_replace_explicit_risk_approval(

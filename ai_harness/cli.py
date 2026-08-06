@@ -35,6 +35,7 @@ from .project import (
     slug,
     write_project_config,
 )
+from .recovery.checkpoints import RoleCheckpoint, read_checkpoint, write_checkpoint
 from .recovery.models import sanitized_message
 
 
@@ -697,7 +698,7 @@ def record_human_input(run_dir: Path, *, run_id: str, actor: str, response: str)
 
 
 def resolve_answer_attention(run_dir: Path) -> None:
-    """Archive the answered question and clear only its active blockers."""
+    """Archive the answer and rerun the paused role with the new information."""
     path = run_dir / "workflow.json"
     temporary = path.with_suffix(".json.tmp")
     if path.is_symlink() or temporary.is_symlink():
@@ -729,6 +730,21 @@ def resolve_answer_attention(run_dir: Path) -> None:
         workflow["blockers"] = [
             item for item in blockers if str(item).strip() not in active_values
         ]
+    role = str(workflow.get("current_role", ""))
+    if role:
+        checkpoint = read_checkpoint(run_dir, role)
+        if checkpoint is not None:
+            write_checkpoint(
+                run_dir,
+                RoleCheckpoint(
+                    run_id=checkpoint.run_id,
+                    role=checkpoint.role,
+                    state="role_pending",
+                    attempt=checkpoint.attempt,
+                    worktree=checkpoint.worktree,
+                    input_fingerprint=checkpoint.input_fingerprint,
+                ),
+            )
     with temporary.open("w", encoding="utf-8") as handle:
         handle.write(json.dumps(workflow, indent=2, ensure_ascii=False) + "\n")
         handle.flush()

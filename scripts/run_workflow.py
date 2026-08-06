@@ -94,9 +94,12 @@ class StepResult:
 
 
 def run_command(command: str, cwd: Path, timeout_seconds: int) -> tuple[int, str, str]:
+    argv = shlex.split(command)
+    if argv and argv[0] == "python3":
+        argv[0] = sys.executable
     try:
         result = subprocess.run(
-            shlex.split(command),
+            argv,
             cwd=cwd,
             text=True,
             capture_output=True,
