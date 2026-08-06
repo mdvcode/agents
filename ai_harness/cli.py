@@ -72,6 +72,7 @@ RUNTIME_IMPORTS = (
     "opentelemetry.sdk.trace",
 )
 DEFAULT_UPDATE_SOURCE = "git+https://github.com/mdvcode/agents.git"
+REPLACEABLE_CHECKOUT_STATUSES = frozenset({"awaiting_approval", "blocked", "dead_letter", "failed"})
 
 
 def dependency_repair_hint() -> str:
@@ -234,6 +235,39 @@ def generated_task_branch(branch_prefix: str, task_id: str) -> str:
     return f"task/{digest}"
 
 
+def supersede_paused_checkout_task(root: Path, queue: Any, conflict: Any, new_task_id: str) -> str:
+    """Cancel one paused checkout owner while preserving its branch and run files."""
+
+    run_id = str(conflict.run_id or conflict.payload.get("run_id", "")).strip()
+    old_task_id = str(conflict.payload.get("task_id", conflict.id))
+    if not run_id:
+        raise CLIError(
+            f"paused task {old_task_id!r} has no run id and cannot be replaced safely; "
+            "inspect it with `agent status`"
+        )
+    workflow_path = root / ".agent-runs" / run_id / "workflow.json"
+    temporary = workflow_path.with_suffix(".json.tmp")
+    if workflow_path.is_symlink() or temporary.is_symlink():
+        raise CLIError(f"refusing to update paused run {run_id!r} through a symbolic link")
+    record = queue.abort_run(run_id)
+    if record.status != "cancelled":
+        raise CLIError(
+            f"task {old_task_id!r} became active while the new task was submitted; "
+            "cancellation was requested, and the new task can be retried after `agent status`"
+        )
+    if workflow_path.is_file():
+        workflow = read_json_object(workflow_path)
+        workflow["execution_status"] = "cancelled"
+        workflow["recovery_action"] = ""
+        workflow["superseded_by_task_id"] = new_task_id
+        temporary.write_text(json.dumps(workflow, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        temporary.replace(workflow_path)
+    return (
+        f"paused task {old_task_id} ({run_id}) was replaced by this new task; "
+        "its branch and run files were preserved"
+    )
+
+
 def handle_task(args: argparse.Namespace) -> int:
     repository = repository_from_arg(args.repo, require_initialized=True)
     config = load_project_config(repository)
@@ -326,22 +360,33 @@ def handle_task(args: argparse.Namespace) -> int:
         and bool(item.payload.get("repository"))
         and Path(str(item.payload["repository"])).resolve() == repository.resolve()
     ]
+    supersession_warnings: list[str] = []
+    if (
+        workspace_mode == "current_branch"
+        and len(current_branch_conflicts) == 1
+        and not args.keep_paused
+        and current_branch_conflicts[0].status in REPLACEABLE_CHECKOUT_STATUSES
+    ):
+        supersession_warnings.append(
+            supersede_paused_checkout_task(root, queue, current_branch_conflicts[0], task_id)
+        )
+        current_branch_conflicts = []
     if workspace_mode == "current_branch" and current_branch_conflicts:
         conflict = current_branch_conflicts[0]
         raise CLIError(
             f"task {conflict.payload.get('task_id', conflict.id)!r} still owns this checkout "
-            f"with status {conflict.status!r}; inspect it with `agent status`, then complete or abort it "
-            "before starting another branch task (use --worktree for parallel tasks)"
+            f"with status {conflict.status!r}; inspect it with `agent status` "
+            "or submit again without --keep-paused to replace a human-paused task"
         )
     missing = missing_runtime_imports()
     if missing:
         raise CLIError(f"missing runtime dependencies: {', '.join(missing)}; {dependency_repair_hint()}")
-    branch_warnings: list[str] = []
+    branch_warnings: list[str] = list(supersession_warnings)
     if not args.current_branch and workspace_mode == "current_branch":
         assert worktree_manager is not None
         prepared = worktree_manager.prepare_task_branch(repository, branch, config.base_branch)
         preparation_errors = [str(item) for item in prepared.get("errors", [])]
-        branch_warnings = [str(item) for item in prepared.get("warnings", [])]
+        branch_warnings.extend(str(item) for item in prepared.get("warnings", []))
         if preparation_errors:
             raise CLIError("; ".join(preparation_errors))
     service = worker_service_status(root)
@@ -1832,6 +1877,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--worktree",
         action="store_true",
         help="opt into an isolated Git worktree (useful for parallel tasks)",
+    )
+    task_parser.add_argument(
+        "--keep-paused",
+        action="store_true",
+        help="do not replace a paused task that owns the current checkout",
     )
     task_parser.add_argument("--priority", type=int, choices=range(-100, 101), default=0)
     task_parser.add_argument("--max-retries", type=int, choices=range(0, 11), default=2)

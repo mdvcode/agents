@@ -83,6 +83,8 @@ Prompt length and punctuation never become a branch-name failure: generated name
 
 `--current-branch` uses an already checked-out clean non-default branch without creating or renaming it. `--worktree` is the explicit opt-in for isolated parallel task execution. The worker revalidates current-checkout branches immediately before execution. Status, retry, resume, and abort preserve the same authoritative run and workspace.
 
+Single-checkout mode treats submission of a new task as replacement of an older human-paused, blocked, dead-lettered, or failed task. The old queue item is cancelled, but its Git branch and run files are preserved; the new task is then prepared and queued normally. Active or merely queued work is never replaced automatically. Advanced users may pass `--keep-paused` to retain the previous pause and refuse the new task instead.
+
 Use `--dry-run --json` to inspect the envelope without switching branches, starting workers, or changing queue state. `agent start` remains available for proactively starting the service, but it is no longer required before `agent task`.
 
 `agent watch` follows the queue and current role until the task completes or needs attention. It prints only state transitions, so a long-running role remains identifiable without dumping transcripts. `--timeout <seconds>` returns control while leaving the task running; zero waits indefinitely.

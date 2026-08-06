@@ -449,6 +449,76 @@ def test_agent_task_blocks_second_current_checkout_task_until_first_finishes(
     ).stdout.strip() == "feat/first"
 
 
+def test_agent_task_replaces_paused_checkout_owner_and_preserves_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    commit_all(repository)
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    assert cli.main(
+        ["task", "Old task", "--repo", str(repository), "--task-id", "old-task"]
+    ) == 0
+    capsys.readouterr()
+    task_queue = cli.load_harness_module(state_root, "task_queue")
+    queue = task_queue.TaskQueue(state_root / ".agent-queue" / "tasks.db")
+    old = queue.claim(worker_id="worker-old")
+    assert old is not None
+    assert queue.mark_running(old.id, "worker-old")
+    queue.finish(
+        task_id=old.id,
+        worker_id="worker-old",
+        status="awaiting_approval",
+        run_id="run-old",
+        requires_human=True,
+        exception_reason="Choose a timeout policy",
+    )
+    run_dir = state_root / ".agent-runs" / "run-old"
+    run_dir.mkdir(parents=True)
+    (run_dir / "workflow.json").write_text(
+        json.dumps({"run_id": "run-old", "execution_status": "awaiting_approval"}) + "\n",
+        encoding="utf-8",
+    )
+
+    assert cli.main(
+        [
+            "task",
+            "New KC-432 task",
+            "--repo",
+            str(repository),
+            "--task-id",
+            "kc-432",
+            "--keep-paused",
+        ]
+    ) == 2
+    assert "still owns this checkout" in capsys.readouterr().err
+
+    assert cli.main(
+        ["task", "New KC-432 task", "--repo", str(repository), "--task-id", "kc-432", "--json"]
+    ) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["task_id"] == "kc-432"
+    assert result["branch"] == "feat/kc-432"
+    assert any("was replaced by this new task" in warning for warning in result["warnings"])
+    assert queue.list()[0].status == "cancelled"
+    workflow = json.loads((run_dir / "workflow.json").read_text(encoding="utf-8"))
+    assert workflow["execution_status"] == "cancelled"
+    assert workflow["superseded_by_task_id"] == "kc-432"
+    assert subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == "feat/kc-432"
+
+
 def test_task_worktree_can_use_a_committed_local_base_without_origin(tmp_path: Path) -> None:
     repository = tmp_path / "project"
     repository.mkdir()

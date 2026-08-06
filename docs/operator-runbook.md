@@ -47,6 +47,8 @@ agent init --force --branch-prefix team/backend/
 
 Use `agent task --worktree ...` only when isolated parallel task directories are intentional. Without that flag, a second task for the same repository is refused until the first task is completed or cancelled.
 
+If the checkout owner is already waiting for human input, blocked, dead-lettered, or failed, submitting a new ordinary `agent task` replaces that paused run automatically while preserving its branch and run files. Running and queued tasks are never replaced. Use `--keep-paused` only when retaining the paused run is more important than accepting the new task.
+
 If the task needs a fact or choice, `agent watch` exits with an `ATTENTION REQUIRED` block. Answer its exact run without starting over:
 
 ```sh
