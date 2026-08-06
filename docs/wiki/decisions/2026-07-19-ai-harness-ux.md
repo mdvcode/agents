@@ -33,6 +33,8 @@ Project-local configuration is trusted only for explicit local task execution af
 
 Project-local generated branch prefixes are validated as Git-safe values instead of being restricted to a small hard-coded list. Central publication policy remains independent: accepting a local task prefix does not grant push, PR, merge, deployment, or protected-path authority.
 
+As of 2026-08-06, Git safety means Git-compatible ref rules rather than an ASCII-only product allowlist. Automatically generated task branches are bounded and have a deterministic safe fallback, while existing branches may use Git-valid Unicode and punctuation. Actual ambiguous ref syntax and protected/default branches remain blocked.
+
 Explicit consent is recorded outside the repository in the current user's private Harness configuration and binds the resolved repository path to the `.agent/project.yaml` fingerprint. A repository cannot gain execution trust by shipping that file in git; moving or changing it requires another `agent init`.
 
 ## Packaging

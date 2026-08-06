@@ -18,17 +18,15 @@ Initialize the target project and validate the complete runtime:
 ```sh
 cd /path/to/project
 agent init
-git add .agent/project.yaml AGENTS.md
-git commit -m "Configure local agent workflow"
 agent doctor --full
 ```
+
+If `agent init` reports that `.agent/project.yaml` or `AGENTS.md` is ignored by Git, keep it local and do not use `git add -f`. Otherwise, commit the new setup files or add repository-approved ignore rules before starting a task. The only execution requirement is a clean checkout.
 
 If the project must start tasks from a branch other than the detected default, make that choice explicit. This replaces only `.agent/project.yaml`; it preserves an existing `AGENTS.md`:
 
 ```sh
 agent init --force --base-branch develop
-git add .agent/project.yaml
-git commit -m "Configure agent base branch"
 agent doctor --full
 ```
 
@@ -45,11 +43,11 @@ Generated branch prefixes are configurable and are not limited to a fixed allowl
 
 ```sh
 agent init --force --branch-prefix team/backend/
-git add .agent/project.yaml
-git commit -m "Configure task branch prefix"
 ```
 
 Use `agent task --worktree ...` only when isolated parallel task directories are intentional. Without that flag, a second task for the same repository is refused until the first task is completed or cancelled.
+
+If the checkout owner is already waiting for human input, blocked, dead-lettered, or failed, submitting a new ordinary `agent task` replaces that paused run automatically while preserving its branch and run files. Running and queued tasks are never replaced. Use `--keep-paused` only when retaining the paused run is more important than accepting the new task.
 
 If the task needs a fact or choice, `agent watch` exits with an `ATTENTION REQUIRED` block. Answer its exact run without starting over:
 
@@ -86,6 +84,7 @@ agent worker status
 The first failing doctor check is the prerequisite to repair. Common actions are:
 
 - Missing Python runtime module: `agent update`, then `agent doctor --full`.
+- `agent update` is an invalid command: the installed CLI predates self-update. Run the current `install.sh` once from a fresh download (or use the documented `curl ... | sh` installer), open a new terminal or run `hash -r`, then use `agent update` normally.
 - Missing or wrong base branch: fetch it, or run `agent init --force --base-branch <existing-branch>`.
 - Worker not running: `agent start`.
 - Worker unhealthy after an upgrade: `agent worker restart`, then inspect the log path printed by the command.

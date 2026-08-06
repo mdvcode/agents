@@ -96,3 +96,21 @@
   Example bad pattern: retry a role or tell the user only that approval is required, without showing the question or accepting a run-bound answer.
   Example good pattern: print `ATTENTION REQUIRED`, show the exact question and `agent answer <run-id> ...`, then resume the same run with the sanitized answer available to the role.
   Scope: agent control-plane workflow, recovery, and CLI UX
+
+- Date: 2026-08-06
+  Agent: Codex
+  Failure: First-use instructions unconditionally told users to commit `.agent/project.yaml` and `AGENTS.md`, even when the target repository deliberately ignored both files.
+  Root cause: The installer treated clean-checkout readiness as equivalent to tracking local execution configuration in Git.
+  Prevention rule: Detect ignored setup files during initialization, accept them as valid local configuration, and never recommend `git add -f`; require only a clean checkout before branch switching.
+  Example bad pattern: always print `git add .agent/project.yaml AGENTS.md` after installation.
+  Example good pattern: report ignored setup as valid, and tell users with non-ignored new files to either commit them or intentionally ignore them according to project policy.
+  Scope: installer, project initialization, and ordinary-user documentation
+
+- Date: 2026-08-06
+  Agent: Codex
+  Failure: Task intake rejected an existing or generated task branch with the generic message `task branch must be a safe git branch name`, even though Git accepts useful branch characters beyond the Harness's ASCII-only allowlist.
+  Root cause: The Harness duplicated Git ref validation with a narrower regular expression and validated generated output after construction instead of making safe construction an invariant.
+  Prevention rule: Accept branch names according to Git ref rules, generate bounded task branches safely by construction with a deterministic fallback, and include the offending value plus remediation when a genuinely unsafe explicit ref is rejected.
+  Example bad pattern: allow only `[A-Za-z0-9._/-]` and expose a generic validation failure after the user submits a long task.
+  Example good pattern: accept Git-valid Unicode and punctuation, normalize generated task identifiers, and keep blocking only ambiguous ref syntax such as `../`, `@{`, repeated `/`, and `.lock`.
+  Scope: task intake and local Git workspace selection

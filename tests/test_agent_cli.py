@@ -16,7 +16,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from ai_harness import cli
-from ai_harness.project import load_project_config
+from ai_harness.project import load_project_config, safe_branch
 from agent_role_runner import resolve_registry_record
 from repository_registry import load_local_project_record
 from runtime_contracts import load_json, validate_contract
@@ -84,6 +84,65 @@ def test_agent_init_creates_local_config_and_preserves_existing_agents_file(
     assert cli.main(["init", "--repo", str(repository), "--json"]) == 0
     repeated = json.loads(capsys.readouterr().out)
     assert repeated["created"] == {"project_config": False, "agents_md": False}
+
+
+def test_agent_init_accepts_gitignored_local_setup_without_force_add_guidance(
+    tmp_path: Path,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    (repository / ".gitignore").write_text(".agent/\nAGENTS.md\n", encoding="utf-8")
+    subprocess.run(["git", "add", ".gitignore"], cwd=repository, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "ignore local agent setup"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert cli.main(["init", "--repo", str(repository), "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["git"]["ignored_setup_files"] == [".agent/project.yaml", "AGENTS.md"]
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    output = capsys.readouterr().out
+    assert "ignored by Git" in output
+    assert "no git add -f is needed" in output
+
+
+def test_agent_dashboard_opens_authenticated_local_control_center(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    capsys.readouterr()
+    opened: list[str] = []
+    served: list[dict[str, object]] = []
+
+    class ControlPlane:
+        @staticmethod
+        def serve_control_plane(**kwargs: object) -> None:
+            served.append(kwargs)
+            kwargs["on_ready"](9876)  # type: ignore[index,operator]
+
+    monkeypatch.setattr(cli, "load_harness_module", lambda _root, _name: ControlPlane)
+    monkeypatch.setattr(cli.webbrowser, "open", lambda url: opened.append(url) or True)
+
+    assert cli.main(["dashboard", "--repo", str(repository), "--port", "9876"]) == 0
+
+    assert served[0]["default_repository"] == repository
+    assert opened[0].startswith("http://127.0.0.1:9876/dashboard#token=")
+    assert "repo=" in opened[0]
+    output = capsys.readouterr().out
+    assert "Dashboard ready: http://127.0.0.1:9876/dashboard" in output
+    assert "token=" not in output
 
 
 def test_agent_init_retrusts_existing_nondefault_config_without_replacing_it(
@@ -310,6 +369,92 @@ def test_agent_task_dry_run_does_not_switch_branch_start_worker_or_create_queue(
     assert not (state_root / ".agent-queue").exists()
 
 
+def test_agent_task_long_security_goal_always_generates_safe_bounded_branch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository), "--branch-prefix", "team/security/"]) == 0
+    commit_all(repository)
+    capsys.readouterr()
+    configure_temporary_harness(monkeypatch, tmp_path)
+    goal = " ".join(
+        [
+            "KC-432 restrict Tool source paths and URLs",
+            "/bin/sh Python interpreter arbitrary commands malformed URLs",
+            "transport=stdio env config loader-level rejection",
+        ]
+        * 80
+    )
+
+    assert cli.main(["task", goal, "--repo", str(repository), "--dry-run", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    branch = result["envelope"]["branch"]
+
+    assert branch.startswith("team/security/")
+    assert len(branch) < 255
+    assert safe_branch(branch)
+
+
+@pytest.mark.parametrize(
+    "branch",
+    ["KC-432+tool-validation", "KC-432=security", "задача/KC-432", "team/KC-432&security"],
+)
+def test_agent_task_current_branch_accepts_names_git_accepts(
+    branch: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    subprocess.run(["git", "switch", "-c", branch], cwd=repository, check=True, capture_output=True)
+    commit_all(repository)
+    capsys.readouterr()
+    configure_temporary_harness(monkeypatch, tmp_path)
+
+    assert cli.main(
+        ["task", "Implement KC-432", "--repo", str(repository), "--current-branch", "--dry-run", "--json"]
+    ) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["envelope"]["branch"] == branch
+
+
+@pytest.mark.parametrize(
+    "branch",
+    ["../escape", "bad branch", "bad@{branch", "feature//nested", "topic.lock"],
+)
+def test_agent_task_rejects_unsafe_explicit_branch_with_actionable_remediation(
+    branch: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    commit_all(repository)
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+
+    result = cli.main(
+        ["task", "Unsafe branch", "--repo", str(repository), "--branch", branch]
+    )
+
+    assert result == 2
+    error = capsys.readouterr().err
+    assert repr(branch) in error
+    assert "remove --branch" in error
+    assert not (state_root / ".agent-queue").exists()
+
+
 def test_agent_task_blocks_second_current_checkout_task_until_first_finishes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -334,6 +479,76 @@ def test_agent_task_blocks_second_current_checkout_task_until_first_finishes(
     assert subprocess.run(
         ["git", "branch", "--show-current"], cwd=repository, check=True, capture_output=True, text=True
     ).stdout.strip() == "feat/first"
+
+
+def test_agent_task_replaces_paused_checkout_owner_and_preserves_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    commit_all(repository)
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    assert cli.main(
+        ["task", "Old task", "--repo", str(repository), "--task-id", "old-task"]
+    ) == 0
+    capsys.readouterr()
+    task_queue = cli.load_harness_module(state_root, "task_queue")
+    queue = task_queue.TaskQueue(state_root / ".agent-queue" / "tasks.db")
+    old = queue.claim(worker_id="worker-old")
+    assert old is not None
+    assert queue.mark_running(old.id, "worker-old")
+    queue.finish(
+        task_id=old.id,
+        worker_id="worker-old",
+        status="awaiting_approval",
+        run_id="run-old",
+        requires_human=True,
+        exception_reason="Choose a timeout policy",
+    )
+    run_dir = state_root / ".agent-runs" / "run-old"
+    run_dir.mkdir(parents=True)
+    (run_dir / "workflow.json").write_text(
+        json.dumps({"run_id": "run-old", "execution_status": "awaiting_approval"}) + "\n",
+        encoding="utf-8",
+    )
+
+    assert cli.main(
+        [
+            "task",
+            "New KC-432 task",
+            "--repo",
+            str(repository),
+            "--task-id",
+            "kc-432",
+            "--keep-paused",
+        ]
+    ) == 2
+    assert "still owns this checkout" in capsys.readouterr().err
+
+    assert cli.main(
+        ["task", "New KC-432 task", "--repo", str(repository), "--task-id", "kc-432", "--json"]
+    ) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["task_id"] == "kc-432"
+    assert result["branch"] == "feat/kc-432"
+    assert any("was replaced by this new task" in warning for warning in result["warnings"])
+    assert queue.list()[0].status == "cancelled"
+    workflow = json.loads((run_dir / "workflow.json").read_text(encoding="utf-8"))
+    assert workflow["execution_status"] == "cancelled"
+    assert workflow["superseded_by_task_id"] == "kc-432"
+    assert subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == "feat/kc-432"
 
 
 def test_task_worktree_can_use_a_committed_local_base_without_origin(tmp_path: Path) -> None:

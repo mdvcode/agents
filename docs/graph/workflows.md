@@ -2,7 +2,7 @@
 
 ## User CLI Flow
 
-`./install.sh` -> `agent init` -> `.agent/project.yaml` + `AGENTS.md` -> commit initialization -> `agent task "Goal"` -> dedicated branch in current checkout + worker auto-start + normalized Task envelope -> SQLite queue -> workflow -> `agent status` -> PR or compact exception. Later, `agent update` refreshes the installed package and restarts the worker without overwriting a dirty source checkout.
+`./install.sh` -> `agent init` -> `.agent/project.yaml` + `AGENTS.md` -> clean checkout (setup committed or intentionally ignored) -> `agent task "Goal"` -> dedicated branch in current checkout + worker auto-start + normalized Task envelope -> SQLite queue -> workflow -> `agent status` -> PR or compact exception. Later, `agent update` refreshes the installed package and restarts the worker without overwriting a dirty source checkout.
 
 `agent task --current-branch "Goal"` binds the run to an already prepared clean branch. `agent task --worktree "Goal"` explicitly selects isolated parallel execution. The queue reserves a current checkout for its unfinished branch task until completion or explicit cancellation, and execution stops if the checked-out branch changed after intake.
 

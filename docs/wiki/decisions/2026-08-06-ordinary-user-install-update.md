@@ -13,6 +13,7 @@ The installer requires Python 3.11 or newer, installs pipx without `sudo` when i
 ## Safety boundaries
 
 - No `sudo`, global site-package mutation, merge, reset, or force-pull is used.
+- Setup files intentionally ignored by the target repository stay local; installation and initialization never recommend force-adding them.
 - A dirty source checkout stops with exact remediation instead of losing changes.
 - The worker restarts only after package installation succeeds.
 - Package success with worker restart failure is reported as `updated_with_warning`, with a concrete recovery command.
@@ -21,5 +22,6 @@ The installer requires Python 3.11 or newer, installs pipx without `sudo` when i
 ## Consequences
 
 - The ordinary lifecycle is download, `./install.sh`, `agent init`, `agent task`, `agent watch`, and later `agent update`.
+- Installations that predate `agent update` use the current installer once as the compatibility bootstrap.
 - Documentation no longer asks ordinary users to diagnose or operate pipx directly.
 - Contributors may still use editable Python installations without changing the supported user path.

@@ -7,6 +7,7 @@ import hashlib
 import importlib
 import json
 import os
+import secrets
 import shlex
 import shutil
 import sqlite3
@@ -14,6 +15,8 @@ import subprocess
 import sys
 import time
 import tomllib
+import urllib.parse
+import webbrowser
 from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -73,6 +76,7 @@ RUNTIME_IMPORTS = (
     "opentelemetry.sdk.trace",
 )
 DEFAULT_UPDATE_SOURCE = "git+https://github.com/mdvcode/agents.git"
+REPLACEABLE_CHECKOUT_STATUSES = frozenset({"awaiting_approval", "blocked", "dead_letter", "failed"})
 
 
 def dependency_repair_hint() -> str:
@@ -123,6 +127,23 @@ def load_harness_module(root: Path, name: str) -> Any:
         ) from exc
 
 
+def ignored_setup_files(repository: Path) -> list[str]:
+    candidates = [str(CONFIG_RELATIVE_PATH), "AGENTS.md"]
+    try:
+        completed = subprocess.run(
+            ["git", "check-ignore", "--", *candidates],
+            cwd=repository,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    ignored = {line.strip() for line in completed.stdout.splitlines() if line.strip()}
+    return [path for path in candidates if path in ignored]
+
+
 def handle_init(args: argparse.Namespace) -> int:
     repository = repository_from_arg(args.repo, require_initialized=False)
     existing_config = (
@@ -159,6 +180,7 @@ def handle_init(args: argparse.Namespace) -> int:
     if args.replace_agents or not agents_path.exists():
         agents_path.write_text(AGENTS_TEMPLATE, encoding="utf-8")
         agents_created = True
+    ignored = ignored_setup_files(repository)
     payload = {
         "status": "initialized",
         "repository": str(repository),
@@ -172,7 +194,19 @@ def handle_init(args: argparse.Namespace) -> int:
             "project_config": config_created,
             "agents_md": agents_created,
         },
+        "git": {
+            "ignored_setup_files": ignored,
+        },
     }
+    git_guidance = (
+        (
+            "  local setup: "
+            + ", ".join(ignored)
+            + " are ignored by Git; this is valid and no git add -f is needed"
+        )
+        if ignored
+        else "  Git note: commit or intentionally ignore new setup files before the first task"
+    )
     emit(
         payload,
         as_json=args.json,
@@ -181,6 +215,7 @@ def handle_init(args: argparse.Namespace) -> int:
             f"  config: {config.path}",
             f"  base branch: {config.base_branch}",
             f"  instructions: {agents_path}{' (kept existing)' if not agents_created else ''}",
+            git_guidance,
             "Next: agent doctor --full",
         ),
     )
@@ -191,6 +226,50 @@ def generated_task_id(goal: str) -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     digest = hashlib.sha256(goal.encode("utf-8")).hexdigest()[:8]
     return f"{timestamp}-{slug(goal, 'task')[:32]}-{digest}"
+
+
+def generated_task_branch(branch_prefix: str, task_id: str) -> str:
+    """Build a deterministic safe branch without exposing prompt quirks to users."""
+
+    task_slug = slug(task_id, "task")
+    candidate = f"{branch_prefix}{task_slug}"
+    if safe_branch(candidate):
+        return candidate
+    digest = hashlib.sha256(task_id.encode("utf-8")).hexdigest()[:12]
+    return f"task/{digest}"
+
+
+def supersede_paused_checkout_task(root: Path, queue: Any, conflict: Any, new_task_id: str) -> str:
+    """Cancel one paused checkout owner while preserving its branch and run files."""
+
+    run_id = str(conflict.run_id or conflict.payload.get("run_id", "")).strip()
+    old_task_id = str(conflict.payload.get("task_id", conflict.id))
+    if not run_id:
+        raise CLIError(
+            f"paused task {old_task_id!r} has no run id and cannot be replaced safely; "
+            "inspect it with `agent status`"
+        )
+    workflow_path = root / ".agent-runs" / run_id / "workflow.json"
+    temporary = workflow_path.with_suffix(".json.tmp")
+    if workflow_path.is_symlink() or temporary.is_symlink():
+        raise CLIError(f"refusing to update paused run {run_id!r} through a symbolic link")
+    record = queue.abort_run(run_id)
+    if record.status != "cancelled":
+        raise CLIError(
+            f"task {old_task_id!r} became active while the new task was submitted; "
+            "cancellation was requested, and the new task can be retried after `agent status`"
+        )
+    if workflow_path.is_file():
+        workflow = read_json_object(workflow_path)
+        workflow["execution_status"] = "cancelled"
+        workflow["recovery_action"] = ""
+        workflow["superseded_by_task_id"] = new_task_id
+        temporary.write_text(json.dumps(workflow, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        temporary.replace(workflow_path)
+    return (
+        f"paused task {old_task_id} ({run_id}) was replaced by this new task; "
+        "its branch and run files were preserved"
+    )
 
 
 def handle_task(args: argparse.Namespace) -> int:
@@ -226,9 +305,13 @@ def handle_task(args: argparse.Namespace) -> int:
             raise CLIError("; ".join(checkout_errors))
         branch = str(checkout.get("branch", ""))
     else:
-        branch = args.branch or f"{config.branch_prefix}{slug(task_id, 'task')}"
+        branch = args.branch or generated_task_branch(config.branch_prefix, task_id)
     if not safe_branch(branch):
-        raise CLIError("task branch must be a safe git branch name")
+        source = "current" if args.current_branch else "requested"
+        raise CLIError(
+            f"{source} branch {branch!r} is not a valid Git branch name; "
+            "remove --branch to let agent create one automatically, or switch to a valid existing branch"
+        )
     if branch in {config.base_branch, "main", "master", "trunk"}:
         raise CLIError("task branch must not be a protected/default branch")
     external_id = f"{config.project_id}:{task_id}"
@@ -281,22 +364,33 @@ def handle_task(args: argparse.Namespace) -> int:
         and bool(item.payload.get("repository"))
         and Path(str(item.payload["repository"])).resolve() == repository.resolve()
     ]
+    supersession_warnings: list[str] = []
+    if (
+        workspace_mode == "current_branch"
+        and len(current_branch_conflicts) == 1
+        and not args.keep_paused
+        and current_branch_conflicts[0].status in REPLACEABLE_CHECKOUT_STATUSES
+    ):
+        supersession_warnings.append(
+            supersede_paused_checkout_task(root, queue, current_branch_conflicts[0], task_id)
+        )
+        current_branch_conflicts = []
     if workspace_mode == "current_branch" and current_branch_conflicts:
         conflict = current_branch_conflicts[0]
         raise CLIError(
             f"task {conflict.payload.get('task_id', conflict.id)!r} still owns this checkout "
-            f"with status {conflict.status!r}; inspect it with `agent status`, then complete or abort it "
-            "before starting another branch task (use --worktree for parallel tasks)"
+            f"with status {conflict.status!r}; inspect it with `agent status` "
+            "or submit again without --keep-paused to replace a human-paused task"
         )
     missing = missing_runtime_imports()
     if missing:
         raise CLIError(f"missing runtime dependencies: {', '.join(missing)}; {dependency_repair_hint()}")
-    branch_warnings: list[str] = []
+    branch_warnings: list[str] = list(supersession_warnings)
     if not args.current_branch and workspace_mode == "current_branch":
         assert worktree_manager is not None
         prepared = worktree_manager.prepare_task_branch(repository, branch, config.base_branch)
         preparation_errors = [str(item) for item in prepared.get("errors", [])]
-        branch_warnings = [str(item) for item in prepared.get("warnings", [])]
+        branch_warnings.extend(str(item) for item in prepared.get("warnings", []))
         if preparation_errors:
             raise CLIError("; ".join(preparation_errors))
     service = worker_service_status(root)
@@ -1247,6 +1341,53 @@ def handle_stop(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_dashboard(args: argparse.Namespace) -> int:
+    repository = repository_from_arg(args.repo, require_initialized=True)
+    config = load_project_config(repository)
+    if not project_is_trusted(config):
+        raise CLIError("project configuration is not locally trusted; run `agent init` again")
+    root = harness_home()
+    control_plane = load_harness_module(root, "control_plane_api")
+    token = secrets.token_urlsafe(24)
+
+    def ready(port: int) -> None:
+        fragment = urllib.parse.urlencode({"token": token, "repo": str(repository)})
+        url = f"http://127.0.0.1:{port}/dashboard#{fragment}"
+        print(f"Dashboard ready: {url.split('#', 1)[0]}", flush=True)
+        print("Press Ctrl+C in this Terminal window to stop it.", flush=True)
+        if not args.no_open:
+            webbrowser.open(url)
+
+    try:
+        control_plane.serve_control_plane(
+            host="127.0.0.1",
+            port=args.port,
+            db_path=root / ".agent-queue" / "tasks.db",
+            runs_dir=root / ".agent-runs",
+            auth_token=token,
+            default_repository=repository,
+            on_ready=ready,
+        )
+    except KeyboardInterrupt:
+        print("\nDashboard stopped.")
+    except OSError as exc:
+        raise CLIError(
+            f"dashboard could not start on port {args.port}: {exc}; "
+            "choose another port with `agent dashboard --port 8766`"
+        ) from exc
+    return 0
+
+
+def dashboard_port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("port must be a number from 1 to 65535") from exc
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be a number from 1 to 65535")
+    return port
+
+
 def handle_recovery_command(args: argparse.Namespace) -> int:
     repository = repository_from_arg(args.repo, require_initialized=True)
     root = harness_home()
@@ -1803,6 +1944,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="opt into an isolated Git worktree (useful for parallel tasks)",
     )
+    task_parser.add_argument(
+        "--keep-paused",
+        action="store_true",
+        help="do not replace a paused task that owns the current checkout",
+    )
     task_parser.add_argument("--priority", type=int, choices=range(-100, 101), default=0)
     task_parser.add_argument("--max-retries", type=int, choices=range(0, 11), default=2)
     task_parser.add_argument("--dry-run", action="store_true")
@@ -1818,6 +1964,15 @@ def build_parser() -> argparse.ArgumentParser:
     stop_parser = subparsers.add_parser("stop", help="stop the autonomous worker service")
     stop_parser.add_argument("--json", action="store_true")
     stop_parser.set_defaults(handler=handle_stop)
+
+    dashboard_parser = subparsers.add_parser(
+        "dashboard",
+        help="open the local task launch and control dashboard",
+    )
+    dashboard_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")
+    dashboard_parser.add_argument("--port", type=dashboard_port, metavar="PORT", default=8765)
+    dashboard_parser.add_argument("--no-open", action="store_true", help="start the server without opening a browser")
+    dashboard_parser.set_defaults(handler=handle_dashboard)
 
     status_parser = subparsers.add_parser("status", help="show compact project queue and run status")
     status_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")

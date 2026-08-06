@@ -14,7 +14,9 @@
 - None.
 
 ## Done
-- Ordinary-user install/update verification: installer syntax, executable mode, no-sudo behavior, paths with spaces, pipx boundary, safe Git update refusal, package refresh, and worker restart have focused regression coverage.
+- Dashboard verification: three focused control tests, wheel inspection, security scan, and desktop/mobile browser checks with no console errors or horizontal overflow.
+- Task-branch resilience covers long security prompts, bounded automatic names, Git-valid Unicode and punctuation in existing branches, and actionable rejection of genuinely unsafe refs.
+- Ordinary-user install/update verification: installer syntax, executable mode, no-sudo behavior, paths with spaces, pipx boundary, ignored local setup, safe Git update refusal, package refresh, and worker restart have focused regression coverage.
 - Task-attention regressions cover exact worker reason preservation, status/watch commands, run-bound answers, approval separation, prompt injection of prior answers, non-empty attention details, and immediate retry suppression after authoritative pause.
 - Startup reliability verification: 305 repository tests passed with one opt-in smoke skipped in the ordinary suite; the separately enabled real Codex smoke, runtime preflight, pipx dependency check, security scan, fresh-project init/doctor/start/task/status smoke, and diff checks passed.
 - Production Runtime PR1 local acceptance: 86 focused runtime-chaos tests, 287 repository tests, real Codex preflight/smoke, the 30-case evaluation gate, security, artifacts, compilation, and diff checks passed; only the explicitly excluded multi-hour production soak remains.

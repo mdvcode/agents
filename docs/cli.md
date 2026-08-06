@@ -25,6 +25,8 @@ agent doctor --full
 
 `agent update` uses the installed package source. A clean Git checkout is updated with a fast-forward-only pull; a ZIP/folder installation moves to the official repository source; a remote package installation is upgraded in place. It then verifies the new `agent` command and restarts the background worker. A dirty source checkout is never overwritten. To install a separately downloaded build explicitly, use `agent update --source /path/to/new-folder`.
 
+An installation old enough not to recognize `agent update` must be bootstrapped once with the current `install.sh`, either from a fresh download or through the remote installer above. Refresh the shell command cache with `hash -r`; future updates then use `agent update`.
+
 Contributors may still use `pip install -e .` or direct pipx commands, but users do not need to manage those environments themselves.
 
 The installation bundles the policy, workflow, schemas, prompts, scripts, and sole Step 2 Codex CLI runtime under an isolated environment. `AI_HARNESS_HOME` may point at a source checkout when developing or diagnosing a custom installation.
@@ -53,6 +55,14 @@ Existing files are preserved. Re-running `agent init` trusts the existing projec
 
 ## Create a task
 
+The ordinary visual entry point is:
+
+```sh
+agent dashboard
+```
+
+It starts an authenticated loopback control center for the initialized project and opens it in the default browser. The page launches tasks through the same CLI policy boundary, refreshes live task/worker state, displays bounded attention questions, and provides answer, approval, retry, and abort controls. The temporary token is passed in the URL fragment, moved to session storage, and removed from the visible URL. Use `Ctrl+C` to stop only the dashboard server.
+
 Validate the installation once after installation or an upgrade:
 
 ```sh
@@ -69,7 +79,7 @@ agent watch --task-id fix-login
 
 `agent task` is the ordinary start command: it validates the request, starts the persistent worker service when necessary, prepares the task workspace, and idempotently enqueues the normalized Task envelope. Repeating the same explicit `--task-id` returns the existing queue item.
 
-By default, the command creates or selects a dedicated task branch in the current checkout from the configured base branch. It does not create a worktree. The checkout must be clean; commit the files created by `agent init` and any other intended changes, or stash them, before starting the first task. Only one unfinished current-checkout task may own a repository at a time. This prevents concurrent workers from switching the same directory between branches.
+By default, the command creates or selects a dedicated task branch in the current checkout from the configured base branch. It does not create a worktree. The checkout must be clean. Setup files intentionally ignored by Git may stay local and must not be force-added; otherwise commit or intentionally ignore new setup files and commit or stash other intended changes before starting the first task. Only one unfinished current-checkout task may own a repository at a time. This prevents concurrent workers from switching the same directory between branches.
 
 Generated branches use the prefix selected during initialization and never use the default branch. The prefix is not restricted to a fixed list: any safe Git prefix is accepted, including `feat/`, `fix/`, `chore/`, `release/2026/`, or `team/mobile/`:
 
@@ -77,7 +87,11 @@ Generated branches use the prefix selected during initialization and never use t
 agent init --force --branch-prefix chore/
 ```
 
+Prompt length and punctuation never become a branch-name failure: generated names are normalized, bounded, and receive a deterministic fallback automatically. Existing branches are checked against Git's own ref rules rather than a narrower ASCII-only list, so valid names containing Unicode or punctuation such as `+`, `=`, `&`, and `,` are accepted. Ambiguous or unsafe ref forms such as `../`, `@{`, repeated `/`, control characters, and `.lock` remain blocked.
+
 `--current-branch` uses an already checked-out clean non-default branch without creating or renaming it. `--worktree` is the explicit opt-in for isolated parallel task execution. The worker revalidates current-checkout branches immediately before execution. Status, retry, resume, and abort preserve the same authoritative run and workspace.
+
+Single-checkout mode treats submission of a new task as replacement of an older human-paused, blocked, dead-lettered, or failed task. The old queue item is cancelled, but its Git branch and run files are preserved; the new task is then prepared and queued normally. Active or merely queued work is never replaced automatically. Advanced users may pass `--keep-paused` to retain the previous pause and refuse the new task instead.
 
 Use `--dry-run --json` to inspect the envelope without switching branches, starting workers, or changing queue state. `agent start` remains available for proactively starting the service, but it is no longer required before `agent task`.
 

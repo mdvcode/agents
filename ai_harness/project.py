@@ -15,7 +15,7 @@ import yaml
 
 CONFIG_RELATIVE_PATH = Path(".agent/project.yaml")
 SUPPORTED_PROFILES = {"agent_workspace", "django", "nextjs_web"}
-BRANCH_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+FORBIDDEN_BRANCH_CHARACTERS = frozenset(" ~^:?*[\\")
 
 
 class ProjectConfigError(ValueError):
@@ -55,9 +55,24 @@ def slug(value: str, fallback: str = "project") -> str:
 
 
 def safe_branch(value: str) -> bool:
-    if not value or len(value) > 255 or not BRANCH_PATTERN.fullmatch(value):
+    """Return whether ``value`` follows Git's branch ref format rules.
+
+    Git permits useful branch characters outside ASCII letters and punctuation,
+    including Unicode, ``+``, ``=``, ``&``, and ``,``.  Keep the validation
+    focused on ref ambiguity and filesystem-unsafe forms instead of maintaining
+    a narrower product-specific allowlist.
+    """
+
+    if not value or value == "@" or value.startswith("-"):
         return False
     if ".." in value or "@{" in value or "//" in value or value.endswith(("/", ".")):
+        return False
+    if any(
+        ord(character) < 32
+        or ord(character) == 127
+        or character in FORBIDDEN_BRANCH_CHARACTERS
+        for character in value
+    ):
         return False
     components = value.split("/")
     return all(
