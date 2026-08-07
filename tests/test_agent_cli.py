@@ -45,6 +45,9 @@ def commit_all(path: Path, message: str = "project setup") -> None:
 def configure_temporary_harness(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     state_root = tmp_path / "harness-state"
     state_root.mkdir()
+    (state_root / ".agent-recovery.yaml").write_bytes(
+        (ROOT / ".agent-recovery.yaml").read_bytes()
+    )
     monkeypatch.setattr(cli, "harness_home", lambda: state_root)
     monkeypatch.setattr(
         cli,
@@ -288,6 +291,27 @@ def test_agent_task_accepts_custom_prefix_and_auto_starts_worker(
         ["git", "branch", "--show-current"], cwd=repository, check=True, capture_output=True, text=True
     ).stdout.strip() == "release/2026/release-notes"
     assert not (state_root / ".agent-worktrees").exists()
+
+
+def test_agent_task_accepts_fast_execution_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    commit_all(repository)
+    capsys.readouterr()
+    configure_temporary_harness(monkeypatch, tmp_path)
+
+    assert cli.main(
+        ["task", "Fix CSS color", "--repo", str(repository), "--task-id", "fast-css", "--mode", "fast", "--json"]
+    ) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["mode"] == "fast"
 
 
 @pytest.mark.parametrize("prefix", ["../", "bad prefix/", "feature//", ".hidden/"])

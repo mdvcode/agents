@@ -8,11 +8,14 @@ from typing import Any
 
 import yaml
 
+from ..paths import harness_home
 from .models import FAILURE_KINDS
 
 
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_POLICY = ROOT / ".agent-recovery.yaml"
+def default_policy_path() -> Path:
+    """Resolve policy from the source checkout or installed Harness resources."""
+
+    return harness_home() / ".agent-recovery.yaml"
 
 
 @dataclass(frozen=True)
@@ -58,7 +61,8 @@ def _positive(value: Any, label: str) -> int:
     return value
 
 
-def load_recovery_policy(path: Path = DEFAULT_POLICY) -> RecoveryPolicy:
+def load_recovery_policy(path: Path | None = None) -> RecoveryPolicy:
+    path = path or default_policy_path()
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or data.get("version") != 1:
         raise ValueError(".agent-recovery.yaml must contain version: 1")

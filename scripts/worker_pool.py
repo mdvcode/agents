@@ -113,6 +113,7 @@ def safe_payload(record: TaskRecord) -> dict[str, str]:
         "branch",
         "base_branch",
         "workspace_mode",
+        "mode",
         "run_id",
         "adapter_command",
         "runtime_provider",
@@ -131,6 +132,9 @@ def safe_payload(record: TaskRecord) -> dict[str, str]:
     workspace_mode = record.payload.get("workspace_mode", "isolated")
     if workspace_mode not in {"isolated", "current_branch"}:
         raise ValueError("workspace_mode must be isolated or current_branch")
+    mode = record.payload.get("mode", "auto")
+    if mode not in {"auto", "fast", "full"}:
+        raise ValueError("mode must be auto, fast, or full")
     if (
         record.payload.get("adapter_command") or record.payload.get("runtime_command")
     ) and os.environ.get("AGENT_HARNESS_TEST_MODE") != "1":
@@ -236,6 +240,8 @@ class WorkflowWorkerPool:
             payload.get("branch", f"issue/{payload['task_id']}"),
             "--base-branch",
             payload.get("base_branch", "main"),
+            "--mode",
+            payload.get("mode", "auto"),
         ]
         if payload.get("adapter_command"):
             command.extend(["--adapter-command", payload["adapter_command"]])

@@ -238,7 +238,7 @@ workflows:
     assert result == 0
     assert commands == [
         "python3 scripts/agent_role_runner.py --workflow sample --adapter-command "
-        "'python3 scripts/adapters/codex_cli_executor.py'"
+        "'python3 scripts/adapters/codex_cli_executor.py' --mode auto"
     ]
 
 
@@ -278,7 +278,10 @@ workflows:
 
     assert result == 0
     assert len(commands) == 1
-    assert shlex.split(commands[0])[-2:] == ["--goal", goal]
+    arguments = shlex.split(commands[0])
+    goal_index = arguments.index("--goal")
+    assert arguments[goal_index : goal_index + 2] == ["--goal", goal]
+    assert arguments[-2:] == ["--mode", "auto"]
 
 
 def test_workflow_runner_passes_current_branch_mode_to_agent_role_runner(
@@ -361,7 +364,7 @@ workflows:
 
     assert result == 0
     assert commands == [
-        "python3 scripts/agent_role_runner.py --workflow sample --adapter-command custom-adapter"
+        "python3 scripts/agent_role_runner.py --workflow sample --adapter-command custom-adapter --mode auto"
     ]
 
 

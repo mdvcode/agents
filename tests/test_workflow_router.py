@@ -205,6 +205,66 @@ def test_high_risk_routes_to_approval_and_cannot_publish(tmp_path: Path) -> None
     assert result["publication_allowed"] is False
 
 
+def test_fast_context_skips_planner_and_risk_classifier(tmp_path: Path) -> None:
+    setup_artifacts(tmp_path)
+    state = completed_state(effective_mode="fast", roles=[], completed_roles=[])
+
+    result = route(tmp_path, state, "context-compiler")
+
+    assert result["next_role"] == "implementation-agent"
+
+
+def test_fast_bounded_implementation_routes_directly_to_quality(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    artifact(
+        artifacts_dir / "implementation.json",
+        {"changed_files": ["styles/site.css"], "risk_changed": False},
+    )
+    state = completed_state(effective_mode="fast", roles=[], completed_roles=[])
+
+    result = route(tmp_path, state, "implementation-agent")
+
+    assert result["next_role"] == "quality-runner"
+    assert state["effective_mode"] == "fast"
+
+
+def test_fast_large_diff_escalates_to_full_without_reimplementing(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    artifact(
+        artifacts_dir / "implementation.json",
+        {"changed_files": [f"src/file-{index}.py" for index in range(6)], "risk_changed": False},
+    )
+    state = completed_state(effective_mode="fast", roles=[], completed_roles=[])
+
+    result = route(tmp_path, state, "implementation-agent")
+
+    assert result["next_role"] == "planner"
+    assert state["effective_mode"] == "full"
+    assert state["fast_escalation_reasons"]
+
+    state["roles"] = [{"role": "implementation-agent", "result": {"status": "completed"}}]
+    risk_route = route(tmp_path, state, "risk-classifier")
+    assert risk_route["next_role"] == "test-generator"
+
+
+def test_environmental_verifier_failure_does_not_repeat_implementation(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    artifact(
+        artifacts_dir / "semantic_conflict.json",
+        {
+            "verdict": "broken",
+            "blockers": ["Browser verification is unavailable because dependencies are missing."],
+            "repair_required": True,
+        },
+    )
+    state = completed_state()
+
+    result = route(tmp_path, state, "semantic-conflict-agent")
+
+    assert result["next_role"] == "approval-gate"
+    assert "will not be repeated" in result["reason"]
+
+
 def test_scoped_high_risk_grant_allows_patch_but_not_publication(tmp_path: Path) -> None:
     setup_artifacts(tmp_path, "high")
     state = completed_state(

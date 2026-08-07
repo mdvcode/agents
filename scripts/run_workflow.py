@@ -275,11 +275,14 @@ def run_workflow(
     branch: str = "",
     base_branch: str = "main",
     current_branch: bool = False,
+    mode: str = "auto",
     adapter_command: str = "",
     resume: bool = False,
     runtime_provider: str = "",
     runtime_command: str = "",
 ) -> int:
+    if mode not in {"auto", "fast", "full"}:
+        raise ValueError("mode must be auto, fast, or full")
     workflows = read_workflows()
     workflow = workflows.get("workflows", {}).get(workflow_name)
     if not isinstance(workflow, dict):
@@ -296,6 +299,7 @@ def run_workflow(
         branch=branch_value,
         base_branch=base_branch,
         workspace_mode="current_branch" if current_branch else "isolated",
+        workflow_mode=mode,
     )
     existing = find_completed_run(RUNS_DIR, fingerprint, exclude_run_id="") if not resume else None
     if existing is not None:
@@ -369,6 +373,7 @@ def run_workflow(
                     "task_id": task_id,
                     "goal": goal_value,
                     "execution_status": "running",
+                    "mode": mode,
                     "roles": [],
                     "loops": {
                         "quality_repair": {"iterations": 0},
@@ -495,6 +500,8 @@ def run_workflow(
                 command = command + " --dry-run"
             if resume and command.startswith("python3 scripts/agent_role_runner.py") and "--resume" not in command:
                 command = command + " --resume"
+            if command.startswith("python3 scripts/agent_role_runner.py") and "--mode" not in command:
+                command = f"{command} --mode {quote_placeholder(mode)}"
             if (
                 current_branch
                 and command.startswith("python3 scripts/agent_role_runner.py")
@@ -666,6 +673,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--branch", default="")
     parser.add_argument("--base-branch", default="main")
     parser.add_argument("--current-branch", action="store_true")
+    parser.add_argument("--mode", choices=("auto", "fast", "full"), default="auto")
     parser.add_argument("--adapter-command", default="")
     parser.add_argument("--runtime-provider", default="")
     parser.add_argument("--runtime-command", default="")
@@ -688,6 +696,7 @@ def main() -> int:
             branch=args.branch,
             base_branch=args.base_branch,
             current_branch=args.current_branch,
+            mode=args.mode,
             adapter_command=args.adapter_command,
             resume=args.resume,
             runtime_provider=args.runtime_provider,

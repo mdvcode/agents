@@ -26,6 +26,7 @@ def test_all_sources_normalize_to_one_task_envelope(tmp_path: Path, source: str)
     assert envelope["task_id"] == f"task-{source}"
     assert envelope["repository"] == str(tmp_path.resolve())
     assert envelope["workspace_mode"] == "isolated"
+    assert envelope["mode"] == "auto"
     assert envelope["event_id"]
 
 
@@ -72,3 +73,26 @@ def test_current_branch_workspace_mode_survives_normalization_and_queueing(tmp_p
 
     assert envelope["workspace_mode"] == "current_branch"
     assert record.payload["workspace_mode"] == "current_branch"
+
+
+def test_execution_mode_survives_normalization_and_queueing(tmp_path: Path) -> None:
+    queue = TaskQueue(tmp_path / "queue.db")
+    envelope = normalize_event(
+        source="cli",
+        payload={"external_id": "fast-1", "task_id": "fast-1", "goal": "Fix CSS", "mode": "fast"},
+        repository=tmp_path,
+    )
+
+    record = enqueue_envelope(queue, envelope)
+
+    assert envelope["mode"] == "fast"
+    assert record.payload["mode"] == "fast"
+
+
+def test_event_rejects_unknown_execution_mode(tmp_path: Path) -> None:
+    with pytest.raises(EventError, match="mode must be auto, fast, or full"):
+        normalize_event(
+            source="api",
+            payload={"external_id": "bad-mode", "mode": "turbo"},
+            repository=tmp_path,
+        )

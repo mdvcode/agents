@@ -114,3 +114,12 @@
   Example bad pattern: allow only `[A-Za-z0-9._/-]` and expose a generic validation failure after the user submits a long task.
   Example good pattern: accept Git-valid Unicode and punctuation, normalize generated task identifiers, and keep blocking only ambiguous ref syntax such as `../`, `@{`, repeated `/`, and `.lock`.
   Scope: task intake and local Git workspace selection
+
+- Date: 2026-08-07
+  Agent: Codex
+  Failure: The installed worker could locate most bundled resources but failed while loading `.agent-recovery.yaml`, so queued tasks stayed unhealthy even though source-checkout tests passed.
+  Root cause: Recovery policy discovery derived a repository root from the installed Python module path instead of using the shared Harness resource locator.
+  Prevention rule: Every packaged policy, schema, prompt, or workflow resource must resolve through `harness_home()`, and `agent doctor` must load the resource rather than only checking the Harness directory.
+  Example bad pattern: `Path(__file__).resolve().parents[2] / ".agent-recovery.yaml"` inside an installed module.
+  Example good pattern: resolve `harness_home() / ".agent-recovery.yaml"`, load and validate it in readiness checks, then verify the installed worker after reinstalling.
+  Scope: packaged agent control plane and worker startup

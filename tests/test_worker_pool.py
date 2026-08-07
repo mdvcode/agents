@@ -6,6 +6,8 @@ import sys
 import json
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
@@ -164,6 +166,17 @@ def test_worker_rejects_unknown_workspace_mode(tmp_path: Path) -> None:
         assert "workspace_mode must be isolated or current_branch" in str(exc)
     else:
         raise AssertionError("unknown workspace modes must be rejected")
+
+
+def test_worker_rejects_unknown_execution_mode(tmp_path: Path) -> None:
+    queue = TaskQueue(tmp_path / "queue.db")
+    record = queue.enqueue(
+        task_key="unsafe-mode",
+        payload={"task_id": "unsafe-mode", "repository": str(tmp_path), "mode": "turbo"},
+    )
+
+    with pytest.raises(ValueError, match="mode must be auto, fast, or full"):
+        safe_payload(record)
 
 
 def test_worker_preserves_exact_attention_question() -> None:
