@@ -66,6 +66,9 @@ def test_runtime_resource_limits_are_authoritative_and_bounded() -> None:
 
 
 def test_default_policy_resolves_from_installed_harness_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    expected_timeout = load_recovery_policy(
+        ROOT / ".agent-recovery.yaml"
+    ).runtime_limits.role_timeout_seconds
     harness = tmp_path / "share" / "ai-harness"
     (harness / "scripts").mkdir(parents=True)
     (harness / "schemas").mkdir()
@@ -79,4 +82,4 @@ def test_default_policy_resolves_from_installed_harness_home(tmp_path: Path, mon
 
     policy = load_recovery_policy()
 
-    assert policy.runtime_limits.role_timeout_seconds == 600
+    assert policy.runtime_limits.role_timeout_seconds == expected_timeout
