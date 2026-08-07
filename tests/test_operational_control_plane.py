@@ -176,6 +176,10 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
             assert response.headers["Content-Security-Policy"]
         assert "Agent Control" in dashboard
         assert "Новая задача" in dashboard
+        assert 'id="executionMode"' in dashboard
+        assert '<option value="fast">' in dashboard
+        assert '<option value="full">' in dashboard
+        assert 'id="workspaceMode"' in dashboard
         assert "api-run" not in dashboard
 
         config = api_request(f"{base}/config", access_key)
@@ -250,8 +254,38 @@ def test_dashboard_task_and_run_controls_delegate_to_product_cli(
             f"{base}/ui/tasks",
             token,
             method="POST",
-            body={"repository": str(tmp_path), "goal": "Implement KC-432", "mode": "new_branch"},
+            body={
+                "repository": str(tmp_path),
+                "goal": "Implement KC-432",
+                "workspace_mode": "worktree",
+                "execution_mode": "fast",
+            },
         )
+        legacy_launched = api_request(
+            f"{base}/ui/tasks",
+            token,
+            method="POST",
+            body={
+                "repository": str(tmp_path),
+                "goal": "Continue legacy dashboard task",
+                "mode": "current_branch",
+            },
+        )
+        try:
+            api_request(
+                f"{base}/ui/tasks",
+                token,
+                method="POST",
+                body={
+                    "repository": str(tmp_path),
+                    "goal": "Invalid dashboard mode",
+                    "execution_mode": "turbo",
+                },
+            )
+        except HTTPError as exc:
+            assert exc.code == 400
+        else:
+            raise AssertionError("dashboard must reject an unknown execution mode")
         aborted = api_request(
             f"{base}/ui/runs/run-432/abort",
             token,
@@ -282,12 +316,17 @@ def test_dashboard_task_and_run_controls_delegate_to_product_cli(
         thread.join(timeout=5)
 
     assert launched["task_id"] == "kc-432"
+    assert legacy_launched["task_id"] == "kc-432"
     assert aborted["status"] == "queued"
     assert answered["status"] == "queued"
     assert approved["status"] == "queued"
     assert retried["status"] == "queued"
     assert calls == [
-        (tmp_path, ["task", "Implement KC-432"]),
+        (tmp_path, ["task", "Implement KC-432", "--mode", "fast", "--worktree"]),
+        (
+            tmp_path,
+            ["task", "Continue legacy dashboard task", "--mode", "auto", "--current-branch"],
+        ),
         (tmp_path, ["abort", "run-432"]),
         (
             tmp_path,

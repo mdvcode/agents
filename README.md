@@ -192,7 +192,7 @@ agent worker stop [--json]
 agent dashboard [--repo PATH] [--port PORT] [--no-open]
 ```
 
-The dashboard binds to loopback, opens in the default browser, and provides task launch, status, answer, approval, retry, and abort controls. `--no-open` starts the server without opening a browser. `Ctrl+C` stops the dashboard server but does not stop the worker service.
+The dashboard binds to loopback, opens in the default browser, and provides task launch, execution-mode (`auto`, `fast`, or `full`) and Git-workspace selection, status, answer, approval, retry, and abort controls. `--no-open` starts the server without opening a browser. `Ctrl+C` stops the dashboard server but does not stop the worker service.
 
 ### Status and monitoring
 

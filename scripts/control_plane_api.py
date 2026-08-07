@@ -188,16 +188,19 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 goal = str(payload.get("goal", "")).strip()
                 if not goal:
                     raise APIError(HTTPStatus.BAD_REQUEST, "describe the task before starting it")
-                mode = str(payload.get("mode", "new_branch"))
-                if mode not in {"new_branch", "current_branch", "worktree"}:
+                workspace_mode = str(payload.get("workspace_mode", payload.get("mode", "new_branch")))
+                if workspace_mode not in {"new_branch", "current_branch", "worktree"}:
                     raise APIError(HTTPStatus.BAD_REQUEST, "unknown workspace mode")
-                arguments = ["task", goal]
+                execution_mode = str(payload.get("execution_mode", "auto"))
+                if execution_mode not in {"auto", "fast", "full"}:
+                    raise APIError(HTTPStatus.BAD_REQUEST, "unknown execution mode")
+                arguments = ["task", goal, "--mode", execution_mode]
                 task_id = str(payload.get("task_id", "")).strip()
                 if task_id:
                     arguments.extend(["--task-id", task_id])
-                if mode == "current_branch":
+                if workspace_mode == "current_branch":
                     arguments.append("--current-branch")
-                elif mode == "worktree":
+                elif workspace_mode == "worktree":
                     arguments.append("--worktree")
                 result = self.agent_command(repository, arguments)
                 self.send_json(HTTPStatus.ACCEPTED, result)
