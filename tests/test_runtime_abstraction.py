@@ -172,3 +172,78 @@ print(json.dumps({
     )
     assert result["status"] == "blocked"
     assert "does not match invocation boundary" in result["blockers"][0]
+
+
+def test_subprocess_runtime_uses_active_interpreter_for_python3_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_python = fake_bin / "python3"
+    fake_python.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
+    fake_python.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin))
+
+    adapter = tmp_path / "adapter.py"
+    adapter.write_text(
+        """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print(json.dumps({
+    "status": "completed",
+    "next_action": "continue",
+    "summary": request["role"] + " completed",
+    "artifacts_created": [],
+    "blockers": [],
+    "warnings": [],
+    "tokens_used": 1
+}))
+""".lstrip(),
+        encoding="utf-8",
+    )
+    context = tmp_path / "context.json"
+    context.write_text("{}\n", encoding="utf-8")
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    runtime = SubprocessRuntime(
+        descriptor=RuntimeDescriptor(
+            provider="test-provider",
+            kind="runtime_adapter",
+            transport="test_fixture",
+            production=False,
+            command=f"python3 {adapter}",
+            api_required=False,
+        )
+    )
+    request = {
+        "run_id": "run-runtime-python",
+        "role": "planner",
+        "goal": "Use the active Python interpreter",
+        "repository": str(tmp_path.resolve()),
+        "artifacts_dir": str(artifacts.resolve()),
+        "context_manifest": str(context.resolve()),
+        "prompt_path": str((ROOT / ".agents" / "prompts" / "planner.md").resolve()),
+        "output_contract": str((ROOT / "schemas" / "role_result.schema.json").resolve()),
+        "expected_artifacts": [],
+        "allowed_tools": [],
+        "allowed_artifacts": [],
+        "filesystem_access": "read_only",
+        "network_access": "none",
+        "project_profile": "agent_workspace",
+        "token_budget": 100,
+        "timeout_seconds": 30,
+    }
+
+    result = runtime.execute(
+        role="planner",
+        context=context,
+        task=request,
+        worktree=tmp_path,
+        artifacts=artifacts,
+    )
+
+    assert result["status"] == "completed"
+    assert result["summary"] == "planner completed"

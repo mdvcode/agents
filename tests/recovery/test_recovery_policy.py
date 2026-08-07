@@ -63,3 +63,23 @@ def test_runtime_resource_limits_are_authoritative_and_bounded() -> None:
     assert limits.max_artifact_bytes >= limits.max_output_bytes
     assert 1 <= limits.max_concurrent_subprocesses <= 32
     assert limits.max_open_files >= 4
+
+
+def test_default_policy_resolves_from_installed_harness_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    expected_timeout = load_recovery_policy(
+        ROOT / ".agent-recovery.yaml"
+    ).runtime_limits.role_timeout_seconds
+    harness = tmp_path / "share" / "ai-harness"
+    (harness / "scripts").mkdir(parents=True)
+    (harness / "schemas").mkdir()
+    (harness / ".agent-runtime.yaml").write_text("version: 1\n", encoding="utf-8")
+    (harness / "scripts" / "task_queue.py").write_text("", encoding="utf-8")
+    (harness / "schemas" / "task_envelope.schema.json").write_text("{}", encoding="utf-8")
+    (harness / ".agent-recovery.yaml").write_text(
+        (ROOT / ".agent-recovery.yaml").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    monkeypatch.setenv("AI_HARNESS_HOME", str(harness))
+
+    policy = load_recovery_policy()
+
+    assert policy.runtime_limits.role_timeout_seconds == expected_timeout

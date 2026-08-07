@@ -52,6 +52,17 @@ def awaiting_run(tmp_path: Path) -> Path:
 
 def test_approval_scope_is_exact_and_consumed_once(tmp_path: Path) -> None:
     run = awaiting_run(tmp_path)
+    workflow_path = run / "workflow.json"
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    workflow["attention"] = {
+        "required": True,
+        "summary": "Approval required.",
+        "details": ["budget exceeded"],
+        "role": "risk-classifier",
+        "action": "approve",
+    }
+    workflow["blockers"] = ["budget exceeded"]
+    write_json(workflow_path, workflow)
     requested = request_approval(run, reason="HIGH risk")
     expanded = {**requested["requested_scope"], "actions": ["resume_workflow", "merge"]}
 
@@ -67,6 +78,9 @@ def test_approval_scope_is_exact_and_consumed_once(tmp_path: Path) -> None:
     assert resumed["workflow"]["resume_role"] == "risk-classifier"
     assert resumed["workflow"]["approval_override"]["gate"] == "risk-classifier"
     assert resumed["workflow"]["approval_grants"][0]["reason"] == "HIGH risk"
+    assert "attention" not in resumed["workflow"]
+    assert resumed["workflow"]["blockers"] == []
+    assert resumed["workflow"]["attention_history"][-1]["resolution"] == "approval_consumed"
     replay = prepare_resume(run)
     assert replay["already_consumed"] is True
     assert len(replay["workflow"]["approval_grants"]) == 1

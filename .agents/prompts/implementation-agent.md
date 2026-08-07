@@ -43,6 +43,13 @@ Never apply Django conventions to a web project solely because Django skills exi
 - If more context is needed, state exactly which file or symbol is missing.
 
 ## Risk gates
+`risk.json` is the authoritative classification produced by the dedicated
+risk-classifier after planning. A planner's `INITIAL_RISK_CLASS` is advisory;
+disagreement between that preliminary value and `risk.json` is not by itself a
+conflict or an escalation. Continue under `risk.json` unless source inspection
+reveals a concrete protected path, protected action, or other policy trigger
+that the risk-classifier did not evaluate.
+
 The deterministic orchestrator checks for a consumed `patch_high_risk` grant
 before dispatching an implementation whose `risk.json` is HIGH. When the
 planned protected files and actions are already listed in both `plan.md` and

@@ -65,6 +65,9 @@ def normalize_event(
     workspace_mode = text(payload.get("workspace_mode"), "isolated")
     if workspace_mode not in {"isolated", "current_branch"}:
         raise EventError("event workspace_mode must be isolated or current_branch")
+    mode = text(payload.get("mode"), "auto")
+    if mode not in {"auto", "fast", "full"}:
+        raise EventError("event mode must be auto, fast, or full")
     run_id = text(payload.get("run_id"))
     try:
         priority = int(payload.get("priority", 0) or 0)
@@ -86,6 +89,7 @@ def normalize_event(
         "branch": branch,
         "base_branch": base_branch,
         "workspace_mode": workspace_mode,
+        "mode": mode,
         "run_id": run_id,
         "priority": priority,
         "max_retries": max_retries,
@@ -118,7 +122,7 @@ def enqueue_envelope(queue: TaskQueue, envelope: dict[str, Any]) -> TaskRecord:
     payload = {
         key: envelope[key]
         for key in (
-            "task_id", "goal", "project", "repository", "branch", "base_branch", "workspace_mode",
+            "task_id", "goal", "project", "repository", "branch", "base_branch", "workspace_mode", "mode",
             "run_id", "source", "event_id"
         )
     }

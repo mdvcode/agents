@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
+import yaml
+
 from . import __version__
 from .paths import HarnessNotFoundError, harness_home
 from .project import (
@@ -38,7 +40,9 @@ from .project import (
     slug,
     write_project_config,
 )
+from .recovery.checkpoints import RoleCheckpoint, read_checkpoint, write_checkpoint
 from .recovery.models import sanitized_message
+from .recovery.policy import load_recovery_policy
 
 
 AGENTS_TEMPLATE = """# AGENTS.md
@@ -322,6 +326,7 @@ def handle_task(args: argparse.Namespace) -> int:
         "branch": branch,
         "base_branch": config.base_branch,
         "workspace_mode": workspace_mode,
+        "mode": args.mode,
         "priority": args.priority,
         "max_retries": args.max_retries,
     }
@@ -408,6 +413,7 @@ def handle_task(args: argparse.Namespace) -> int:
         "repository": str(repository),
         "branch": stored_branch,
         "workspace_mode": str(record.payload.get("workspace_mode", workspace_mode)),
+        "mode": str(record.payload.get("mode", args.mode)),
         "queue_db": str(queue_path),
         "idempotent": record.payload.get("event_id") == envelope["event_id"],
         "worker": {
@@ -425,6 +431,7 @@ def handle_task(args: argparse.Namespace) -> int:
             f"  base branch: {config.base_branch}",
             f"  branch: {stored_branch}",
             f"  workspace: {task_workspace_label(args)}",
+            f"  mode: {record.payload.get('mode', args.mode)}",
             f"  status: {record.status}",
             f"  worker: {worker.get('status', 'starting')}",
             *(f"  warning: {warning}" for warning in branch_warnings),
@@ -791,7 +798,7 @@ def record_human_input(run_dir: Path, *, run_id: str, actor: str, response: str)
 
 
 def resolve_answer_attention(run_dir: Path) -> None:
-    """Archive the answered question and clear only its active blockers."""
+    """Archive the answer and rerun the paused role with the new information."""
     path = run_dir / "workflow.json"
     temporary = path.with_suffix(".json.tmp")
     if path.is_symlink() or temporary.is_symlink():
@@ -823,6 +830,21 @@ def resolve_answer_attention(run_dir: Path) -> None:
         workflow["blockers"] = [
             item for item in blockers if str(item).strip() not in active_values
         ]
+    role = str(workflow.get("current_role", ""))
+    if role:
+        checkpoint = read_checkpoint(run_dir, role)
+        if checkpoint is not None:
+            write_checkpoint(
+                run_dir,
+                RoleCheckpoint(
+                    run_id=checkpoint.run_id,
+                    role=checkpoint.role,
+                    state="role_pending",
+                    attempt=checkpoint.attempt,
+                    worktree=checkpoint.worktree,
+                    input_fingerprint=checkpoint.input_fingerprint,
+                ),
+            )
     with temporary.open("w", encoding="utf-8") as handle:
         handle.write(json.dumps(workflow, indent=2, ensure_ascii=False) + "\n")
         handle.flush()
@@ -1689,6 +1711,13 @@ def handle_doctor(args: argparse.Namespace) -> int:
         checks.append(DoctorCheck("harness", "pass", str(root)))
     except HarnessNotFoundError as exc:
         checks.append(DoctorCheck("harness", "fail", str(exc)))
+    if root is not None:
+        try:
+            load_recovery_policy(root / ".agent-recovery.yaml")
+            checks.append(DoctorCheck("recovery_policy", "pass", str(root / ".agent-recovery.yaml")))
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            checks.append(DoctorCheck("recovery_policy", "fail", str(exc)))
+            next_actions.append("agent update")
     config = None
     git_ready = False
     if repository is not None:
@@ -1932,6 +1961,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--keep-paused",
         action="store_true",
         help="do not replace a paused task that owns the current checkout",
+    )
+    task_parser.add_argument(
+        "--mode",
+        choices=("auto", "fast", "full"),
+        default="auto",
+        help="select guarded fast routing automatically, require fast routing, or preserve the full role chain",
     )
     task_parser.add_argument("--priority", type=int, choices=range(-100, 101), default=0)
     task_parser.add_argument("--max-retries", type=int, choices=range(0, 11), default=2)

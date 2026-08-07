@@ -214,6 +214,7 @@ def task_fingerprint(
     branch: str,
     base_branch: str,
     workspace_mode: str = "isolated",
+    workflow_mode: str = "auto",
 ) -> str:
     payload = {
         "task_id": task_id,
@@ -222,6 +223,7 @@ def task_fingerprint(
         "branch": branch,
         "base_branch": base_branch,
         "workspace_mode": workspace_mode,
+        "workflow_mode": workflow_mode,
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")

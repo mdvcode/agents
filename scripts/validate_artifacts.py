@@ -723,6 +723,17 @@ def validate_agent_workflows_data(
             for key in ("max_roles", "max_repair_iterations", "max_duration_seconds", "max_tokens"):
                 if not isinstance(budgets.get(key), int) or budgets[key] <= 0:
                     errors.append(f"{label}: workflows.full_agent_workflow.budgets.{key} must be a positive integer")
+        mode_budgets = full.get("mode_budgets")
+        if not isinstance(mode_budgets, dict) or not isinstance(mode_budgets.get("fast"), dict):
+            errors.append(f"{label}: workflows.full_agent_workflow.mode_budgets.fast must be an object")
+        else:
+            for key in ("max_roles", "max_repair_iterations", "max_duration_seconds", "max_tokens"):
+                value = mode_budgets["fast"].get(key)
+                if not isinstance(value, int) or value <= 0:
+                    errors.append(
+                        f"{label}: workflows.full_agent_workflow.mode_budgets.fast.{key} "
+                        "must be a positive integer"
+                    )
         executor = full.get("executor")
         if not isinstance(executor, str) or "--run-id {run_id}" not in executor:
             errors.append(f"{label}: workflows.full_agent_workflow.executor must pass the shared run id")

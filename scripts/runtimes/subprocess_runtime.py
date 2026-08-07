@@ -79,9 +79,12 @@ class SubprocessRuntime:
         effective_timeout = min(requested_timeout, limits.role_timeout_seconds)
         safe_role = role.replace("/", "-")
         raw_dir = self.raw_output_dir or artifacts.parent / "raw-events"
+        command = shlex.split(self.descriptor.command)
+        if command and command[0] == "python3":
+            command[0] = sys.executable
         try:
             completed = run_managed_process(
-                shlex.split(self.descriptor.command),
+                command,
                 cwd=HARNESS_ROOT,
                 input_text=payload,
                 stdout_path=raw_dir / f"runtime.{safe_role}.stdout.log",

@@ -27,6 +27,7 @@ DEFAULT_BUDGETS = {
     "max_tokens": 300000,
 }
 LOOP_DEFAULTS = {
+    "security_repair": {"from": "security-agent", "to": "implementation-agent", "max_iterations": 3, "max_tokens": 60000, "max_duration_seconds": 1800},
     "quality_repair": {"from": "quality-runner", "to": "implementation-agent", "max_iterations": 3, "max_tokens": 60000, "max_duration_seconds": 1800},
     "review_repair": {"from": "reviewer", "to": "implementation-agent", "max_iterations": 3, "max_tokens": 60000, "max_duration_seconds": 1800},
     "ci_repair": {"from": "ci-repair-agent", "to": "quality-runner", "max_iterations": 3, "max_tokens": 60000, "max_duration_seconds": 1800},
@@ -50,6 +51,72 @@ CODE_EXTENSIONS = {
     ".tsx",
     ".vue",
 }
+FAST_REQUIRED_ROLES = [
+    "issue-intake",
+    "context-compiler",
+    "implementation-agent",
+    "quality-runner",
+    "security-agent",
+    "reviewer",
+    "orchestrator",
+    "publication-prepare",
+]
+FAST_SENSITIVE_PARTS = {
+    "auth",
+    "billing",
+    "payments",
+    "credentials",
+    "secrets",
+    "migrations",
+    "terraform",
+    "k8s",
+    "infra/prod",
+}
+
+
+def execution_mode(state: dict[str, Any]) -> str:
+    return "fast" if state.get("effective_mode") == "fast" else "full"
+
+
+def fast_path_blockers(state: dict[str, Any], artifacts_dir: Path) -> list[str]:
+    files = changed_files(state, artifacts_dir)
+    blockers: list[str] = []
+    if len(files) > 5:
+        blockers.append(f"fast path allows at most 5 changed files; observed {len(files)}")
+    for value in files:
+        normalized = value.replace("\\", "/").lower()
+        parts = set(Path(normalized).parts)
+        if (
+            normalized.startswith(".env")
+            or normalized.endswith((".pem", ".key"))
+            or any(token in normalized for token in FAST_SENSITIVE_PARTS)
+            or {"settings_prod.py", "production.py"} & parts
+        ):
+            blockers.append(f"fast path cannot verify sensitive path: {value}")
+    implementation = _artifact(artifacts_dir, "implementation.json")
+    if isinstance(implementation, dict) and implementation.get("risk_changed") is True:
+        blockers.append("implementation reported that the planned risk changed")
+    risk = _artifact(artifacts_dir, "risk.json")
+    if isinstance(risk, dict) and risk.get("risk_class") not in {None, "low"}:
+        blockers.append(f"fast path requires LOW risk; observed {risk.get('risk_class')}")
+    repository = state.get("worktree") or state.get("repository")
+    if isinstance(repository, str) and Path(repository).is_dir():
+        diff = subprocess.run(
+            ["git", "diff", "--numstat", "HEAD"],
+            cwd=repository,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        changed_lines = 0
+        if diff.returncode == 0:
+            for line in diff.stdout.splitlines():
+                columns = line.split("\t", 2)
+                if len(columns) >= 2 and columns[0].isdigit() and columns[1].isdigit():
+                    changed_lines += int(columns[0]) + int(columns[1])
+        if changed_lines > 200:
+            blockers.append(f"fast path allows at most 200 changed lines; observed {changed_lines}")
+    return blockers
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -351,6 +418,30 @@ def verifier_verdict(artifacts_dir: Path, artifact_name: str) -> str:
     return ""
 
 
+def verifier_environment_unavailable(artifacts_dir: Path, artifact_name: str) -> bool:
+    artifact = _artifact(artifacts_dir, artifact_name)
+    if not isinstance(artifact, dict):
+        return False
+    text_value = " ".join(
+        [
+            *[str(item) for item in artifact.get("blockers", []) if isinstance(item, (str, int))],
+            *[str(item) for item in artifact.get("warnings", []) if isinstance(item, (str, int))],
+            *[str(item) for item in artifact.get("observed", []) if isinstance(item, (str, int))],
+        ]
+    ).lower()
+    markers = (
+        "unavailable",
+        "missing dependenc",
+        "command not found",
+        "browser",
+        "playwright",
+        "read-only",
+        "runtime capability",
+        "did not complete",
+    )
+    return any(marker in text_value for marker in markers)
+
+
 def diff_hash(state: dict[str, Any], artifacts_dir: Path) -> str:
     explicit = state.get("diff_hash") or state.get("current_diff_hash")
     if isinstance(explicit, str) and explicit:
@@ -416,6 +507,7 @@ def failure_fingerprint(
 
 def _loop_config(name: str, routing: dict[str, Any]) -> dict[str, Any]:
     routing_key = {
+        "security_repair": "security_failed",
         "quality_repair": "quality_failed",
         "review_repair": "review_blocked",
         "ci_repair": "ci_failed",
@@ -518,6 +610,8 @@ def _blocked(reason: str, warnings: list[str] | None = None) -> dict[str, Any]:
 
 
 def required_gate_roles(state: dict[str, Any], artifacts_dir: Path) -> list[str]:
+    if execution_mode(state) == "fast":
+        return list(FAST_REQUIRED_ROLES)
     routing = load_yaml(ROUTING_CONFIG)
     configured = routing.get("required_before_publication", [])
     required = [str(role) for role in configured if isinstance(role, str)] if isinstance(configured, list) else []
@@ -754,6 +848,15 @@ def decide_next_role(
             warnings + security,
         )
 
+    if security and current_role == "security-agent" and bypass_approval:
+        return _repair_route(
+            "security_repair",
+            state=state,
+            role_result=result,
+            artifacts_dir=artifacts_dir,
+            routing=routing,
+        )
+
     budget_blockers = _budget_blockers(state, workflows)
     if budget_blockers and not (bypass_approval or budget_approved):
         return _approval("Workflow budget exceeded; execution is awaiting approval.", warnings + budget_blockers)
@@ -813,6 +916,11 @@ def decide_next_role(
         )
         verification = verifier_verdict(artifacts_dir, artifact_name)
         if verification == "broken":
+            if verifier_environment_unavailable(artifacts_dir, artifact_name):
+                return _approval(
+                    f"{current_role} could not verify the environment; implementation will not be repeated.",
+                    warnings + ["Repair the environment or explicitly accept unavailable independent verification."],
+                )
             return _repair_route(
                 "review_repair",
                 state=state,
@@ -831,24 +939,43 @@ def decide_next_role(
 
     code = code_changed(state, artifacts_dir)
     ui = ui_changed(state, artifacts_dir)
+    mode = execution_mode(state)
     next_role = ""
     reason = ""
     if current_role == "issue-intake":
         next_role, reason = "context-compiler", "Issue intake is recorded; compile scoped context."
     elif current_role == "context-compiler":
-        next_role, reason = "planner", "Context is available; planning is the next required gate."
+        if mode == "fast":
+            next_role, reason = "implementation-agent", "Fast deterministic context is ready; implement the narrow task."
+        else:
+            next_role, reason = "planner", "Context is available; planning is the next required gate."
     elif current_role == "planner":
         next_role, reason = "risk-classifier", "Planner output is advisory; risk classification is the next required gate."
     elif current_role == "risk-classifier":
-        next_role, reason = "implementation-agent", "Risk is below HIGH; implementation is the next required gate."
+        if state.get("fast_escalation_reasons") and "implementation-agent" in completed_roles(state):
+            next_role, reason = "test-generator", "Escalated implementation already exists; continue full verification."
+        else:
+            next_role, reason = "implementation-agent", "Risk is below HIGH; implementation is the next required gate."
     elif current_role == "implementation-agent":
-        next_role, reason = "test-generator", "Implementation completed; test generation is the next required gate."
+        if mode == "fast":
+            escalation = fast_path_blockers(state, artifacts_dir)
+            if escalation:
+                state["effective_mode"] = "full"
+                state["fast_escalation_reasons"] = escalation
+                next_role, reason = "planner", "Fast-path limits were exceeded; continue with the full verification chain."
+                warnings.extend(escalation)
+            else:
+                next_role, reason = "quality-runner", "Fast implementation is bounded; run deterministic quality checks."
+        else:
+            next_role, reason = "test-generator", "Implementation completed; test generation is the next required gate."
     elif current_role == "test-generator":
         next_role, reason = "quality-runner", "Tests are recorded; quality checks are required."
     elif current_role == "quality-runner":
         next_role, reason = "security-agent", "Quality passed; security is the next required gate."
     elif current_role == "security-agent":
-        if ui:
+        if mode == "fast":
+            next_role, reason = "reviewer", "Fast security checks passed; independent review is next."
+        elif ui:
             next_role, reason = "frontend-qa-agent", "User-visible or UI files changed; visual evidence gate is required."
         elif code:
             next_role, reason = "architecture-consistency-agent", "Code changed; architecture consistency gate is required."

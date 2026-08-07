@@ -5,9 +5,9 @@ task_recovery:
   max_consecutive_failures: 5
   max_recovery_duration_seconds: 1800
 runtime_limits:
-  role_timeout_seconds: 600
+  role_timeout_seconds: 1800
   workflow_timeout_seconds: 14400
-  idle_timeout_seconds: 900
+  idle_timeout_seconds: 2100
   tool_timeout_seconds: 120
   approval_timeout_seconds: 86400
   shutdown_grace_seconds: 10

@@ -185,6 +185,73 @@ def test_role_budget_tokens_excludes_cached_input() -> None:
     assert agent_role_runner.role_budget_tokens(result) == 60_628
 
 
+@pytest.mark.parametrize(
+    ("requested", "goal", "expected"),
+    [
+        ("auto", "Make the service images brighter with CSS", "fast"),
+        ("auto", "Change authentication permissions", "full"),
+        ("auto", "Implement a small local feature", "fast"),
+        ("auto", "", "full"),
+        ("fast", "Change authentication permissions", "fast"),
+        ("full", "Fix a typo", "full"),
+    ],
+)
+def test_execution_mode_selection(requested: str, goal: str, expected: str) -> None:
+    assert agent_role_runner.select_execution_mode(requested, goal) == expected
+
+
+def test_completed_role_result_is_reused_after_post_role_approval() -> None:
+    completed = {"status": "completed", "summary": "review passed"}
+    state = {
+        "roles": [
+            {"role": "reviewer", "result": completed},
+            {"role": "approval-gate", "result": {"status": "awaiting_approval"}},
+        ]
+    }
+
+    assert agent_role_runner.completed_role_result(state, "reviewer") is completed
+
+
+def test_missing_distinct_image_capability_fails_before_runtime(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "plan.md").write_text(
+        "Add six distinct new image assets for each category.\n", encoding="utf-8"
+    )
+
+    reason = agent_role_runner.missing_image_capability(
+        "Добавь к каждой категории картинки, для каждой категории своя", artifacts
+    )
+
+    assert "no image-generation capability" in reason
+
+
+def test_fast_workflow_uses_only_implementation_and_reviewer_models(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    monkeypatch.setattr(agent_role_runner, "RUNS", tmp_path / ".agent-runs")
+    (tmp_path / "Makefile").write_text("check:\n\t@true\nsecurity:\n\t@true\n", encoding="utf-8")
+    command = fake_adapter_script(tmp_path / "fake_adapter.py")
+
+    state = agent_role_runner.run_roles(
+        run_id="fast-role-bound",
+        repository=tmp_path,
+        adapter_command=command,
+        dry_run=True,
+        mode="auto",
+        goal="Fix CSS color",
+    )
+
+    model_roles = [item["role"] for item in state["roles"] if item["llm_invoked"]]
+    assert model_roles == ["implementation-agent", "reviewer"]
+    assert not {"planner", "risk-classifier", "test-generator"} & {
+        item["role"] for item in state["roles"]
+    }
+    assert state["budgets"]["max_duration_seconds"] == 900
+    assert state["effective_mode"] == "fast"
+
+
 def test_resume_production_runtime_reloads_trusted_command() -> None:
     stored = {
         "provider": "codex-cli",

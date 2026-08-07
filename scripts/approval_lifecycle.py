@@ -298,6 +298,34 @@ def _matching_consumed_grant(workflow: dict[str, Any], approval: dict[str, Any])
     )
 
 
+def _resolve_approved_attention(workflow: dict[str, Any]) -> None:
+    attention = workflow.pop("attention", None)
+    if not isinstance(attention, dict):
+        return
+    active_values = {str(attention.get("summary", "")).strip()}
+    details = attention.get("details", [])
+    if isinstance(details, list):
+        active_values.update(str(item).strip() for item in details)
+    active_values.discard("")
+    blockers = workflow.get("blockers", [])
+    if isinstance(blockers, list):
+        workflow["blockers"] = [
+            item for item in blockers if str(item).strip() not in active_values
+        ]
+    history = workflow.get("attention_history", [])
+    if not isinstance(history, list):
+        history = []
+    history.append(
+        {
+            **attention,
+            "required": False,
+            "resolved_at": iso(utc_now()),
+            "resolution": "approval_consumed",
+        }
+    )
+    workflow["attention_history"] = history[-50:]
+
+
 def _prepare_resume_locked(run_dir: Path) -> dict[str, Any]:
     approval = expire_if_needed(run_dir, read_json(run_dir / "artifacts" / "approval.json"))
     workflow = read_json(run_dir / "workflow.json")
@@ -318,6 +346,7 @@ def _prepare_resume_locked(run_dir: Path) -> dict[str, Any]:
     if not _matching_consumed_grant(workflow, approval):
         workflow["execution_status"] = "resuming"
         workflow["resume_role"] = role
+        _resolve_approved_attention(workflow)
         workflow["approval_override"] = {
             "approval_id": approval["approval_id"],
             "gate": role,

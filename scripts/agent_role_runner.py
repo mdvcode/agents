@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shlex
 import subprocess
 import sys
 import time
@@ -101,6 +102,26 @@ PROMPT_FILES = {
 }
 DEFAULT_ALLOWED_TOOLS = ["filesystem_read", "repository_search"]
 KNOWN_PROJECT_PROFILES = {"agent_workspace", "django", "nextjs_web"}
+EXECUTION_MODES = {"auto", "fast", "full"}
+FULL_HINTS = (
+    "auth", "permission", "migration", "billing", "payment", "secret", "production", "deploy",
+    "database schema", "public api", "dependency", "package upgrade", "architecture", "refactor",
+    "авторизац", "разрешен", "миграц", "оплат", "секрет", "продакш", "деплой", "схем",
+    "зависимост", "архитектур", "рефактор",
+)
+
+
+def select_execution_mode(requested: str, goal: str) -> str:
+    if requested == "full":
+        return "full"
+    if requested == "fast":
+        return "fast"
+    normalized = goal.casefold()
+    if normalized.strip() in {"", "task"}:
+        return "full"
+    if any(token in normalized for token in FULL_HINTS):
+        return "full"
+    return "fast"
 
 
 def make_run_id(workflow: str) -> str:
@@ -336,6 +357,18 @@ def awaiting_approval_result(summary: str, blockers: list[str]) -> dict[str, Any
         "tokens_used": 0,
         "duration_ms": 0,
     }
+
+
+def completed_role_result(state: dict[str, Any], role: str) -> dict[str, Any] | None:
+    """Return the latest successful result for checkpoint-only approval resume."""
+
+    for checkpoint_entry in reversed(state.get("roles", [])):
+        if not isinstance(checkpoint_entry, dict) or checkpoint_entry.get("role") != role:
+            continue
+        result = checkpoint_entry.get("result")
+        if isinstance(result, dict) and result.get("status") == "completed":
+            return result
+    return None
 
 
 def set_attention(
@@ -684,9 +717,10 @@ def next_role_name(current_role: str, result: dict[str, Any]) -> str:
     return ROLE_CHAIN[index + 1] if index + 1 < len(ROLE_CHAIN) else ""
 
 
-def workflow_budgets(workflow: str) -> dict[str, int]:
+def workflow_budgets(workflow: str, execution_mode: str = "full") -> dict[str, int]:
     document = load_yaml(ROOT / ".agent-workflows.yaml")
-    configured = document.get("workflows", {}).get(workflow, {}).get("budgets", {})
+    workflow_config = document.get("workflows", {}).get(workflow, {})
+    configured = workflow_config.get("budgets", {})
     defaults = {
         "max_roles": 40,
         "max_repair_iterations": 12,
@@ -697,6 +731,12 @@ def workflow_budgets(workflow: str) -> dict[str, int]:
         for key in defaults:
             if isinstance(configured.get(key), (int, float)):
                 defaults[key] = int(configured[key])
+    mode_budgets = workflow_config.get("mode_budgets", {})
+    selected = mode_budgets.get(execution_mode, {}) if isinstance(mode_budgets, dict) else {}
+    if isinstance(selected, dict):
+        for key in defaults:
+            if isinstance(selected.get(key), (int, float)):
+                defaults[key] = int(selected[key])
     return defaults
 
 
@@ -894,6 +934,218 @@ def preflight_role_execution(
     return None
 
 
+def missing_image_capability(goal: str, artifacts_dir: Path) -> str:
+    """Return a prompt failure when a task requires image assets the role cannot create."""
+
+    plan_path = artifacts_dir / "plan.md"
+    plan = plan_path.read_text(encoding="utf-8") if plan_path.exists() else ""
+    text_value = f"{goal}\n{plan}".casefold()
+    image_terms = ("image", "photo", "picture", "asset", "картин", "фотограф", "изображен")
+    generation_terms = (
+        "generate", "create new", "new asset", "distinct", "unique", "six", "each category",
+        "сгенер", "создай", "новые", "уникаль", "отдельн", "шесть", "каждой категории", "своя",
+    )
+    if (
+        any(term in text_value for term in image_terms)
+        and any(term in text_value for term in generation_terms)
+        and "image_generation" not in role_tools("implementation-agent")
+    ):
+        return (
+            "The plan requires new distinct image assets, but implementation-agent has no image-generation "
+            "capability. Supply the assets or enable an image-generation stage before resuming."
+        )
+    return ""
+
+
+def profile_required_commands(project_profile: str, group: str) -> list[str]:
+    profiles = load_yaml(ROOT / ".agent-project-profiles.yaml").get("profiles", {})
+    profile = profiles.get(project_profile, {}) if isinstance(profiles, dict) else {}
+    commands = profile.get(group, {}) if isinstance(profile, dict) else {}
+    required = commands.get("required", []) if isinstance(commands, dict) else []
+    return [str(command) for command in required if isinstance(command, str) and command.strip()]
+
+
+def run_bounded_commands(commands: list[str], repository: Path, timeout_seconds: int) -> list[dict[str, Any]]:
+    outcomes: list[dict[str, Any]] = []
+    deadline = time.monotonic() + timeout_seconds
+    for command in commands:
+        remaining = int(deadline - time.monotonic())
+        if remaining <= 0:
+            outcomes.append(
+                {
+                    "command": command,
+                    "status": "unavailable",
+                    "returncode": 124,
+                    "output": f"fast verification exceeded its shared {timeout_seconds}s budget",
+                }
+            )
+            continue
+        try:
+            argv = shlex.split(command)
+            if not argv:
+                raise ValueError("empty command")
+            completed = subprocess.run(
+                argv,
+                cwd=repository,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=remaining,
+            )
+            output = (completed.stdout or completed.stderr).strip()
+            outcomes.append(
+                {
+                    "command": command,
+                    "status": "pass" if completed.returncode == 0 else "fail",
+                    "returncode": completed.returncode,
+                    "output": output[-2000:],
+                }
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            outcomes.append({"command": command, "status": "unavailable", "returncode": 127, "output": str(exc)})
+        except subprocess.TimeoutExpired:
+            outcomes.append(
+                {
+                    "command": command,
+                    "status": "unavailable",
+                    "returncode": 124,
+                    "output": f"timed out after {remaining}s",
+                }
+            )
+    return outcomes
+
+
+def run_fast_quality(
+    *, goal: str, project_profile: str, repository: Path, artifacts_dir: Path, timeout_seconds: int
+) -> dict[str, Any]:
+    commands = profile_required_commands(project_profile, "quality_commands")
+    checks = run_bounded_commands(commands, repository, min(timeout_seconds, 180))
+    failed = [item for item in checks if item["status"] == "fail"]
+    unavailable = [item for item in checks if item["status"] == "unavailable"]
+    overall = "fail" if failed else "warn" if unavailable else "pass"
+    warnings = [f"{item['command']}: {item['output']}" for item in unavailable]
+    write_json(
+        artifacts_dir / "quality.json",
+        {
+            "task": goal,
+            "project_profile": project_profile,
+            "overall_status": overall,
+            "checks": checks,
+            "commands_attempted": commands,
+            "focused_tests_passed": not failed,
+            "repository_checks_passed": not failed and not unavailable,
+            "coverage": "not measured in fast mode",
+            "warnings": warnings,
+        },
+    )
+    result = artifact_result("Fast deterministic quality checks completed.", ["quality.json"], "continue")
+    result["warnings"] = warnings
+    if unavailable and not failed:
+        result["status"] = "awaiting_approval"
+        result["summary"] = "Required fast quality checks were unavailable."
+        result["blockers"] = warnings
+    return result
+
+
+def run_fast_security(
+    *, project_profile: str, repository: Path, artifacts_dir: Path, timeout_seconds: int
+) -> dict[str, Any]:
+    commands = profile_required_commands(project_profile, "security_commands")
+    checks = run_bounded_commands(commands, repository, min(timeout_seconds, 180))
+    failed = [item for item in checks if item["status"] == "fail"]
+    unavailable = [item for item in checks if item["status"] == "unavailable"]
+    blockers = [f"{item['command']}: {item['output']}" for item in [*failed, *unavailable]]
+    warnings = [f"{item['command']}: {item['output']}" for item in unavailable]
+    verdict = "broken" if failed else "unavailable" if unavailable else "works"
+    write_json(
+        artifacts_dir / "security.json",
+        {
+            "verdict": verdict,
+            "expected": commands,
+            "observed": [f"{item['command']}: {item['status']}" for item in checks],
+            "evidence": checks,
+            "blockers": blockers,
+            "repair_required": bool(failed),
+            "status": "fail" if failed else "warn" if unavailable else "pass",
+            "highest_severity": "medium" if failed else "none",
+            "project_profile": project_profile,
+            "findings": [],
+            "blocker_ids": [f"fast-security-{index + 1}" for index, _item in enumerate(failed)],
+            "secret_findings": [],
+            "commands_attempted": commands,
+            "warnings": warnings,
+        },
+    )
+    result = artifact_result("Fast deterministic security checks completed.", ["security.json"], "continue")
+    result["warnings"] = warnings
+    if unavailable and not failed:
+        result["status"] = "awaiting_approval"
+        result["summary"] = "Required fast security checks were unavailable."
+        result["blockers"] = blockers
+    return result
+
+
+def run_fast_orchestrator(
+    *, goal: str, project_profile: str, repository: Path, artifacts_dir: Path
+) -> dict[str, Any]:
+    risk = load_json(artifacts_dir / "risk.json")
+    quality = load_json(artifacts_dir / "quality.json")
+    security = load_json(artifacts_dir / "security.json")
+    review = load_json(artifacts_dir / "review.json")
+    paths = changed_paths(repository)
+    blockers = [
+        *[str(item) for item in security.get("blockers", [])],
+        *[str(item) for item in review.get("blockers", [])],
+    ]
+    quality_passed = quality.get("overall_status") == "pass"
+    review_works = review.get("verdict") == "works"
+    security_works = security.get("verdict") == "works"
+    risk_class = str(risk.get("risk_class", "medium"))
+    if not quality_passed or not review_works or not security_works:
+        decision = "await_approval"
+        execution_status = "blocked"
+    elif not paths:
+        decision = "no_changes"
+        execution_status = "completed"
+    else:
+        decision = "publish_pr"
+        execution_status = "completed"
+    visual_required = project_profile == "nextjs_web" and any(
+        Path(path).suffix.lower() in {".css", ".js", ".jsx", ".ts", ".tsx"} for path in paths
+    )
+    frontend = load_json(artifacts_dir / "frontend_qa.json") if (artifacts_dir / "frontend_qa.json").exists() else {}
+    visual_provided = frontend.get("verdict") == "works"
+    warnings = [
+        *[str(item) for item in quality.get("warnings", [])],
+        *[str(item) for item in security.get("warnings", [])],
+    ]
+    if visual_required and not visual_provided:
+        warnings.append("Fast mode did not collect visual evidence; publication must remain draft.")
+    write_json(
+        artifacts_dir / "verdict.json",
+        {
+            "decision": decision,
+            "execution_status": execution_status,
+            "task": goal,
+            "project_profile": project_profile,
+            "risk_class": risk_class,
+            "checks_attempted": True,
+            "checks_passed": quality_passed and review_works and security_works,
+            "blockers": blockers,
+            "warnings": warnings,
+            "high_risk_triggers": list(risk.get("high_risk_triggers", [])),
+            "protected_paths_touched": list(risk.get("protected_paths_touched", [])),
+            "visual_evidence": {"required": visual_required, "provided": visual_provided, "items": []},
+            "approval_required_before_publish": decision == "await_approval",
+            "approval_required_before_merge": True,
+            "reasoning_summary": ["Deterministic fast-mode aggregation of risk, quality, security, and review."],
+            "next_actions": ["Prepare publication inputs."] if decision == "publish_pr" else [],
+            "lessons_updated": False,
+        },
+    )
+    return artifact_result("Fast deterministic workflow verdict recorded.", ["verdict.json"], "continue")
+
+
 def run_publication(
     *,
     run_id: str,
@@ -993,7 +1245,66 @@ def run_context_compiler(
     context_dir: Path,
     project_profile: str,
     token_budget: int,
+    execution_mode: str,
 ) -> dict[str, Any]:
+    if execution_mode == "fast":
+        ensure_project_profile_artifact(artifacts_dir, project_profile)
+        profile = load_json(artifacts_dir / "project_profile.json")
+        write_json(
+            artifacts_dir / "risk.json",
+            {
+                "risk_class": "low",
+                "reasons": ["Provisional fast-mode classification; the actual diff is checked before verification."],
+                "changed_areas": [],
+                "high_risk_triggers": [],
+                "protected_paths_touched": [],
+                "protected_actions_required": [],
+                "autonomy_allowed": {
+                    "patch": True,
+                    "commit": True,
+                    "push": True,
+                    "open_pr": True,
+                    "update_pr": True,
+                    "auto_merge": False,
+                    "deploy_staging": False,
+                    "deploy_production": False,
+                },
+            },
+        )
+        plan = "\n".join(
+            [
+                "# TASK",
+                goal,
+                "",
+                "# PROJECT_PROFILE",
+                project_profile,
+                "",
+                "# MODE",
+                "Guarded fast path. Inspect only files directly relevant to the request using targeted search.",
+                "",
+                "# FILES_TO_CHANGE",
+                "Determine the smallest relevant file set; stop if the task expands beyond a narrow local patch.",
+                "",
+                "# DO_NOT_TOUCH",
+                "Protected paths, auth, billing, payments, migrations, secrets, production infrastructure, or unrelated files.",
+                "",
+                "# CHECKS_TO_RUN",
+                *[f"- {command}" for command in profile.get("quality_commands_selected", [])],
+                "",
+                "# DONE_CRITERIA",
+                "Implement the requested behavior with focused tests when applicable and a reviewable diff.",
+            ]
+        )
+        (artifacts_dir / "plan.md").write_text(plan + "\n", encoding="utf-8")
+        return {
+            "status": "completed",
+            "next_action": "implementation-agent",
+            "summary": "Fast context, provisional risk, and project profile were prepared deterministically.",
+            "artifacts_created": ["plan.md", "risk.json", "project_profile.json"],
+            "blockers": [],
+            "warnings": [],
+            "tokens_used": 0,
+        }
     contract = role_contract("planner")
     manifest_path = create_context_manifest(
         run_id=run_id,
@@ -1076,13 +1387,20 @@ def run_roles(
     base_branch: str = "main",
     adapter_command: str = "",
     token_budget: int = 12000,
-    timeout_seconds: int = 600,
+    timeout_seconds: int = 1800,
     create_task_worktree: bool = False,
     current_branch: bool = False,
+    mode: str = "auto",
     resume: bool = False,
     runtime_provider: str = "",
     runtime_command: str = "",
 ) -> dict[str, Any]:
+    if mode not in EXECUTION_MODES:
+        return {
+            "run_id": run_id or "invalid-mode",
+            "execution_status": "blocked",
+            "blockers": ["mode must be auto, fast, or full"],
+        }
     run_id = run_id or make_run_id(workflow)
     existing_workflow = RUNS / run_id / "workflow.json"
     existing: dict[str, Any] = {}
@@ -1107,6 +1425,7 @@ def run_roles(
         branch = str(existing.get("branch", branch))
         base_branch = str(existing.get("base_branch", base_branch))
         workflow = str(existing.get("workflow", workflow))
+        mode = str(existing.get("mode", mode))
         fingerprint = str(existing.get("input_fingerprint", ""))
     else:
         repository = repository.resolve()
@@ -1118,6 +1437,7 @@ def run_roles(
             branch=branch,
             base_branch=base_branch,
             workspace_mode="current_branch" if current_branch else "isolated",
+            workflow_mode=mode,
         )
         if existing.get("execution_status") == "completed" and existing.get("input_fingerprint") == fingerprint:
             return existing
@@ -1172,6 +1492,7 @@ def run_roles(
         effective_branch = str(state.get("branch", branch))
         effective_base = str(state.get("base_branch", base_branch))
         current_branch = str(state.get("workspace_mode", "isolated")) == "current_branch"
+        effective_mode = str(state.get("effective_mode", select_execution_mode(mode, goal)))
         stored_runtime = state.get("runtime", state.get("executor", {}))
         if not isinstance(stored_runtime, dict):
             stored_runtime = {}
@@ -1223,6 +1544,8 @@ def run_roles(
                         next_role = str(last_route.get("next_role", "")) if isinstance(last_route, dict) else ""
                         if next_role in ROLE_CHAIN:
                             role = next_role
+                        elif next_role == "approval-gate":
+                            resume_cached_result = completed_role_result(state, role)
             except (CheckpointError, OSError, json.JSONDecodeError, ValueError) as exc:
                 checkpoint_problem = str(exc)
                 setup_errors.append(checkpoint_problem)
@@ -1233,6 +1556,7 @@ def run_roles(
         append_trace(layout, {"event": "workflow_resumed", "role": role})
     else:
         project_profile = project_profile_for(project)
+        effective_mode = select_execution_mode(mode, goal)
         selected_provider = runtime_provider
         selected_command = runtime_command or adapter_command
         worktree, effective_branch, effective_base, setup_errors = prepare_worktree(
@@ -1274,6 +1598,8 @@ def run_roles(
             "repository": str(repository),
             "worktree": str(worktree.resolve()),
             "workspace_mode": "current_branch" if current_branch else "isolated",
+            "mode": mode,
+            "effective_mode": effective_mode,
             "branch": effective_branch,
             "base_branch": effective_base,
             "dry_run": dry_run,
@@ -1295,7 +1621,7 @@ def run_roles(
             },
             "base_branch_sha_before": git_ref_sha(repository, effective_base),
             "base_branch_sha_after": "",
-            "budgets": workflow_budgets(workflow),
+            "budgets": workflow_budgets(workflow, effective_mode),
             "loops": initial_loops(),
         }
         role = ROLE_CHAIN[0]
@@ -1433,9 +1759,12 @@ def run_roles(
         artifact_snapshot_before = file_snapshot(run_artifacts)
         role_repo_snapshot_before = git_snapshot(worktree)
         max_roles = int(state.get("budgets", {}).get("max_roles", 40))
+        effective_mode = str(state.get("effective_mode", effective_mode))
+        used_cached_result = False
         if resume_cached_result is not None:
             result = resume_cached_result
             resume_cached_result = None
+            used_cached_result = True
         elif guard > max_roles:
             result = blocked_result("Workflow routing exceeded the safety limit.", ["dynamic routing loop detected"])
         elif role == "issue-intake":
@@ -1460,6 +1789,7 @@ def run_roles(
                 context_dir=context_dir,
                 project_profile=project_profile,
                 token_budget=token_budget,
+                execution_mode=effective_mode,
             )
         elif role == "publication-prepare":
             result = run_publication_prepare(
@@ -1484,60 +1814,86 @@ def run_roles(
                 dry_run=dry_run,
                 timeout_seconds=timeout_seconds,
             )
-        else:
-            contract = role_contract(role)
-            manifest_path = create_context_manifest(
-                run_id=run_id,
-                role=role,
+        elif effective_mode == "fast" and role == "quality-runner":
+            result = run_fast_quality(
                 goal=goal,
+                project_profile=project_profile,
                 repository=worktree,
                 artifacts_dir=run_artifacts,
-                context_dir=context_dir,
-                project=project,
-                project_profile=project_profile,
-                token_budget=token_budget,
-                allowed_tools=role_tools(role),
-                previous_roles=completed_roles,
-                filesystem_access=role_filesystem_access(role),
-                prompt_path=str(contract.get("prompt_path", "")),
-                output_contract=str(contract.get("output_contract", "")),
-                expected_artifacts=list(contract.get("expected_artifacts", [])),
+                timeout_seconds=timeout_seconds,
             )
-            manifest_errors = validate_manifest(manifest_path, role)
-            if manifest_errors:
-                result = blocked_result("Context manifest failed schema validation.", manifest_errors)
+        elif effective_mode == "fast" and role == "security-agent":
+            result = run_fast_security(
+                project_profile=project_profile,
+                repository=worktree,
+                artifacts_dir=run_artifacts,
+                timeout_seconds=timeout_seconds,
+            )
+        elif effective_mode == "fast" and role == "orchestrator":
+            result = run_fast_orchestrator(
+                goal=goal,
+                project_profile=project_profile,
+                repository=worktree,
+                artifacts_dir=run_artifacts,
+            )
+        else:
+            capability_error = missing_image_capability(goal, run_artifacts) if role == "implementation-agent" else ""
+            if capability_error:
+                result = awaiting_approval_result("Required implementation capability is unavailable.", [capability_error])
             else:
-                preflight_result = preflight_role_execution(
+                contract = role_contract(role)
+                manifest_path = create_context_manifest(
+                    run_id=run_id,
                     role=role,
-                    project_profile=project_profile,
-                    artifacts_dir=run_artifacts,
-                    dry_run=dry_run,
+                    goal=goal,
                     repository=worktree,
+                    artifacts_dir=run_artifacts,
+                    context_dir=context_dir,
+                    project=project,
+                    project_profile=project_profile,
+                    token_budget=token_budget,
+                    allowed_tools=role_tools(role),
+                    previous_roles=completed_roles,
+                    filesystem_access=role_filesystem_access(role),
+                    prompt_path=str(contract.get("prompt_path", "")),
+                    output_contract=str(contract.get("output_contract", "")),
+                    expected_artifacts=list(contract.get("expected_artifacts", [])),
                 )
-                if preflight_result is not None:
-                    result = preflight_result
+                manifest_errors = validate_manifest(manifest_path, role)
+                if manifest_errors:
+                    result = blocked_result("Context manifest failed schema validation.", manifest_errors)
                 else:
-                    request = build_role_request(
-                        run_id=run_id,
+                    preflight_result = preflight_role_execution(
                         role=role,
-                        goal=goal,
                         repository=worktree,
                         artifacts_dir=run_artifacts,
-                        context_manifest=manifest_path,
-                        token_budget=token_budget,
-                        timeout_seconds=timeout_seconds,
                         project_profile=project_profile,
+                        dry_run=dry_run,
                     )
-                    write_json(requests_dir / f"{role}.json", request)
-                    result = execute_runtime_observed(
-                        runtime,
-                        run_dir=run_dir,
-                        role=role,
-                        context=manifest_path,
-                        task=request,
-                        worktree=worktree,
-                        artifacts=run_artifacts,
-                    )
+                    if preflight_result is not None:
+                        result = preflight_result
+                    else:
+                        request = build_role_request(
+                            run_id=run_id,
+                            role=role,
+                            goal=goal,
+                            repository=worktree,
+                            artifacts_dir=run_artifacts,
+                            context_manifest=manifest_path,
+                            token_budget=token_budget,
+                            timeout_seconds=min(timeout_seconds, 180) if effective_mode == "fast" else timeout_seconds,
+                            project_profile=project_profile,
+                        )
+                        write_json(requests_dir / f"{role}.json", request)
+                        result = execute_runtime_observed(
+                            runtime,
+                            run_dir=run_dir,
+                            role=role,
+                            context=manifest_path,
+                            task=request,
+                            worktree=worktree,
+                            artifacts=run_artifacts,
+                        )
 
         artifact_limit = load_recovery_policy().runtime_limits.max_artifact_bytes
         used_artifact_bytes = artifact_bytes(run_artifacts, stop_after=artifact_limit)
@@ -1604,6 +1960,8 @@ def run_roles(
             for item in contract.get("expected_artifacts", [])
             if isinstance(item, str)
         ]
+        if role == "context-compiler" and effective_mode == "fast":
+            expected_artifacts.extend(["plan.md", "risk.json", "project_profile.json"])
         owned_patterns = [
             str(item)
             for item in contract.get("owned_artifact_patterns", [])
@@ -1648,7 +2006,9 @@ def run_roles(
             "time": datetime.now(timezone.utc).isoformat(),
             "role": role,
             "execution_kind": str(role_contract(role).get("execution_kind", "llm_role")),
-            "llm_invoked": role in ADAPTER_ROLES,
+            "llm_invoked": role in ADAPTER_ROLES and not used_cached_result and not (
+                effective_mode == "fast" and role in {"quality-runner", "security-agent", "orchestrator"}
+            ),
             "prompt_file": PROMPT_FILES.get(role, ""),
             "prompt": role_prompt(role),
             "result": result,
@@ -1895,6 +2255,7 @@ def run_roles(
                     error_type="RouterBlocked", message=route["reason"],
                 )
             break
+        effective_mode = str(state.get("effective_mode", effective_mode))
         role = route["next_role"]
 
     if state["execution_status"] == "running":
@@ -1922,9 +2283,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runtime-command", default="")
     parser.add_argument("--adapter-command", default="", help=argparse.SUPPRESS)
     parser.add_argument("--token-budget", type=int, default=12000)
-    parser.add_argument("--timeout-seconds", type=int, default=600)
+    parser.add_argument("--timeout-seconds", type=int, default=1800)
     parser.add_argument("--create-worktree", action="store_true")
     parser.add_argument("--current-branch", action="store_true")
+    parser.add_argument("--mode", choices=sorted(EXECUTION_MODES), default="auto")
     parser.add_argument("--resume", action="store_true")
     return parser.parse_args()
 
@@ -1947,6 +2309,7 @@ def main() -> int:
         timeout_seconds=args.timeout_seconds,
         create_task_worktree=args.create_worktree,
         current_branch=args.current_branch,
+        mode=args.mode,
         resume=args.resume,
         runtime_provider=args.runtime_provider,
         runtime_command=args.runtime_command,
