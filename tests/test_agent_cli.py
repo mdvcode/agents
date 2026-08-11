@@ -713,6 +713,25 @@ def test_agent_answer_records_requested_input_and_resumes_same_run(
             "details": ["Choose CSV or JSON."],
             "role": "planner",
             "action": "answer_or_approve",
+            "fingerprint": "sha256:question",
+            "question": {
+                "id": "export_format",
+                "options": [
+                    {
+                        "label": "JSON",
+                        "description": "Preserves nested data.",
+                        "value": "Use JSON",
+                        "recommended": True,
+                    },
+                    {
+                        "label": "CSV",
+                        "description": "Simple tabular export.",
+                        "value": "Use CSV",
+                        "recommended": False,
+                    },
+                ],
+                "allow_custom": True,
+            },
         },
         "last_route": {"next_role": "approval-gate", "reason": "User input is required."},
         "roles": [
@@ -757,6 +776,8 @@ def test_agent_answer_records_requested_input_and_resumes_same_run(
     assert result["answer_recorded"] is True
     human_input = json.loads((run_dir / "human-input.json").read_text(encoding="utf-8"))
     assert human_input["entries"][-1]["response"] == "Use JSON"
+    assert human_input["entries"][-1]["question_id"] == "export_format"
+    assert human_input["entries"][-1]["question_fingerprint"] == "sha256:question"
     assert (run_dir / "human-input.json").stat().st_mode & 0o777 == 0o600
     approval = json.loads((run_dir / "artifacts" / "approval.json").read_text(encoding="utf-8"))
     resumed = json.loads((run_dir / "workflow.json").read_text(encoding="utf-8"))
@@ -860,7 +881,25 @@ def test_agent_status_and_watch_show_actionable_attention(
                     "summary": "Which API environment should be used?",
                     "details": ["Choose staging or local."],
                     "role": "implementation-agent",
-                    "action": "answer_or_approve",
+                    "action": "answer",
+                    "question": {
+                        "id": "api_environment",
+                        "options": [
+                            {
+                                "label": "Local",
+                                "description": "Use local services.",
+                                "value": "local",
+                                "recommended": True,
+                            },
+                            {
+                                "label": "Staging",
+                                "description": "Use shared staging services.",
+                                "value": "staging",
+                                "recommended": False,
+                            },
+                        ],
+                        "allow_custom": True,
+                    },
                 },
                 "last_route": {"next_role": "approval-gate", "reason": "Input required."},
                     "roles": [
@@ -883,6 +922,8 @@ def test_agent_status_and_watch_show_actionable_attention(
     status_output = capsys.readouterr().out
     assert "ATTENTION REQUIRED: question-task" in status_output
     assert "Which API environment should be used?" in status_output
+    assert "option 1: Local (recommended)" in status_output
+    assert "option 2: Staging" in status_output
     assert "agent answer" in status_output
     assert "agent approve" not in status_output
 

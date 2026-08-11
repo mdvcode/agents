@@ -61,6 +61,51 @@ def awaiting_run(runs: Path, repository: Path) -> Path:
     return run
 
 
+def test_metrics_expose_bounded_structured_question(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    run = runs / "question-run"
+    write_json(
+        run / "workflow.json",
+        {
+            "run_id": "question-run",
+            "task_id": "question-task",
+            "repository": str(tmp_path),
+            "execution_status": "awaiting_approval",
+            "attention": {
+                "required": True,
+                "summary": "Choose an environment.",
+                "details": ["Select one option."],
+                "action": "answer",
+                "question": {
+                    "id": "environment",
+                    "options": [
+                        {
+                            "label": "Local",
+                            "description": "Use local services.",
+                            "value": "local",
+                            "recommended": True,
+                        },
+                        {
+                            "label": "Staging",
+                            "description": "Use shared services.",
+                            "value": "staging",
+                            "recommended": False,
+                        },
+                    ],
+                    "allow_custom": True,
+                },
+            },
+        },
+    )
+
+    metrics = collect_metrics(runs_dir=runs, db_path=tmp_path / "queue.db")
+
+    attention = metrics["runs"]["items"][0]["attention"]
+    assert attention["action"] == "answer"
+    assert attention["question"]["id"] == "environment"
+    assert attention["question"]["options"][0]["recommended"] is True
+
+
 def api_request(url: str, token: str, *, method: str = "GET", body: dict[str, object] | None = None) -> dict[str, object]:
     data = json.dumps(body).encode() if body is not None else None
     request = Request(
@@ -180,6 +225,10 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         assert '<option value="fast">' in dashboard
         assert '<option value="full">' in dashboard
         assert 'id="workspaceMode"' in dashboard
+        assert "Другой ответ" in dashboard
+        assert "question.options" in dashboard
+        assert "answers:{}" in dashboard
+        assert "contains(document.activeElement)" in dashboard
         assert "api-run" not in dashboard
 
         config = api_request(f"{base}/config", access_key)

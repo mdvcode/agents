@@ -10,7 +10,7 @@ For ordinary use, open the task-control dashboard from an initialized project:
 agent dashboard
 ```
 
-This opens an authenticated local page that can launch tasks, show live queue/worker/run state, surface bounded questions, and answer, approve, retry, or abort a run through the same product CLI policy boundary. It binds only to loopback. The generated token stays in the browser session and is removed from the visible URL after startup.
+This opens an authenticated local page that can launch tasks, show live queue/worker/run state, surface bounded questions with recommended dropdown choices and a custom-answer fallback, and answer, approve, retry, or abort a run through the same product CLI policy boundary. It binds only to loopback. The generated token stays in the browser session and is removed from the visible URL after startup.
 
 The lower-level contributor command remains available:
 

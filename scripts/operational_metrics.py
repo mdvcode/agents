@@ -91,6 +91,39 @@ def run_cost(workflow: dict[str, Any], metrics: dict[str, Any]) -> float | None:
     return None
 
 
+def bounded_question(value: Any) -> dict[str, Any]:
+    """Expose only bounded choice metadata to the loopback dashboard."""
+
+    if not isinstance(value, dict):
+        return {}
+    raw_options = value.get("options", [])
+    if not isinstance(raw_options, list):
+        return {}
+    options: list[dict[str, Any]] = []
+    for raw_option in raw_options[:3]:
+        if not isinstance(raw_option, dict):
+            continue
+        label = str(raw_option.get("label", ""))[:120]
+        option_value = str(raw_option.get("value", ""))[:500]
+        if not label or not option_value:
+            continue
+        options.append(
+            {
+                "label": label,
+                "description": str(raw_option.get("description", ""))[:500],
+                "value": option_value,
+                "recommended": raw_option.get("recommended") is True,
+            }
+        )
+    if len(options) < 2:
+        return {}
+    return {
+        "id": str(value.get("id", ""))[:80],
+        "options": options,
+        "allow_custom": value.get("allow_custom") is True,
+    }
+
+
 def run_summary(run_dir: Path) -> dict[str, Any] | None:
     workflow = read_json(run_dir / "workflow.json")
     if not workflow:
@@ -126,7 +159,15 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
         elapsed_seconds = float(metrics["duration_ms"]) / 1000
     publication = read_json(run_dir / "artifacts" / "publication.json") or read_json(run_dir / "publication.json")
     raw_attention = workflow.get("attention")
-    attention = {"required": False, "summary": "", "details": [], "action": ""}
+    attention = {
+        "required": False,
+        "summary": "",
+        "details": [],
+        "action": "",
+        "question": {},
+        "fingerprint": "",
+        "repeated_question": False,
+    }
     if isinstance(raw_attention, dict) and raw_attention.get("required") is True:
         details = raw_attention.get("details", [])
         attention = {
@@ -134,6 +175,9 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
             "summary": str(raw_attention.get("summary", "Attention required"))[:1000],
             "details": [str(item)[:1000] for item in details[:10]] if isinstance(details, list) else [],
             "action": str(raw_attention.get("action", "")),
+            "question": bounded_question(raw_attention.get("question")),
+            "fingerprint": str(raw_attention.get("fingerprint", ""))[:100],
+            "repeated_question": raw_attention.get("repeated_question") is True,
         }
     runtime_spans = [span for span in spans if span.get("name") == "ai_harness.runtime.execute"]
     runtime_timeouts = sum(span.get("name") == "ai_harness.runtime.timeout" for span in spans)

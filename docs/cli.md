@@ -116,6 +116,8 @@ When execution cannot continue autonomously, status and watch print an `ATTENTIO
 agent answer <run-id> "Use the staging API and JSON output"
 ```
 
+When the role provides a small set of choices, status/watch list the recommended option first and the dashboard shows a dropdown with descriptions and a `Другой ответ` choice. After an answer, the same question cannot open another answer gate: a repeated question stops with an explicit diagnostic instead of looping silently.
+
 The answer is sanitized, stored only in the private run directory, made available to the resumed role, and resumes the same checkpoint. Do not include passwords, tokens, or customer secrets. A risk, security, protected-path, or publication decision cannot be answered away; it still requires its explicit `agent approve` command.
 
 Recovery state includes the current role, exact sanitized error type and cause, failure class, selected action, attempt budget, resume checkpoint, next retry time in UTC, branch, worktree, and worker-service health.

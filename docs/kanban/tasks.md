@@ -14,6 +14,7 @@
 - Milestone PR1 production runtime: every locally verifiable requirement, all 20 chaos scenarios, runtime preflight, and real Codex smoke are complete; only the user-excluded real 30-task multi-hour soak remains the production-readiness gate.
 
 ## Done
+- Question-loop hardening: answered-question fingerprints stop repeated gates, technical failures remain distinct from informational questions, and the dashboard offers recommended choices plus a persistent custom-answer draft.
 - Fast workflow routing: ordinary tasks now use two model-backed roles with deterministic gates, a 15-minute budget, safe full-chain escalation, checkpoint reuse, capability preflight, and a healthy packaged worker.
 - Ordinary-user distribution: one downloaded-folder installer, product-level safe update command, worker refresh, and a root quick start now replace pipx-first operating instructions.
 - Explicit task attention: background questions and prerequisites now surface through status/watch, informational answers resume the same checkpoint, approval authority remains separate, and authoritative pause states suppress empty step retries.

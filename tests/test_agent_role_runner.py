@@ -24,6 +24,94 @@ sys.modules[SPEC.name] = agent_role_runner
 SPEC.loader.exec_module(agent_role_runner)
 
 
+def test_attention_stops_a_question_that_was_already_answered() -> None:
+    state = {
+        "attention_history": [
+            {
+                "role": "planner",
+                "summary": "Which export format should be used?",
+                "resolution": "answer_recorded",
+            }
+        ]
+    }
+    question = {
+        "id": "export_format",
+        "options": [
+            {
+                "label": "CSV",
+                "description": "Simple tabular export.",
+                "value": "csv",
+                "recommended": False,
+            },
+            {
+                "label": "JSON",
+                "description": "Preserves nested data.",
+                "value": "json",
+                "recommended": True,
+            },
+        ],
+        "allow_custom": True,
+    }
+    legacy_fingerprint = agent_role_runner.attention_fingerprint(
+        role="planner",
+        summary="Which export format should be used?",
+    )
+    state["attention_history"][0]["fingerprint"] = legacy_fingerprint
+
+    repeated = agent_role_runner.set_attention(
+        state,
+        summary="Which export format should be used?",
+        details=["Choose CSV or JSON."],
+        role="planner",
+        action="answer",
+        question=question,
+        stop_if_previously_answered=True,
+    )
+
+    assert repeated is True
+    assert state["attention"]["action"] == "fix_then_retry"
+    assert state["attention"]["repeated_question"] is True
+    assert "repeated" in state["attention"]["summary"].lower()
+
+
+def test_question_options_are_bounded_and_recommended_option_is_first() -> None:
+    state: dict[str, object] = {}
+
+    repeated = agent_role_runner.set_attention(
+        state,
+        summary="Choose an environment.",
+        details=[],
+        role="planner",
+        action="answer",
+        question={
+            "id": "Environment Choice",
+            "options": [
+                {"label": "Local", "value": "local", "recommended": False},
+                {"label": "Staging", "value": "staging", "recommended": True},
+                {"label": "Preview", "value": "preview", "recommended": False},
+                {"label": "Production", "value": "production", "recommended": False},
+            ],
+            "allow_custom": True,
+        },
+    )
+
+    assert repeated is False
+    question = state["attention"]["question"]  # type: ignore[index]
+    assert question["id"] == "environment_choice"
+    assert [option["value"] for option in question["options"]] == [
+        "staging",
+        "local",
+        "preview",
+    ]
+    assert question["options"][0]["recommended"] is True
+
+
+def test_technical_failures_are_not_classified_as_answerable_questions() -> None:
+    assert agent_role_runner.role_attention_action({"status": "blocked"}) == "approve"
+    assert agent_role_runner.role_attention_action({"status": "failed"}) == "approve"
+    assert agent_role_runner.role_attention_action({"status": "awaiting_approval"}) == "answer"
+
+
 def fake_adapter_script(path: Path) -> str:
     path.write_text(
         """
@@ -438,6 +526,90 @@ def test_approved_run_resumes_same_worktree_from_checkpoint(tmp_path: Path, monk
     assert renewed["approval_id"] != approval["approval_id"]
     assert renewed["reason"] == "Publication executor blocked or failed."
     assert resumed["attention"]["summary"] == renewed["reason"]
+
+
+def test_resumed_run_stops_instead_of_reopening_the_same_question(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    runs = tmp_path / ".agent-runs"
+    monkeypatch.setattr(agent_role_runner, "RUNS", runs)
+    command = fake_adapter_script(tmp_path / "fake_adapter.py")
+
+    def ask_same_question(*args: object, **kwargs: object) -> dict[str, object]:
+        artifacts = Path(str(kwargs["artifacts"]))
+        (artifacts / "plan.md").write_text("# Plan\n", encoding="utf-8")
+        return {
+            "status": "awaiting_approval",
+            "next_action": "awaiting_approval",
+            "summary": "Which export format should be used?",
+            "artifacts_created": ["plan.md"],
+            "blockers": ["Choose CSV or JSON."],
+            "warnings": [],
+            "tokens_used": 1,
+            "question": {
+                "id": "export_format",
+                "options": [
+                    {
+                        "label": "JSON",
+                        "description": "Preserves nested data.",
+                        "value": "json",
+                        "recommended": True,
+                    },
+                    {
+                        "label": "CSV",
+                        "description": "Simple tabular export.",
+                        "value": "csv",
+                        "recommended": False,
+                    },
+                ],
+                "allow_custom": True,
+            },
+        }
+
+    monkeypatch.setattr(agent_role_runner, "execute_runtime_observed", ask_same_question)
+    first = agent_role_runner.run_roles(
+        run_id="repeat-question",
+        repository=tmp_path,
+        adapter_command=command,
+        dry_run=True,
+    )
+    run_dir = runs / "repeat-question"
+    approval = approve_run(run_dir, actor="user")
+    workflow_path = run_dir / "workflow.json"
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    attention = workflow.pop("attention")
+    workflow["attention_history"] = [
+        {**attention, "required": False, "resolution": "answer_recorded"}
+    ]
+    workflow["blockers"] = []
+    workflow_path.write_text(json.dumps(workflow), encoding="utf-8")
+    checkpoint = agent_role_runner.read_checkpoint(run_dir, "planner")
+    assert checkpoint is not None
+    agent_role_runner.write_checkpoint(
+        run_dir,
+        agent_role_runner.RoleCheckpoint(
+            run_id=checkpoint.run_id,
+            role=checkpoint.role,
+            state="role_pending",
+            attempt=checkpoint.attempt,
+            worktree=checkpoint.worktree,
+            input_fingerprint=checkpoint.input_fingerprint,
+        ),
+    )
+    prepare_resume(run_dir)
+
+    resumed = agent_role_runner.run_roles(run_id="repeat-question", resume=True, dry_run=True)
+
+    assert first["execution_status"] == "awaiting_approval"
+    assert resumed["execution_status"] == "blocked"
+    assert resumed["attention"]["repeated_question"] is True
+    assert resumed["attention"]["action"] == "fix_then_retry"
+    current_approval = json.loads(
+        (run_dir / "artifacts" / "approval.json").read_text(encoding="utf-8")
+    )
+    assert current_approval["approval_id"] == approval["approval_id"]
+    assert current_approval["status"] == "consumed"
 
 
 def test_approval_request_failure_replaces_stale_question_with_actionable_attention(
