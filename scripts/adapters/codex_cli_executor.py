@@ -271,6 +271,31 @@ def standard_role_result_schema(output_contract: dict[str, Any]) -> dict[str, An
             "blockers": {"type": "array", "items": {"type": "string"}},
             "warnings": {"type": "array", "items": {"type": "string"}},
             "tokens_used": {"type": "integer"},
+            "question": {
+                "type": ["object", "null"],
+                "properties": {
+                    "id": {"type": "string"},
+                    "options": {
+                        "type": "array",
+                        "minItems": 2,
+                        "maxItems": 3,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {"type": "string"},
+                                "description": {"type": "string"},
+                                "value": {"type": "string"},
+                                "recommended": {"type": "boolean"},
+                            },
+                            "required": ["label", "description", "value", "recommended"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "allow_custom": {"type": "boolean"},
+                },
+                "required": ["id", "options", "allow_custom"],
+                "additionalProperties": False,
+            },
         },
         "required": [
             "status",
@@ -281,6 +306,7 @@ def standard_role_result_schema(output_contract: dict[str, Any]) -> dict[str, An
             "blockers",
             "warnings",
             "tokens_used",
+            "question",
         ],
         "additionalProperties": False,
     }
@@ -394,7 +420,9 @@ def human_input_contents(request: dict[str, Any]) -> str:
             continue
         response = str(entry.get("response", "")).strip()
         if response:
-            lines.append(f"- {response[:2000]}")
+            question_id = str(entry.get("question_id", "")).strip()[:80]
+            prefix = f"[{question_id}] " if question_id else ""
+            lines.append(f"- {prefix}{response[:2000]}")
     return "\n".join(lines)[:10_000] or "No user answer has been recorded for this run."
 
 
@@ -422,7 +450,13 @@ def role_prompt_payload(
                 "a user decision, access, or external state is genuinely required, do not invent it and do not "
                 "perform empty retries. Return status=awaiting_approval, next_action=awaiting_approval, put one "
                 "concise question or required action in summary, and put every concrete missing item in blockers. "
-                "Never return blocked or awaiting_approval with an empty blockers list."
+                "When the question has a small closed set of answers, also return question with a stable short id, "
+                "2-3 mutually exclusive options, the recommended option first, concise descriptions, and "
+                "allow_custom=true unless free-form input would be unsafe. Treat recorded user answers as "
+                "authoritative: never ask a substantially identical question again after it was answered. If an "
+                "answer is insufficient or contradictory, identify the new specific gap instead. Return "
+                "question=null when no question is needed. Never return blocked or awaiting_approval with an "
+                "empty blockers list."
             ),
             "Required JSON response schema:",
             json.dumps(standard_role_result_schema(output_contract), indent=2, ensure_ascii=False),

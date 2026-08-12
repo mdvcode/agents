@@ -58,9 +58,21 @@ agent watch --run-id <run-id>
 
 Use `agent approve` only for the explicit risk/security/publication decision printed by status. `agent answer` is deliberately unable to replace such approval. Never put credentials or private customer data in an answer.
 
+## Execution bounds
+
+- One model-backed role executor has a 30-minute emergency limit. This is not the task duration. The full process tree is terminated when the limit, cancellation, output limit, or idle limit is reached.
+- Fast mode has a 15-minute workflow limit. Ordinary `full` mode has a 60-minute workflow limit. Multi-hour execution is never auto-selected: explicit `goal` mode has a 4-hour limit and uses the full specialist route with checkpoints. The outer worker stops a workflow subprocess that produces no output for 35 minutes; an individual model executor remains subject to the shorter 30-minute role cap and the remaining workflow budget.
+- Role/iteration limits, total workflow time, automatic-recovery time, token budgets, and human-attention waits are independent controls. The worker's 4-hour outer limit is the `goal` cap and a failsafe for ordinary modes, whose shorter limits apply first.
+- Automatic recovery has at most eight total recovery decisions, three checkpoint resumes, five consecutive failures, and 30 minutes from the first recorded failure. A resumed process receives only the remaining recovery time.
+- `agent watch` returns after 30 minutes by default without stopping the task. `--timeout 0` is the explicit indefinite terminal-wait mode.
+- A queued task is retained indefinitely when no worker is available so work is not discarded. This is not treated as active execution: `agent watch` returns immediately with `agent start`, and `agent status` shows the queue age.
+- Human approval expires after 24 hours. Approval is an intentional wait, not a running process; expiry moves both workflow and queue to `blocked`, and a corrected task can then be retried.
+
+These are wall-clock safety limits, not performance targets. A task that repeatedly reaches a limit should be inspected with `agent status` and `agent failures`, not restarted blindly.
+
 ## What the states mean
 
-- `queued`: the task is waiting. `agent task` normally starts the worker; if it later stops, use `agent start`.
+- `queued`: the task is waiting and its age is shown. `agent task` normally starts the worker; if it later stops, `agent watch` returns immediately and tells you to use `agent start`.
 - `running`: a worker owns the task. Use `agent status`; do not enqueue a duplicate.
 - `retry_wait`, `repairing`, or `resuming`: automatic recovery is active. The status output shows the cause, attempt count, checkpoint, and next retry time.
 - `awaiting_approval`: a human decision is required. `agent status` prints the exact scoped `agent approve --run-id ...` command and the reason. Approve only when that reason and scope are acceptable.

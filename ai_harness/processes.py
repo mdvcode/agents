@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,16 @@ class ManagedProcessResult:
 
 def _process_running(process: Any) -> bool:
     return process.poll() is None
+
+
+def _pid_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except (OSError, ProcessLookupError):
+        return False
+    return True
 
 
 def _descendant_pids(parent_pid: int) -> set[int]:
@@ -112,11 +123,10 @@ def terminate_process_group(process: Any, *, grace_seconds: float) -> None:
         return
 
     deadline = time.monotonic() + max(0.0, grace_seconds)
-    while _process_running(process) and time.monotonic() < deadline:
-        time.sleep(0.05)
-    if not _process_running(process) and not descendants:
-        return
-    while descendants and time.monotonic() < deadline:
+    while time.monotonic() < deadline:
+        descendants = {pid for pid in descendants if _pid_running(pid)}
+        if not _process_running(process) and not descendants:
+            return
         time.sleep(0.05)
     try:
         if pid > 0 and hasattr(os, "killpg"):
@@ -260,67 +270,62 @@ def run_managed_process(
             open_file_limit_exceeded=True,
         )
 
-    with stdout_path.open("wb") as stdout_handle, stderr_path.open("wb") as stderr_handle:
-        process = popen_factory(
-            list(command),
-            cwd=cwd,
-            stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
-            stdout=stdout_handle,
-            stderr=stderr_handle,
-            env=env,
-            start_new_session=True,
-        )
-        if input_text is not None:
-            encoded = input_text.encode("utf-8")
-            stdin = getattr(process, "stdin", None)
-            if stdin is None:
-                terminate_process_group(process, grace_seconds=shutdown_grace_seconds)
-                raise RuntimeError("managed process stdin is unavailable")
-            try:
-                stdin.write(encoded)
-                stdin.flush()
-            except BrokenPipeError:
-                pass
-            finally:
-                stdin.close()
+    input_handle = tempfile.TemporaryFile() if input_text is not None else None
+    try:
+        if input_handle is not None:
+            input_handle.write(input_text.encode("utf-8"))
+            input_handle.seek(0)
+        with stdout_path.open("wb") as stdout_handle, stderr_path.open("wb") as stderr_handle:
+            process = popen_factory(
+                list(command),
+                cwd=cwd,
+                stdin=input_handle if input_handle is not None else subprocess.DEVNULL,
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                env=env,
+                start_new_session=True,
+            )
 
-        try:
-            while _process_running(process):
-                now = time.monotonic()
-                size = _combined_size(stdout_path, stderr_path)
-                if size != previous_size:
-                    previous_size = size
-                    last_activity = now
-                if size > max_output_bytes:
-                    output_limit_exceeded = True
-                    terminate_process_group(process, grace_seconds=shutdown_grace_seconds)
-                    break
-                if max_artifact_bytes is not None and _tree_size(artifact_paths) > max_artifact_bytes:
-                    artifact_limit_exceeded = True
-                    terminate_process_group(process, grace_seconds=shutdown_grace_seconds)
-                    break
-                if cancel_requested is not None and cancel_requested():
-                    cancelled = True
-                    terminate_process_group(process, grace_seconds=shutdown_grace_seconds)
-                    break
-                if shutdown_requested is not None and shutdown_requested():
-                    stopping = True
-                    terminate_process_group(process, grace_seconds=shutdown_grace_seconds)
-                    break
-                if now - started >= timeout_seconds:
-                    timed_out = True
-                    terminate_process_group(process, grace_seconds=shutdown_grace_seconds)
-                    break
-                if now - last_activity >= idle_timeout_seconds:
-                    idle_timed_out = True
-                    terminate_process_group(process, grace_seconds=shutdown_grace_seconds)
-                    break
-                if on_poll is not None:
-                    on_poll()
-                time.sleep(poll_seconds)
-        except Exception:
-            terminate_process_group(process, grace_seconds=shutdown_grace_seconds)
-            raise
+            try:
+                while _process_running(process):
+                    now = time.monotonic()
+                    size = _combined_size(stdout_path, stderr_path)
+                    if size != previous_size:
+                        previous_size = size
+                        last_activity = now
+                    if size > max_output_bytes:
+                        output_limit_exceeded = True
+                        terminate_process_group(process, grace_seconds=shutdown_grace_seconds)
+                        break
+                    if max_artifact_bytes is not None and _tree_size(artifact_paths) > max_artifact_bytes:
+                        artifact_limit_exceeded = True
+                        terminate_process_group(process, grace_seconds=shutdown_grace_seconds)
+                        break
+                    if cancel_requested is not None and cancel_requested():
+                        cancelled = True
+                        terminate_process_group(process, grace_seconds=shutdown_grace_seconds)
+                        break
+                    if shutdown_requested is not None and shutdown_requested():
+                        stopping = True
+                        terminate_process_group(process, grace_seconds=shutdown_grace_seconds)
+                        break
+                    if now - started >= timeout_seconds:
+                        timed_out = True
+                        terminate_process_group(process, grace_seconds=shutdown_grace_seconds)
+                        break
+                    if now - last_activity >= idle_timeout_seconds:
+                        idle_timed_out = True
+                        terminate_process_group(process, grace_seconds=shutdown_grace_seconds)
+                        break
+                    if on_poll is not None:
+                        on_poll()
+                    time.sleep(poll_seconds)
+            except Exception:
+                terminate_process_group(process, grace_seconds=shutdown_grace_seconds)
+                raise
+    finally:
+        if input_handle is not None:
+            input_handle.close()
 
     if _combined_size(stdout_path, stderr_path) > max_output_bytes:
         output_limit_exceeded = True

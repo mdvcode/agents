@@ -23,7 +23,7 @@ Task enqueue -> SQLite lease -> worker heartbeat -> Task Intake binds the prepar
 
 Approval required -> run-scoped request and checkpoint fingerprint -> exact-scope human decision -> consume once -> queue existing run id -> resume same worktree/checkpoint -> continue deterministic gates.
 
-Missing information -> role returns `awaiting_approval` with a concrete question -> workflow and queue preserve `ATTENTION REQUIRED` details -> `agent watch`/`agent status` prints the question -> `agent answer <run-id> ...` records sanitized private input -> consumes only the matching scoped continuation gate -> same run/checkpoint resumes with the answer in its role prompt.
+Missing information -> role returns `awaiting_approval` with a concrete question and optional 2-3 structured choices -> workflow and queue preserve `ATTENTION REQUIRED` details -> dashboard/status/watch show the choices plus a custom-answer path -> `agent answer <run-id> ...` records sanitized private input -> consumes only the matching scoped continuation gate -> same run/checkpoint resumes with the answer in its role prompt -> a repeated fingerprint after an answer stops as a visible technical blocker instead of opening another question gate.
 
 Worker process dies -> heartbeat stops -> lease expires -> task requeued with existing run id -> replacement worker detects running/resuming workflow -> `--resume` from checkpoint.
 

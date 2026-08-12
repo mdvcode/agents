@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -102,7 +103,7 @@ PROMPT_FILES = {
 }
 DEFAULT_ALLOWED_TOOLS = ["filesystem_read", "repository_search"]
 KNOWN_PROJECT_PROFILES = {"agent_workspace", "django", "nextjs_web"}
-EXECUTION_MODES = {"auto", "fast", "full"}
+EXECUTION_MODES = {"auto", "fast", "full", "goal"}
 FULL_HINTS = (
     "auth", "permission", "migration", "billing", "payment", "secret", "production", "deploy",
     "database schema", "public api", "dependency", "package upgrade", "architecture", "refactor",
@@ -112,6 +113,8 @@ FULL_HINTS = (
 
 
 def select_execution_mode(requested: str, goal: str) -> str:
+    if requested == "goal":
+        return "goal"
     if requested == "full":
         return "full"
     if requested == "fast":
@@ -378,7 +381,9 @@ def set_attention(
     details: list[str],
     role: str,
     action: str,
-) -> None:
+    question: Any = None,
+    stop_if_previously_answered: bool = False,
+) -> bool:
     """Persist one concise, user-facing explanation for a paused workflow."""
 
     normalized = list(
@@ -386,15 +391,134 @@ def set_attention(
     )
     if not normalized:
         normalized = [summary]
-    state["attention"] = {
+    normalized_question = normalize_question(question)
+    fingerprint = attention_fingerprint(
+        role=role,
+        summary=summary,
+        question_id=str(normalized_question.get("id", "")),
+    )
+    candidate_fingerprints = {
+        fingerprint,
+        attention_fingerprint(role=role, summary=summary),
+    }
+    if stop_if_previously_answered and question_was_answered(state, candidate_fingerprints):
+        repeated_details = [
+            f"Repeated question: {summary}",
+            "The prior answer is already recorded; inspect the role prompt or task context before retrying.",
+        ]
+        state["attention"] = {
+            "required": True,
+            "summary": "The system repeated a previously answered question and was stopped.",
+            "details": repeated_details,
+            "role": role,
+            "action": "fix_then_retry",
+            "fingerprint": fingerprint,
+            "repeated_question": True,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        state["blockers"] = repeated_details
+        return True
+    attention = {
         "required": True,
         "summary": summary,
         "details": normalized,
         "role": role,
         "action": action,
+        "fingerprint": fingerprint,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+    if normalized_question:
+        attention["question"] = normalized_question
+    state["attention"] = attention
     state["blockers"] = normalized
+    return False
+
+
+def normalize_question(value: Any) -> dict[str, Any]:
+    """Bound a model-provided question to the small dashboard interaction contract."""
+
+    if not isinstance(value, dict):
+        return {}
+    question_id = re.sub(r"[^a-z0-9_]+", "_", str(value.get("id", "")).casefold()).strip("_")[:80]
+    raw_options = value.get("options", [])
+    if not question_id or not isinstance(raw_options, list):
+        return {}
+    options: list[dict[str, Any]] = []
+    seen_values: set[str] = set()
+    for raw_option in raw_options:
+        if not isinstance(raw_option, dict):
+            continue
+        label = str(raw_option.get("label", "")).strip()[:120]
+        option_value = str(raw_option.get("value", label)).strip()[:500]
+        if not label or not option_value or option_value in seen_values:
+            continue
+        seen_values.add(option_value)
+        options.append(
+            {
+                "label": label,
+                "description": str(raw_option.get("description", "")).strip()[:500],
+                "value": option_value,
+                "recommended": bool(raw_option.get("recommended", False)),
+            }
+        )
+        if len(options) == 3:
+            break
+    if len(options) < 2:
+        return {}
+    recommended = [option for option in options if option["recommended"]]
+    if recommended:
+        selected = recommended[0]
+        options = [selected, *[option for option in options if option is not selected]]
+    for index, option in enumerate(options):
+        option["recommended"] = index == 0
+    return {
+        "id": question_id,
+        "options": options,
+        "allow_custom": bool(value.get("allow_custom", True)),
+    }
+
+
+def attention_fingerprint(*, role: str, summary: str, question_id: str = "") -> str:
+    identity = question_id or re.sub(r"\W+", " ", summary.casefold()).strip()
+    value = f"{role.casefold().strip()}\0{identity}"
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def question_was_answered(state: dict[str, Any], fingerprints: set[str]) -> bool:
+    history = state.get("attention_history", [])
+    if not isinstance(history, list):
+        return False
+    for item in reversed(history):
+        if not isinstance(item, dict) or item.get("resolution") != "answer_recorded":
+            continue
+        previous_question = item.get("question", {})
+        previous_question_id = (
+            str(previous_question.get("id", ""))
+            if isinstance(previous_question, dict)
+            else ""
+        )
+        previous_fingerprints = {
+            str(item.get("fingerprint", "")),
+            attention_fingerprint(
+                role=str(item.get("role", "")),
+                summary=str(item.get("summary", "")),
+            ),
+            attention_fingerprint(
+                role=str(item.get("role", "")),
+                summary=str(item.get("summary", "")),
+                question_id=previous_question_id,
+            ),
+        }
+        previous_fingerprints.discard("")
+        if previous_fingerprints & fingerprints:
+            return True
+    return False
+
+
+def role_attention_action(result: dict[str, Any]) -> str:
+    """Only a deliberate role question may be resolved with informational input."""
+
+    return "answer" if result.get("status") == "awaiting_approval" else "approve"
 
 
 def validate_role_result(result: dict[str, Any], role: str) -> list[str]:
@@ -724,7 +848,7 @@ def workflow_budgets(workflow: str, execution_mode: str = "full") -> dict[str, i
     defaults = {
         "max_roles": 40,
         "max_repair_iterations": 12,
-        "max_duration_seconds": 7200,
+        "max_duration_seconds": 3600,
         "max_tokens": 300000,
     }
     if isinstance(configured, dict):
@@ -1399,7 +1523,7 @@ def run_roles(
         return {
             "run_id": run_id or "invalid-mode",
             "execution_status": "blocked",
-            "blockers": ["mode must be auto, fast, or full"],
+            "blockers": ["mode must be auto, fast, full, or goal"],
         }
     run_id = run_id or make_run_id(workflow)
     existing_workflow = RUNS / run_id / "workflow.json"
@@ -2048,32 +2172,47 @@ def run_roles(
             write_metrics(layout, state)
             append_trace(layout, {"event": "role_recovery_scheduled", "role": role, **recovery_event})
             if state["execution_status"] == "awaiting_approval":
-                set_attention(
+                attention_action = role_attention_action(result)
+                is_question = attention_action == "answer"
+                repeated_question = set_attention(
                     state,
                     summary=str(result.get("summary", state.get("recovery_reason", "User input is required."))),
                     details=[str(item) for item in result.get("blockers", [])],
                     role=role,
-                    action="answer_or_approve",
+                    action=attention_action,
+                    question=result.get("question"),
+                    stop_if_previously_answered=is_question,
                 )
-                try:
-                    request_approval(
-                        layout.root,
-                        reason=str(state["attention"]["summary"]),
-                    )
-                except ApprovalError as exc:
+                if repeated_question:
                     state["execution_status"] = "blocked"
-                    set_attention(
-                        state,
-                        summary="The approval request could not be created.",
-                        details=[f"approval request failed: {exc}"],
-                        role="approval-gate",
-                        action="fix_then_retry",
-                    )
                     persist_control_failure(
-                        layout, state, role="approval-gate", stage="approval",
-                        kind="internal_error", error_type="ApprovalRequestFailed", message=str(exc),
+                        layout, state, role=role, stage="role", kind="internal_error",
+                        error_type="RepeatedQuestion", message=str(state["attention"]["summary"]),
                     )
-                    write_json(layout.workflow, state)
+                    append_trace(
+                        layout,
+                        {"event": "repeated_question_stopped", "role": role},
+                    )
+                else:
+                    try:
+                        request_approval(
+                            layout.root,
+                            reason=str(state["attention"]["summary"]),
+                        )
+                    except ApprovalError as exc:
+                        state["execution_status"] = "blocked"
+                        set_attention(
+                            state,
+                            summary="The approval request could not be created.",
+                            details=[f"approval request failed: {exc}"],
+                            role="approval-gate",
+                            action="fix_then_retry",
+                        )
+                        persist_control_failure(
+                            layout, state, role="approval-gate", stage="approval",
+                            kind="internal_error", error_type="ApprovalRequestFailed", message=str(exc),
+                        )
+                        write_json(layout.workflow, state)
             state["base_branch_sha_after"] = git_ref_sha(repository, effective_base)
             write_json(layout.workflow, state)
             write_metrics(layout, state)
@@ -2176,61 +2315,75 @@ def run_roles(
                     if result.get("status") in {"blocked", "failed", "awaiting_approval"}
                     else ""
                 ) or route["reason"]
-                attention_action = (
-                    "answer_or_approve"
-                    if result.get("status") in {"blocked", "failed", "awaiting_approval"}
-                    else "approve"
-                )
-                set_attention(
+                attention_action = role_attention_action(result)
+                is_question = attention_action == "answer"
+                repeated_question = set_attention(
                     state,
                     summary=attention_summary,
                     details=attention_details,
                     role=role,
                     action=attention_action,
+                    question=result.get("question"),
+                    stop_if_previously_answered=is_question,
                 )
-                approval_checkpoint = {
-                    "time": datetime.now(timezone.utc).isoformat(),
-                    "role": "approval-gate",
-                    "execution_kind": "harness_stage",
-                    "llm_invoked": False,
-                    "prompt_file": "",
-                    "prompt": "",
-                    "result": approval,
-                }
-                state["roles"].append(approval_checkpoint)
-                state["role_count"] = len(state["roles"])
-                write_json(layout.role_results / "approval-gate-1.json", approval_checkpoint)
-                write_json(layout.workflow, state)
-                try:
-                    request_approval(layout.root, reason=attention_summary)
-                except ApprovalError as exc:
+                if repeated_question:
                     state["execution_status"] = "blocked"
-                    set_attention(
-                        state,
-                        summary="The approval request could not be created.",
-                        details=[f"approval request failed: {exc}"],
-                        role="approval-gate",
-                        action="fix_then_retry",
-                    )
                     record_failure(
                         layout,
-                        stage="approval",
-                        code="APPROVAL_REQUEST_FAILED",
-                        message="Could not create scoped approval request.",
-                        details=[str(exc)],
+                        stage="routing",
+                        code="REPEATED_QUESTION",
+                        message=str(state["attention"]["summary"]),
+                        details=list(state["attention"]["details"]),
                     )
                     persist_control_failure(
-                        layout, state, role="approval-gate", stage="approval",
-                        kind="internal_error", error_type="ApprovalRequestFailed", message=str(exc),
+                        layout, state, role=role, stage="routing", kind="internal_error",
+                        error_type="RepeatedQuestion", message=str(state["attention"]["summary"]),
                     )
-                append_trace(layout, {"event": "workflow_awaiting_approval", "reason": route["reason"]})
-                record_failure(
-                    layout,
-                    stage="routing",
-                    code="AWAITING_APPROVAL",
-                    message=route["reason"],
-                    details=route.get("warnings", []),
-                )
+                    append_trace(layout, {"event": "repeated_question_stopped", "role": role})
+                else:
+                    approval_checkpoint = {
+                        "time": datetime.now(timezone.utc).isoformat(),
+                        "role": "approval-gate",
+                        "execution_kind": "harness_stage",
+                        "llm_invoked": False,
+                        "prompt_file": "",
+                        "prompt": "",
+                        "result": approval,
+                    }
+                    state["roles"].append(approval_checkpoint)
+                    state["role_count"] = len(state["roles"])
+                    write_json(layout.role_results / "approval-gate-1.json", approval_checkpoint)
+                    write_json(layout.workflow, state)
+                    try:
+                        request_approval(layout.root, reason=attention_summary)
+                    except ApprovalError as exc:
+                        state["execution_status"] = "blocked"
+                        set_attention(
+                            state,
+                            summary="The approval request could not be created.",
+                            details=[f"approval request failed: {exc}"],
+                            role="approval-gate",
+                            action="fix_then_retry",
+                        )
+                        record_failure(
+                            layout,
+                            stage="approval",
+                            code="APPROVAL_REQUEST_FAILED",
+                            message="Could not create scoped approval request.",
+                            details=[str(exc)],
+                        )
+                        persist_control_failure(
+                            layout, state, role="approval-gate", stage="approval",
+                            kind="internal_error", error_type="ApprovalRequestFailed", message=str(exc),
+                        )
+                    append_trace(layout, {"event": "workflow_awaiting_approval", "reason": route["reason"]})
+                    record_failure(
+                        layout,
+                        stage="routing",
+                        code="AWAITING_APPROVAL",
+                        message=route["reason"],
+                        details=route.get("warnings", []),
+                    )
             elif route["next_role"] == "":
                 state["execution_status"] = "completed"
             else:

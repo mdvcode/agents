@@ -14,6 +14,7 @@
 - None.
 
 ## Done
+- Hang-boundary regressions cover large unread stdin, workflow and fast-mode remaining deadlines, expired recovery dead-lettering, approval-expiry queue synchronization, descendant termination, prompt grace return, bounded watch, and immediate missing-worker diagnosis; runtime-chaos, the full suite, and real Codex smoke pass.
 - Dashboard verification: three focused control tests, wheel inspection, security scan, and desktop/mobile browser checks with no console errors or horizontal overflow.
 - Task-branch resilience covers long security prompts, bounded automatic names, Git-valid Unicode and punctuation in existing branches, and actionable rejection of genuinely unsafe refs.
 - Ordinary-user install/update verification: installer syntax, executable mode, no-sudo behavior, paths with spaces, pipx boundary, ignored local setup, safe Git update refusal, package refresh, and worker restart have focused regression coverage.

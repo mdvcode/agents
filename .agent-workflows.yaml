@@ -5,7 +5,7 @@ workflows:
     budgets:
       max_roles: 40
       max_repair_iterations: 12
-      max_duration_seconds: 7200
+      max_duration_seconds: 3600
       max_tokens: 1500000
     mode_budgets:
       fast:
@@ -13,10 +13,15 @@ workflows:
         max_repair_iterations: 1
         max_duration_seconds: 900
         max_tokens: 300000
+      goal:
+        max_roles: 80
+        max_repair_iterations: 24
+        max_duration_seconds: 14400
+        max_tokens: 3000000
     runtime_provider: codex-cli
     executor: "python3 scripts/agent_role_runner.py --workflow full_agent_workflow --run-id {run_id} --task-id {task_id} --goal {goal} --project {project} --repo {repository} --branch {branch} --base-branch {base_branch} --artifacts-dir {artifacts_dir} --create-worktree --runtime-provider {runtime_provider}"
     max_iterations: 1
-    timeout_seconds: 7200
+    timeout_seconds: 14400
     retry:
       max_retries: 0
       backoff_seconds: 0

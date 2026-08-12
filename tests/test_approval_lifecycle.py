@@ -100,6 +100,23 @@ def test_rejection_blocks_workflow(tmp_path: Path) -> None:
 
 def test_expired_approval_cannot_resume(tmp_path: Path) -> None:
     run = awaiting_run(tmp_path)
+    queue = TaskQueue(tmp_path / ".agent-queue" / "tasks.db")
+    queued = queue.enqueue(
+        task_key="approval-expiry",
+        payload={"task_id": "approval-expiry", "repository": str(tmp_path)},
+        run_id="run-approval",
+    )
+    claimed = queue.claim(worker_id="worker-1", lease_seconds=30)
+    assert claimed is not None and claimed.id == queued.id
+    assert queue.mark_running(queued.id, "worker-1")
+    queue.finish(
+        task_id=queued.id,
+        worker_id="worker-1",
+        status="awaiting_approval",
+        run_id="run-approval",
+        requires_human=True,
+        exception_reason="review required",
+    )
     approval = request_approval(run, reason="review required")
     approval["expires_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
 
@@ -110,6 +127,12 @@ def test_expired_approval_cannot_resume(tmp_path: Path) -> None:
     workflow = json.loads((run / "workflow.json").read_text(encoding="utf-8"))
     assert workflow["execution_status"] == "blocked"
     assert "APPROVAL_EXPIRED" in (run / "errors.jsonl").read_text(encoding="utf-8")
+    expired_task = queue.get(queued.id)
+    assert expired_task is not None
+    assert expired_task.status == "blocked"
+    assert expired_task.exception_reason == "approval expired"
+    recovered = queue.recover_run("run-approval", action="retry")
+    assert recovered.status == "retry_wait"
 
 
 def test_resume_enqueues_same_run_and_checkpoint(tmp_path: Path) -> None:

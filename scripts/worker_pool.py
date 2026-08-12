@@ -133,8 +133,8 @@ def safe_payload(record: TaskRecord) -> dict[str, str]:
     if workspace_mode not in {"isolated", "current_branch"}:
         raise ValueError("workspace_mode must be isolated or current_branch")
     mode = record.payload.get("mode", "auto")
-    if mode not in {"auto", "fast", "full"}:
-        raise ValueError("mode must be auto, fast, or full")
+    if mode not in {"auto", "fast", "full", "goal"}:
+        raise ValueError("mode must be auto, fast, full, or goal")
     if (
         record.payload.get("adapter_command") or record.payload.get("runtime_command")
     ) and os.environ.get("AGENT_HARNESS_TEST_MODE") != "1":

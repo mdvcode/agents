@@ -175,8 +175,18 @@ def test_worker_rejects_unknown_execution_mode(tmp_path: Path) -> None:
         payload={"task_id": "unsafe-mode", "repository": str(tmp_path), "mode": "turbo"},
     )
 
-    with pytest.raises(ValueError, match="mode must be auto, fast, or full"):
+    with pytest.raises(ValueError, match="mode must be auto, fast, full, or goal"):
         safe_payload(record)
+
+
+def test_worker_accepts_explicit_goal_mode(tmp_path: Path) -> None:
+    queue = TaskQueue(tmp_path / "queue.db")
+    record = queue.enqueue(
+        task_key="long-goal",
+        payload={"task_id": "long-goal", "repository": str(tmp_path), "mode": "goal"},
+    )
+
+    assert safe_payload(record)["mode"] == "goal"
 
 
 def test_worker_preserves_exact_attention_question() -> None:

@@ -570,6 +570,7 @@ def project_tasks(db_path: Path, repository: Path) -> list[dict[str, Any]]:
                     if "cancellation_requested_at" in row.keys()
                     else 0.0
                 ),
+                "created_at": float(row["created_at"]),
                 "updated_at": float(row["updated_at"]),
             }
         )
@@ -586,10 +587,20 @@ def workflow_attention(workflow: dict[str, Any]) -> dict[str, Any]:
             "details": [str(item) for item in details] if isinstance(details, list) else [],
             "role": str(raw.get("role", workflow.get("current_role", ""))),
             "action": str(raw.get("action", "")),
+            "question": raw.get("question", {}) if isinstance(raw.get("question"), dict) else {},
+            "repeated_question": raw.get("repeated_question") is True,
         }
     status = str(workflow.get("execution_status", ""))
     if status not in {"awaiting_approval", "blocked", "dead_letter", "failed"}:
-        return {"required": False, "summary": "", "details": [], "role": "", "action": ""}
+        return {
+            "required": False,
+            "summary": "",
+            "details": [],
+            "role": "",
+            "action": "",
+            "question": {},
+            "repeated_question": False,
+        }
     values: list[str] = []
     blockers = workflow.get("blockers", [])
     if isinstance(blockers, list):
@@ -616,6 +627,8 @@ def workflow_attention(workflow: dict[str, Any]) -> dict[str, Any]:
         # an unknown approval gate conservatively: an informational answer must
         # never stand in for a risk or security decision.
         "action": "approve" if status == "awaiting_approval" else "fix_then_retry",
+        "question": {},
+        "repeated_question": False,
     }
 
 
@@ -771,7 +784,14 @@ def handle_approve(args: argparse.Namespace) -> int:
     return 0
 
 
-def record_human_input(run_dir: Path, *, run_id: str, actor: str, response: str) -> Path:
+def record_human_input(
+    run_dir: Path,
+    *,
+    run_id: str,
+    actor: str,
+    response: str,
+    attention: dict[str, Any] | None = None,
+) -> Path:
     path = run_dir / "human-input.json"
     temporary = path.with_suffix(".json.tmp")
     if path.is_symlink() or temporary.is_symlink():
@@ -780,13 +800,17 @@ def record_human_input(run_dir: Path, *, run_id: str, actor: str, response: str)
     entries = existing.get("entries", []) if isinstance(existing, dict) else []
     if not isinstance(entries, list):
         entries = []
-    entries.append(
-        {
-            "time": datetime.now(timezone.utc).isoformat(),
-            "actor": sanitized_message(actor, limit=128),
-            "response": sanitized_message(response, limit=10_000),
-        }
-    )
+    entry = {
+        "time": datetime.now(timezone.utc).isoformat(),
+        "actor": sanitized_message(actor, limit=128),
+        "response": sanitized_message(response, limit=10_000),
+    }
+    if isinstance(attention, dict):
+        entry["question_fingerprint"] = str(attention.get("fingerprint", ""))[:100]
+        question = attention.get("question", {})
+        if isinstance(question, dict):
+            entry["question_id"] = sanitized_message(str(question.get("id", "")), limit=80)
+    entries.append(entry)
     payload = {"version": 1, "run_id": run_id, "entries": entries[-50:]}
     with temporary.open("w", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
@@ -805,7 +829,7 @@ def resolve_answer_attention(run_dir: Path) -> None:
         raise CLIError("refusing to update workflow state through a symbolic link")
     workflow = read_json_object(path)
     attention = workflow.get("attention")
-    if not isinstance(attention, dict) or attention.get("action") != "answer_or_approve":
+    if not isinstance(attention, dict) or attention.get("action") not in {"answer", "answer_or_approve"}:
         raise CLIError("the workflow question changed before the answer could be applied")
     attention_details = attention.get("details", [])
     active_values = {str(attention.get("summary", "")).strip()}
@@ -872,7 +896,7 @@ def handle_answer(args: argparse.Namespace) -> int:
     run_dir = root / ".agent-runs" / args.run_id
     workflow = read_json_object(run_dir / "workflow.json")
     attention = workflow.get("attention", {})
-    if not isinstance(attention, dict) or attention.get("action") != "answer_or_approve":
+    if not isinstance(attention, dict) or attention.get("action") not in {"answer", "answer_or_approve"}:
         raise CLIError(
             "this gate requires an explicit approval decision, not an informational answer; use `agent approve`"
         )
@@ -881,6 +905,7 @@ def handle_answer(args: argparse.Namespace) -> int:
         run_id=args.run_id,
         actor=args.actor,
         response=response,
+        attention=attention,
     )
     approval_lifecycle = load_harness_module(root, "approval_lifecycle")
     task_queue = load_harness_module(root, "task_queue")
@@ -951,6 +976,12 @@ def attention_items(
                 "summary": summary or "The task requires attention.",
                 "details": list(attention.get("details", [])) if isinstance(attention, dict) else [],
                 "action": str(attention.get("action", "")) if isinstance(attention, dict) else "",
+                "question": dict(attention.get("question", {}))
+                if isinstance(attention, dict) and isinstance(attention.get("question"), dict)
+                else {},
+                "repeated_question": bool(
+                    isinstance(attention, dict) and attention.get("repeated_question") is True
+                ),
                 "approval_pending": bool(
                     isinstance(run, dict) and run.get("approval", {}).get("status") == "pending"
                 ),
@@ -973,6 +1004,10 @@ def attention_items(
                 "summary": attention.get("summary", "The task requires attention."),
                 "details": list(attention.get("details", [])),
                 "action": str(attention.get("action", "")),
+                "question": dict(attention.get("question", {}))
+                if isinstance(attention.get("question"), dict)
+                else {},
+                "repeated_question": attention.get("repeated_question") is True,
                 "approval_pending": run.get("approval", {}).get("status") == "pending",
             }
         )
@@ -990,7 +1025,17 @@ def attention_output_lines(items: list[dict[str, Any]], repository: Path) -> lis
             if str(detail).strip() and str(detail).strip() != item["summary"]:
                 lines.append(f"  needed: {detail}")
         run_id = str(item["run_id"])
-        if item["approval_pending"] and run_id and item.get("action") == "answer_or_approve":
+        question = item.get("question", {})
+        options = question.get("options", []) if isinstance(question, dict) else []
+        if isinstance(options, list):
+            for index, option in enumerate(options, start=1):
+                if not isinstance(option, dict):
+                    continue
+                recommended = " (recommended)" if option.get("recommended") is True else ""
+                description = str(option.get("description", "")).strip()
+                suffix = f" — {description}" if description else ""
+                lines.append(f"  option {index}: {option.get('label', '')}{recommended}{suffix}")
+        if item["approval_pending"] and run_id and item.get("action") in {"answer", "answer_or_approve"}:
             lines.append(f'  answer: agent answer --repo {shlex.quote(str(repository))} {run_id} "Your answer"')
         elif item["approval_pending"] and run_id:
             lines.append(f"  approve if acceptable: agent approve --repo {shlex.quote(str(repository))} --run-id {run_id}")
@@ -1036,9 +1081,10 @@ def handle_status(args: argparse.Namespace) -> int:
     lines.extend(attention_output_lines(attention, repository))
     for item in tasks[: args.limit]:
         marker = " !" if item["requires_human"] else ""
+        age_seconds = max(0, int(time.time() - item["created_at"]))
         lines.append(
             f"  task {item['queue_task_id']}: {item['task_id']} [{item['status']}]{marker} "
-            f"workspace={item['workspace_mode']}"
+            f"workspace={item['workspace_mode']} age={age_seconds}s"
         )
         if item["failure_kind"]:
             lines.append(
@@ -1076,7 +1122,7 @@ def handle_status(args: argparse.Namespace) -> int:
             f"(gate: {run['approval']['gate']})"
         )
         run_attention = run.get("attention", {})
-        if isinstance(run_attention, dict) and run_attention.get("action") == "answer_or_approve":
+        if isinstance(run_attention, dict) and run_attention.get("action") in {"answer", "answer_or_approve"}:
             lines.append("    answer the question shown above; approval alone cannot supply missing information")
         elif run["approval"]["registration_required"]:
             lines.append("    publication requires trusted repository registration")
@@ -1151,6 +1197,17 @@ def handle_watch(args: argparse.Namespace) -> int:
                 snapshot,
                 as_json=args.json,
                 lines=attention_output_lines(attention, repository),
+            )
+            return 0
+        service = worker_service_status(root)
+        if task_status not in {"completed", "cancelled"} and run_status != "completed" and not service["alive"]:
+            emit(
+                {**snapshot, "worker_service": service},
+                as_json=args.json,
+                lines=(
+                    f"Task {task_id} is waiting because the worker service is not running.",
+                    f"Start it with: agent start --repo {repository}",
+                ),
             )
             return 0
         terminal = task_status in {"completed", "cancelled"} or run_status == "completed"
@@ -1964,9 +2021,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     task_parser.add_argument(
         "--mode",
-        choices=("auto", "fast", "full"),
+        choices=("auto", "fast", "full", "goal"),
         default="auto",
-        help="select guarded fast routing automatically, require fast routing, or preserve the full role chain",
+        help=(
+            "select routing automatically, request the 15-minute fast path, run the full role chain "
+            "for up to 60 minutes, or explicitly run a checkpointed goal for up to 4 hours"
+        ),
     )
     task_parser.add_argument("--priority", type=int, choices=range(-100, 101), default=0)
     task_parser.add_argument("--max-retries", type=int, choices=range(0, 11), default=2)
@@ -2004,7 +2064,12 @@ def build_parser() -> argparse.ArgumentParser:
     watch_parser.add_argument("--task-id", default="")
     watch_parser.add_argument("--run-id", default="")
     watch_parser.add_argument("--interval", type=float, default=2.0)
-    watch_parser.add_argument("--timeout", type=float, default=0.0, help="seconds; zero waits indefinitely")
+    watch_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=1800.0,
+        help="seconds (default: 1800); zero waits indefinitely",
+    )
     watch_parser.add_argument("--json", action="store_true")
     watch_parser.set_defaults(handler=handle_watch)
 

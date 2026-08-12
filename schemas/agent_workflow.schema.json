@@ -17,8 +17,8 @@
   "enums": {
     "execution_status": ["planned", "created", "running", "role_pending", "role_running", "role_output_received", "role_validating", "role_completed", "retry_wait", "repairing", "resuming", "awaiting_approval", "completed", "blocked", "dead_letter", "failed", "cancelled"],
     "workspace_mode": ["isolated", "current_branch"],
-    "mode": ["auto", "fast", "full"],
-    "effective_mode": ["fast", "full"]
+    "mode": ["auto", "fast", "full", "goal"],
+    "effective_mode": ["fast", "full", "goal"]
   },
   "types": {
     "run_id": "str",

@@ -5,11 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import shlex
 import string
-import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -32,6 +33,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ai_harness.observability import safe_telemetry_runtime
+from ai_harness.processes import run_managed_process
 from ai_harness.recovery import RecoveryCoordinator, classify_failure, load_recovery_policy
 from ai_harness.recovery.checkpoints import RoleCheckpoint, write_checkpoint
 from ai_harness.recovery.models import FailureRecord, persist_failure
@@ -42,7 +44,7 @@ DEFAULT_TIMEOUT_SECONDS = 300
 DEFAULT_BUDGETS = {
     "max_roles": 40,
     "max_repair_iterations": 12,
-    "max_duration_seconds": 7200,
+    "max_duration_seconds": 3600,
     "max_tokens": 300000,
 }
 EXIT_COMPLETED = 0
@@ -97,21 +99,32 @@ def run_command(command: str, cwd: Path, timeout_seconds: int) -> tuple[int, str
     argv = shlex.split(command)
     if argv and argv[0] == "python3":
         argv[0] = sys.executable
+    limits = load_recovery_policy().runtime_limits
     try:
-        result = subprocess.run(
-            argv,
-            cwd=cwd,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=timeout_seconds,
-        )
+        with tempfile.TemporaryDirectory(prefix="agent-workflow-step-") as output_dir:
+            result = run_managed_process(
+                argv,
+                cwd=cwd,
+                stdout_path=Path(output_dir) / "stdout.log",
+                stderr_path=Path(output_dir) / "stderr.log",
+                timeout_seconds=timeout_seconds,
+                idle_timeout_seconds=min(timeout_seconds, limits.idle_timeout_seconds),
+                shutdown_grace_seconds=limits.shutdown_grace_seconds,
+                max_output_bytes=limits.max_output_bytes,
+                max_open_files=limits.max_open_files,
+            )
     except FileNotFoundError as exc:
         return 127, "", str(exc)
-    except subprocess.TimeoutExpired as exc:
-        return 124, exc.stdout or "", f"command timed out after {timeout_seconds}s"
     except PermissionError as exc:
         return 126, "", str(exc)
+    if result.timed_out:
+        return 124, result.stdout, f"command timed out after {timeout_seconds}s"
+    if result.idle_timed_out:
+        return 124, result.stdout, f"command produced no output for {min(timeout_seconds, limits.idle_timeout_seconds)}s"
+    if result.output_limit_exceeded:
+        return 74, result.stdout, f"command output exceeded {limits.max_output_bytes} bytes"
+    if result.open_file_limit_exceeded:
+        return 72, result.stdout, "command open-file budget was exhausted"
     return result.returncode, result.stdout, result.stderr
 
 
@@ -141,13 +154,19 @@ def append_trace(layout: RunLayout, event: dict[str, Any]) -> None:
         handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
-def workflow_budgets(workflow: dict[str, Any]) -> dict[str, int]:
+def workflow_budgets(workflow: dict[str, Any], execution_mode: str = "full") -> dict[str, int]:
     budgets = dict(DEFAULT_BUDGETS)
     configured = workflow.get("budgets")
     if isinstance(configured, dict):
         for key in budgets:
             if isinstance(configured.get(key), (int, float)):
                 budgets[key] = int(configured[key])
+    mode_budgets = workflow.get("mode_budgets")
+    selected = mode_budgets.get(execution_mode, {}) if isinstance(mode_budgets, dict) else {}
+    if isinstance(selected, dict):
+        for key in budgets:
+            if isinstance(selected.get(key), (int, float)):
+                budgets[key] = int(selected[key])
     return budgets
 
 
@@ -281,8 +300,8 @@ def run_workflow(
     runtime_provider: str = "",
     runtime_command: str = "",
 ) -> int:
-    if mode not in {"auto", "fast", "full"}:
-        raise ValueError("mode must be auto, fast, or full")
+    if mode not in {"auto", "fast", "full", "goal"}:
+        raise ValueError("mode must be auto, fast, full, or goal")
     workflows = read_workflows()
     workflow = workflows.get("workflows", {}).get(workflow_name)
     if not isinstance(workflow, dict):
@@ -319,7 +338,7 @@ def run_workflow(
         workflow.get("runtime_command", workflow.get("adapter_command", ""))
     )
     artifacts_dir = layout.artifacts
-    budgets = workflow_budgets(workflow)
+    budgets = workflow_budgets(workflow, mode)
     started = time.monotonic()
     telemetry = safe_telemetry_runtime(
         run_dir=run_dir,
@@ -396,6 +415,90 @@ def run_workflow(
         if resume_state.get("execution_status") in {"retry_wait", "repairing", "resuming"}:
             resume_state["execution_status"] = "resuming"
             write_workflow_state(workflow_state_path, resume_state)
+
+    recovery_state = read_workflow_state(workflow_state_path).get("recovery", {})
+    if isinstance(recovery_state, dict):
+        recovery_started_at = recovery_state.get("started_at")
+        if isinstance(recovery_started_at, (int, float)) and not isinstance(recovery_started_at, bool):
+            recovery_limit = load_recovery_policy().max_recovery_duration_seconds
+            recovery_remaining = recovery_limit - max(0.0, time.time() - float(recovery_started_at))
+            if recovery_remaining <= 0:
+                state_data = read_workflow_state(workflow_state_path)
+                role = str(state_data.get("current_role", "workflow"))
+                failure = FailureRecord.create(
+                    run_id=run_id,
+                    task_id=task_id,
+                    role=role,
+                    stage="recovery_budget",
+                    kind="runtime_failure",
+                    error_type="RecoveryBudgetExceeded",
+                    message="max_recovery_duration_seconds exceeded before resume",
+                    retryable=False,
+                    repairable=False,
+                    checkpoint=f"before_{role.replace('-', '_')}",
+                )
+                persist_failure(layout.root, failure)
+                state_data.update(
+                    {
+                        "execution_status": "dead_letter",
+                        "failure_id": failure.failure_id,
+                        "failure_kind": failure.kind,
+                        "recovery_action": "dead_letter",
+                        "recovery_reason": "task recovery budget exhausted before resume",
+                    }
+                )
+                write_workflow_state(workflow_state_path, state_data)
+                append_trace(
+                    layout,
+                    {
+                        "time": datetime.now(timezone.utc).isoformat(),
+                        "event": "workflow_dead_letter",
+                        "reason": "max_recovery_duration_seconds exceeded before resume",
+                    },
+                )
+                print(str(run_dir))
+                return finish(EXIT_DEAD_LETTER, "dead_letter", error_type="RecoveryBudgetExceeded")
+            budgets["max_duration_seconds"] = min(
+                budgets["max_duration_seconds"],
+                math.ceil(recovery_remaining),
+            )
+
+    def pause_for_duration_budget() -> int:
+        state_data = read_workflow_state(workflow_state_path)
+        failure = FailureRecord.create(
+            run_id=run_id,
+            task_id=task_id,
+            role=str(state_data.get("current_role", "workflow")),
+            stage="budget",
+            kind="human_input_required",
+            error_type="WorkflowDurationExceeded",
+            message="max_duration_seconds exceeded",
+            retryable=False,
+            repairable=False,
+            checkpoint=f"before_{str(state_data.get('current_role', 'workflow')).replace('-', '_')}",
+        )
+        persist_failure(layout.root, failure)
+        state_data.update(
+            {
+                "execution_status": "awaiting_approval",
+                "failure_id": failure.failure_id,
+                "failure_kind": failure.kind,
+                "recovery_action": "approval",
+                "recovery_reason": "workflow duration budget exceeded",
+            }
+        )
+        write_workflow_state(workflow_state_path, state_data)
+        append_trace(
+            layout,
+            {
+                "time": datetime.now(timezone.utc).isoformat(),
+                "event": "workflow_awaiting_approval",
+                "reason": "max_duration_seconds exceeded",
+            },
+        )
+        print(str(run_dir))
+        return finish(EXIT_AWAITING_APPROVAL, "awaiting_approval")
+
     append_trace(
         layout,
         {
@@ -412,41 +515,8 @@ def run_workflow(
         append_trace(layout, {"time": datetime.now(timezone.utc).isoformat(), "event": "iteration_started", "iteration": iteration})
         root_span.add_event("workflow.iteration", {"iteration": iteration})
         for step in steps:
-            if time.monotonic() - started > budgets["max_duration_seconds"]:
-                state_data = read_workflow_state(workflow_state_path)
-                failure = FailureRecord.create(
-                    run_id=run_id,
-                    task_id=task_id,
-                    role=str(state_data.get("current_role", "workflow")),
-                    stage="budget",
-                    kind="human_input_required",
-                    error_type="WorkflowDurationExceeded",
-                    message="max_duration_seconds exceeded",
-                    retryable=False,
-                    repairable=False,
-                    checkpoint=f"before_{str(state_data.get('current_role', 'workflow')).replace('-', '_')}",
-                )
-                persist_failure(layout.root, failure)
-                state_data.update(
-                    {
-                        "execution_status": "awaiting_approval",
-                        "failure_id": failure.failure_id,
-                        "failure_kind": failure.kind,
-                        "recovery_action": "approval",
-                        "recovery_reason": "workflow duration budget exceeded",
-                    }
-                )
-                write_workflow_state(workflow_state_path, state_data)
-                append_trace(
-                    layout,
-                    {
-                        "time": datetime.now(timezone.utc).isoformat(),
-                        "event": "workflow_awaiting_approval",
-                        "reason": "max_duration_seconds exceeded",
-                    },
-                )
-                print(str(run_dir))
-                return finish(EXIT_AWAITING_APPROVAL, "awaiting_approval")
+            if time.monotonic() - started >= budgets["max_duration_seconds"]:
+                return pause_for_duration_budget()
             name = str(step.get("name", "step"))
             current_state = read_workflow_state(workflow_state_path)
             checkpoint_role = name
@@ -509,6 +579,13 @@ def run_workflow(
             ):
                 command = command + " --current-branch"
             for attempt in range(1, max_retries + 2):
+                remaining_seconds = budgets["max_duration_seconds"] - (time.monotonic() - started)
+                if remaining_seconds <= 0:
+                    return pause_for_duration_budget()
+                step_timeout_seconds = max(
+                    1,
+                    min(workflow_timeout_seconds, math.ceil(remaining_seconds)),
+                )
                 if attempt > 1:
                     total_retries += 1
                     root_span.add_event("workflow.retry", {"step.name": name, "attempt": attempt})
@@ -533,7 +610,7 @@ def run_workflow(
                         ),
                     )
                     step_started = time.monotonic()
-                    returncode, stdout, stderr = run_command(command, root, workflow_timeout_seconds)
+                    returncode, stdout, stderr = run_command(command, root, step_timeout_seconds)
                     step_span.set_attribute("step.return_code", returncode)
                     step_span.set_attribute("step.duration_seconds", max(0, time.monotonic() - step_started))
                     if returncode != 0:
@@ -673,7 +750,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--branch", default="")
     parser.add_argument("--base-branch", default="main")
     parser.add_argument("--current-branch", action="store_true")
-    parser.add_argument("--mode", choices=("auto", "fast", "full"), default="auto")
+    parser.add_argument("--mode", choices=("auto", "fast", "full", "goal"), default="auto")
     parser.add_argument("--adapter-command", default="")
     parser.add_argument("--runtime-provider", default="")
     parser.add_argument("--runtime-command", default="")

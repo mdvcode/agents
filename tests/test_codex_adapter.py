@@ -104,7 +104,12 @@ def test_role_prompt_includes_interaction_policy_and_recorded_user_answer(tmp_pa
             {
                 "version": 1,
                 "run_id": "run-1",
-                "entries": [{"response": "Use the staging environment."}],
+                "entries": [
+                    {
+                        "question_id": "environment_choice",
+                        "response": "Use the staging environment.",
+                    }
+                ],
             }
         ),
         encoding="utf-8",
@@ -118,8 +123,19 @@ def test_role_prompt_includes_interaction_policy_and_recorded_user_answer(tmp_pa
     )
 
     assert "Use the staging environment." in prompt
+    assert "[environment_choice]" in prompt
     assert "do not perform empty retries" in prompt
     assert "status=awaiting_approval" in prompt
+    assert "2-3 mutually exclusive options" in prompt
+    assert "never ask a substantially identical question again" in prompt
+
+    schema = codex_cli_executor.standard_role_result_schema({"required": [], "types": {}})
+    assert "question" in schema["properties"]
+    assert "question" in schema["required"]
+    assert schema["properties"]["question"]["type"] == ["object", "null"]
+    assert schema["properties"]["question"]["properties"]["options"]["type"] == "array"
+    assert schema["properties"]["question"]["properties"]["options"]["minItems"] == 2
+    assert schema["properties"]["question"]["properties"]["options"]["maxItems"] == 3
 
 
 def test_noncompleted_role_result_gets_a_nonempty_attention_reason() -> None:
