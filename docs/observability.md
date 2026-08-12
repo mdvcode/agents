@@ -40,6 +40,8 @@ The snapshot and dashboard expose:
 - recovery attempts, successes, exhausted budgets, task retries, output repairs, successful resumes, worker crashes, and recovery actions;
 - recent sanitized spans with trace and parent IDs.
 
+CLI status also prints queue-task age. `agent watch` distinguishes an unavailable worker from active execution immediately, so a retained queued task is not presented as a silent running hang. Runtime, workflow, recovery, and approval limits are summarized in the operator runbook.
+
 The operational snapshot contract is `schemas/observability_snapshot.schema.json`. Local spans use `schemas/otel_span.schema.json` and are stored at `.agent-runs/<run-id>/raw-events/otel-spans.jsonl`.
 
 ## OpenTelemetry

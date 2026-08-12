@@ -282,10 +282,22 @@ def test_role_budget_tokens_excludes_cached_input() -> None:
         ("auto", "", "full"),
         ("fast", "Change authentication permissions", "fast"),
         ("full", "Fix a typo", "full"),
+        ("goal", "Complete a checkpointed multi-hour objective", "goal"),
     ],
 )
 def test_execution_mode_selection(requested: str, goal: str, expected: str) -> None:
     assert agent_role_runner.select_execution_mode(requested, goal) == expected
+
+
+def test_repository_execution_modes_have_distinct_session_budgets() -> None:
+    fast = agent_role_runner.workflow_budgets("full_agent_workflow", "fast")
+    full = agent_role_runner.workflow_budgets("full_agent_workflow", "full")
+    goal = agent_role_runner.workflow_budgets("full_agent_workflow", "goal")
+
+    assert fast["max_duration_seconds"] == 900
+    assert full["max_duration_seconds"] == 3600
+    assert goal["max_duration_seconds"] == 14_400
+    assert fast["max_roles"] < full["max_roles"] < goal["max_roles"]
 
 
 def test_completed_role_result_is_reused_after_post_role_approval() -> None:

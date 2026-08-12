@@ -23,6 +23,7 @@ def run_process(
     open_file_counter: Callable[[], int] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
     shutdown_requested: Callable[[], bool] | None = None,
+    input_text: str | None = None,
 ) -> ManagedProcessResult:
     kwargs: dict[str, object] = {}
     if open_file_counter is not None:
@@ -42,6 +43,7 @@ def run_process(
         poll_seconds=0.01,
         cancel_requested=cancel_requested,
         shutdown_requested=shutdown_requested,
+        input_text=input_text,
         **kwargs,
     )
 
@@ -94,6 +96,19 @@ def test_open_file_budget_blocks_subprocess_start(tmp_path: Path) -> None:
 
 def test_timeout_terminates_the_managed_process(tmp_path: Path) -> None:
     result = run_process(tmp_path, "import time; time.sleep(30)", timeout=0.1)
+
+    assert result.timed_out is True
+    assert result.returncode == 124
+    assert result.duration_seconds < 2
+
+
+def test_large_stdin_cannot_block_timeout_monitoring(tmp_path: Path) -> None:
+    result = run_process(
+        tmp_path,
+        "import time; time.sleep(30)",
+        timeout=0.1,
+        input_text="x" * 2_000_000,
+    )
 
     assert result.timed_out is True
     assert result.returncode == 124

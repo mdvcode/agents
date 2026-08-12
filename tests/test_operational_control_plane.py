@@ -224,6 +224,8 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         assert 'id="executionMode"' in dashboard
         assert '<option value="fast">' in dashboard
         assert '<option value="full">' in dashboard
+        assert '<option value="goal">' in dashboard
+        assert "Долгая цель — до 4 часов" in dashboard
         assert 'id="workspaceMode"' in dashboard
         assert "Другой ответ" in dashboard
         assert "question.options" in dashboard
@@ -310,6 +312,17 @@ def test_dashboard_task_and_run_controls_delegate_to_product_cli(
                 "execution_mode": "fast",
             },
         )
+        goal_launched = api_request(
+            f"{base}/ui/tasks",
+            token,
+            method="POST",
+            body={
+                "repository": str(tmp_path),
+                "goal": "Execute checkpointed objective",
+                "workspace_mode": "worktree",
+                "execution_mode": "goal",
+            },
+        )
         legacy_launched = api_request(
             f"{base}/ui/tasks",
             token,
@@ -365,6 +378,7 @@ def test_dashboard_task_and_run_controls_delegate_to_product_cli(
         thread.join(timeout=5)
 
     assert launched["task_id"] == "kc-432"
+    assert goal_launched["task_id"] == "kc-432"
     assert legacy_launched["task_id"] == "kc-432"
     assert aborted["status"] == "queued"
     assert answered["status"] == "queued"
@@ -372,6 +386,10 @@ def test_dashboard_task_and_run_controls_delegate_to_product_cli(
     assert retried["status"] == "queued"
     assert calls == [
         (tmp_path, ["task", "Implement KC-432", "--mode", "fast", "--worktree"]),
+        (
+            tmp_path,
+            ["task", "Execute checkpointed objective", "--mode", "goal", "--worktree"],
+        ),
         (
             tmp_path,
             ["task", "Continue legacy dashboard task", "--mode", "auto", "--current-branch"],

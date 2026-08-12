@@ -70,15 +70,17 @@ The default mode is `auto`:
 agent task "Fix a typo in the settings page"
 agent task --mode fast "Apply a small local styling change"
 agent task --mode full "Refactor the authentication architecture"
+agent task --mode goal "Complete a checkpointed multi-hour objective"
 ```
 
 | Mode | Behavior |
 | --- | --- |
-| `auto` | Uses the guarded fast workflow for ordinary work and selects the full workflow when the goal names sensitive or broad changes. |
-| `fast` | Requests the short workflow with implementation and review as the only model-backed roles. Context, quality, security, and verdict stages are deterministic. |
-| `full` | Runs the complete specialist workflow intentionally. |
+| `auto` | Uses the guarded fast workflow for ordinary work and selects the full workflow when the goal names sensitive or broad changes. It never selects `goal`. |
+| `fast` | Runs the short workflow for at most 15 minutes, with implementation and review as the only model-backed roles. Context, quality, security, and verdict stages are deterministic. |
+| `full` | Runs the complete specialist workflow for at most 60 minutes. |
+| `goal` | Explicitly runs a checkpointed long objective for at most 4 hours. Use it only when the success condition genuinely needs multiple hours. |
 
-Fast mode has a 15-minute workflow budget. It automatically escalates to the full workflow before publication if the patch touches protected areas, changes more than five files, exceeds 200 changed lines, or reports increased risk. Required checks and approval gates are never bypassed.
+Fast mode automatically escalates to the full workflow before publication if the patch touches protected areas, changes more than five files, exceeds 200 changed lines, or reports increased risk. Required checks and approval gates are never bypassed. The 30-minute role timeout is an emergency limit for one model executor, not the duration of the whole task; workflow, recovery, iteration, and human-attention limits are tracked separately.
 
 ## Branch and workspace modes
 
@@ -161,7 +163,7 @@ agent init [--repo PATH] [--project-id ID]
 ```sh
 agent task [--repo PATH] [--task-id ID] [--branch BRANCH]
            [--current-branch | --worktree] [--keep-paused]
-           [--mode auto|fast|full] [--priority -100..100]
+           [--mode auto|fast|full|goal] [--priority -100..100]
            [--max-retries 0..10] [--dry-run] [--json]
            "TASK DESCRIPTION"
 ```
@@ -192,7 +194,7 @@ agent worker stop [--json]
 agent dashboard [--repo PATH] [--port PORT] [--no-open]
 ```
 
-The dashboard binds to loopback, opens in the default browser, and provides task launch, execution-mode (`auto`, `fast`, or `full`) and Git-workspace selection, status, structured answer choices with a custom-answer fallback, approval, retry, and abort controls. Answered questions are fingerprinted so the same question cannot silently reopen in a loop. `--no-open` starts the server without opening a browser. `Ctrl+C` stops the dashboard server but does not stop the worker service.
+The dashboard binds to loopback, opens in the default browser, and provides task launch, execution-mode (`auto`, `fast`, `full`, or explicit `goal`) and Git-workspace selection, status, structured answer choices with a custom-answer fallback, approval, retry, and abort controls. Answered questions are fingerprinted so the same question cannot silently reopen in a loop. `--no-open` starts the server without opening a browser. `Ctrl+C` stops the dashboard server but does not stop the worker service.
 
 ### Status and monitoring
 
@@ -204,7 +206,7 @@ agent watch [--repo PATH] [--task-id ID] [--run-id ID]
 ```
 
 - `status` shows compact project, queue, run, and worker state without raw model transcripts.
-- `watch` follows state transitions until completion or human attention. A timeout of `0` waits indefinitely.
+- `watch` follows state transitions until completion or human attention and returns after 30 minutes by default. Use `--timeout 0` only when an intentionally unbounded terminal wait is desired; if the worker service is down, `watch` returns immediately with the start command.
 
 ### Failure inspection
 

@@ -57,7 +57,7 @@ DASHBOARD_HTML = r'''<!doctype html>
           <form id="taskForm">
             <label>Что нужно сделать<textarea id="goal" maxlength="20000" placeholder="Опишите результат, ограничения и критерии готовности…" required></textarea></label>
             <div class="form-grid">
-              <label>Режим выполнения<select id="executionMode"><option value="auto">Авто — рекомендуется</option><option value="fast">Быстро — короткий маршрут</option><option value="full">Полный — все роли</option></select><span class="field-note" id="executionModeNote">Обычные задачи выполняются быстро, рискованные автоматически получают полный процесс.</span></label>
+              <label>Режим выполнения<select id="executionMode"><option value="auto">Авто — рекомендуется</option><option value="fast">Быстро — до 15 минут</option><option value="full">Тщательно — до 60 минут</option><option value="goal">Долгая цель — до 4 часов</option></select><span class="field-note" id="executionModeNote">Авто выбирает короткий или тщательный маршрут. Многочасовую цель можно включить только явно.</span></label>
               <label>Как работать с Git<select id="workspaceMode"><option value="new_branch">Новая ветка в этом проекте</option><option value="current_branch">Текущая существующая ветка</option><option value="worktree">Отдельная папка для параллельной задачи</option></select></label>
               <label>Номер задачи — необязательно<input class="field" id="taskId" placeholder="Например, KC-432"></label>
             </div>
@@ -79,7 +79,7 @@ DASHBOARD_HTML = r'''<!doctype html>
 <div class="toast" id="toast"></div>
 <script>
 const $=id=>document.getElementById(id), state={data:null,filter:'all',busy:false,answers:{}};
-const statusNames={queued:'В очереди',claimed:'Запускается',leased:'Запускается',running:'Выполняется',retry_wait:'Повтор',repairing:'Исправляется',resuming:'Продолжается',awaiting_approval:'Ждёт решения',blocked:'Остановлена',dead_letter:'Нужна проверка',failed:'Ошибка',completed:'Готово',cancelled:'Отменена'},executionModeNames={auto:'Авто',fast:'Быстро',full:'Полный'};
+const statusNames={queued:'В очереди',claimed:'Запускается',leased:'Запускается',running:'Выполняется',retry_wait:'Повтор',repairing:'Исправляется',resuming:'Продолжается',awaiting_approval:'Ждёт решения',blocked:'Остановлена',dead_letter:'Нужна проверка',failed:'Ошибка',completed:'Готово',cancelled:'Отменена'},executionModeNames={auto:'Авто',fast:'Быстро · 15 мин',full:'Тщательно · 60 мин',goal:'Долгая цель · 4 ч'};
 const active=new Set(['queued','claimed','leased','running','retry_wait','repairing','resuming']);
 function el(tag,cls,text){const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=String(text);return n}
 function auth(){const token=$('token').value.trim();return token?{Authorization:`Bearer ${token}`}:{}}

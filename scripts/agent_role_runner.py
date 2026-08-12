@@ -103,7 +103,7 @@ PROMPT_FILES = {
 }
 DEFAULT_ALLOWED_TOOLS = ["filesystem_read", "repository_search"]
 KNOWN_PROJECT_PROFILES = {"agent_workspace", "django", "nextjs_web"}
-EXECUTION_MODES = {"auto", "fast", "full"}
+EXECUTION_MODES = {"auto", "fast", "full", "goal"}
 FULL_HINTS = (
     "auth", "permission", "migration", "billing", "payment", "secret", "production", "deploy",
     "database schema", "public api", "dependency", "package upgrade", "architecture", "refactor",
@@ -113,6 +113,8 @@ FULL_HINTS = (
 
 
 def select_execution_mode(requested: str, goal: str) -> str:
+    if requested == "goal":
+        return "goal"
     if requested == "full":
         return "full"
     if requested == "fast":
@@ -846,7 +848,7 @@ def workflow_budgets(workflow: str, execution_mode: str = "full") -> dict[str, i
     defaults = {
         "max_roles": 40,
         "max_repair_iterations": 12,
-        "max_duration_seconds": 7200,
+        "max_duration_seconds": 3600,
         "max_tokens": 300000,
     }
     if isinstance(configured, dict):
@@ -1521,7 +1523,7 @@ def run_roles(
         return {
             "run_id": run_id or "invalid-mode",
             "execution_status": "blocked",
-            "blockers": ["mode must be auto, fast, or full"],
+            "blockers": ["mode must be auto, fast, full, or goal"],
         }
     run_id = run_id or make_run_id(workflow)
     existing_workflow = RUNS / run_id / "workflow.json"

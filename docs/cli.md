@@ -73,6 +73,7 @@ agent doctor --full
 agent task "Fix login"
 agent task --mode fast "Fix a small local issue"
 agent task --mode full "Refactor the authentication architecture"
+agent task --mode goal "Complete a checkpointed multi-hour objective"
 agent task --repo . --task-id fix-login "Fix login"
 agent task --current-branch --task-id fix-login "Fix login"
 agent task --worktree --task-id parallel-fix "Run this task in parallel"
@@ -81,7 +82,7 @@ agent watch --task-id fix-login
 
 `agent task` is the ordinary start command: it validates the request, starts the persistent worker service when necessary, prepares the task workspace, and idempotently enqueues the normalized Task envelope. Repeating the same explicit `--task-id` returns the existing queue item.
 
-Task mode defaults to `auto`. Auto uses the guarded fast path unless the goal names a sensitive or broad change such as authentication, migrations, payments, production, dependencies, architecture, or a refactor. Fast mode invokes only implementation and review models; context, quality, security, and verdict stages are deterministic. It escalates to the full workflow when the resulting patch exceeds five files or 200 changed lines, touches protected areas, or reports increased risk. Fast model calls and verification commands are bounded, and the complete fast workflow has a 15-minute budget. Use `--mode full` when the complete specialist chain is intentional, or `--mode fast` to request fast routing while retaining the same post-change escalation gates.
+Task mode defaults to `auto`. Auto uses the guarded fast path unless the goal names a sensitive or broad change such as authentication, migrations, payments, production, dependencies, architecture, or a refactor; it never selects a multi-hour mode. Fast mode invokes only implementation and review models; context, quality, security, and verdict stages are deterministic. It escalates to the full workflow when the resulting patch exceeds five files or 200 changed lines, touches protected areas, or reports increased risk. The complete fast workflow has a 15-minute budget, while `full` runs the complete specialist chain for at most 60 minutes. Use `--mode goal` only for an explicit checkpointed objective that may run for up to 4 hours. The separate 30-minute role timeout bounds one model executor and does not define total task duration.
 
 By default, the command creates or selects a dedicated task branch in the current checkout from the configured base branch. It does not create a worktree. The checkout must be clean. Setup files intentionally ignored by Git may stay local and must not be force-added; otherwise commit or intentionally ignore new setup files and commit or stash other intended changes before starting the first task. Only one unfinished current-checkout task may own a repository at a time. This prevents concurrent workers from switching the same directory between branches.
 
@@ -99,7 +100,7 @@ Single-checkout mode treats submission of a new task as replacement of an older 
 
 Use `--dry-run --json` to inspect the envelope without switching branches, starting workers, or changing queue state. `agent start` remains available for proactively starting the service, but it is no longer required before `agent task`.
 
-`agent watch` follows the queue and current role until the task completes or needs attention. It prints only state transitions, so a long-running role remains identifiable without dumping transcripts. `--timeout <seconds>` returns control while leaving the task running; zero waits indefinitely.
+`agent watch` follows the queue and current role until the task completes or needs attention. It prints only state transitions, so a long-running role remains identifiable without dumping transcripts. It returns control after 30 minutes by default while leaving the task running. Set `--timeout <seconds>` to choose another bound; zero is an explicit indefinite wait. If the worker service is not running, `watch` returns immediately with the recovery command instead of waiting silently.
 
 ## Inspect status
 

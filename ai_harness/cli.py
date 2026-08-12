@@ -570,6 +570,7 @@ def project_tasks(db_path: Path, repository: Path) -> list[dict[str, Any]]:
                     if "cancellation_requested_at" in row.keys()
                     else 0.0
                 ),
+                "created_at": float(row["created_at"]),
                 "updated_at": float(row["updated_at"]),
             }
         )
@@ -1080,9 +1081,10 @@ def handle_status(args: argparse.Namespace) -> int:
     lines.extend(attention_output_lines(attention, repository))
     for item in tasks[: args.limit]:
         marker = " !" if item["requires_human"] else ""
+        age_seconds = max(0, int(time.time() - item["created_at"]))
         lines.append(
             f"  task {item['queue_task_id']}: {item['task_id']} [{item['status']}]{marker} "
-            f"workspace={item['workspace_mode']}"
+            f"workspace={item['workspace_mode']} age={age_seconds}s"
         )
         if item["failure_kind"]:
             lines.append(
@@ -1195,6 +1197,17 @@ def handle_watch(args: argparse.Namespace) -> int:
                 snapshot,
                 as_json=args.json,
                 lines=attention_output_lines(attention, repository),
+            )
+            return 0
+        service = worker_service_status(root)
+        if task_status not in {"completed", "cancelled"} and run_status != "completed" and not service["alive"]:
+            emit(
+                {**snapshot, "worker_service": service},
+                as_json=args.json,
+                lines=(
+                    f"Task {task_id} is waiting because the worker service is not running.",
+                    f"Start it with: agent start --repo {repository}",
+                ),
             )
             return 0
         terminal = task_status in {"completed", "cancelled"} or run_status == "completed"
@@ -2008,9 +2021,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     task_parser.add_argument(
         "--mode",
-        choices=("auto", "fast", "full"),
+        choices=("auto", "fast", "full", "goal"),
         default="auto",
-        help="select guarded fast routing automatically, require fast routing, or preserve the full role chain",
+        help=(
+            "select routing automatically, request the 15-minute fast path, run the full role chain "
+            "for up to 60 minutes, or explicitly run a checkpointed goal for up to 4 hours"
+        ),
     )
     task_parser.add_argument("--priority", type=int, choices=range(-100, 101), default=0)
     task_parser.add_argument("--max-retries", type=int, choices=range(0, 11), default=2)
@@ -2048,7 +2064,12 @@ def build_parser() -> argparse.ArgumentParser:
     watch_parser.add_argument("--task-id", default="")
     watch_parser.add_argument("--run-id", default="")
     watch_parser.add_argument("--interval", type=float, default=2.0)
-    watch_parser.add_argument("--timeout", type=float, default=0.0, help="seconds; zero waits indefinitely")
+    watch_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=1800.0,
+        help="seconds (default: 1800); zero waits indefinitely",
+    )
     watch_parser.add_argument("--json", action="store_true")
     watch_parser.set_defaults(handler=handle_watch)
 

@@ -79,18 +79,18 @@ def test_execution_mode_survives_normalization_and_queueing(tmp_path: Path) -> N
     queue = TaskQueue(tmp_path / "queue.db")
     envelope = normalize_event(
         source="cli",
-        payload={"external_id": "fast-1", "task_id": "fast-1", "goal": "Fix CSS", "mode": "fast"},
+        payload={"external_id": "goal-1", "task_id": "goal-1", "goal": "Long objective", "mode": "goal"},
         repository=tmp_path,
     )
 
     record = enqueue_envelope(queue, envelope)
 
-    assert envelope["mode"] == "fast"
-    assert record.payload["mode"] == "fast"
+    assert envelope["mode"] == "goal"
+    assert record.payload["mode"] == "goal"
 
 
 def test_event_rejects_unknown_execution_mode(tmp_path: Path) -> None:
-    with pytest.raises(EventError, match="mode must be auto, fast, or full"):
+    with pytest.raises(EventError, match="mode must be auto, fast, full, or goal"):
         normalize_event(
             source="api",
             payload={"external_id": "bad-mode", "mode": "turbo"},

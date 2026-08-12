@@ -714,7 +714,7 @@ class TaskQueue:
             current_status = str(row["status"])
             if current_status in ACTIVE_STATUSES:
                 raise ValueError("cannot recover a task with an active lease")
-            if current_status in {"awaiting_approval", "blocked"}:
+            if current_status == "awaiting_approval":
                 raise ValueError("approval-gated tasks must continue through the approval lifecycle")
             if current_status in {"completed", "cancelled"}:
                 raise ValueError(f"cannot recover a terminal {current_status} task")
@@ -727,6 +727,39 @@ class TaskQueue:
             )
             self.event(connection, int(row["id"]), status, details={"manual": True, "action": action}, now=now)
             updated = connection.execute("SELECT * FROM tasks WHERE id=?", (int(row["id"]),)).fetchone()
+            return self.record(updated)
+
+    def mark_approval_expired(self, run_id: str) -> TaskRecord | None:
+        """Mirror an expired approval into queue state so manual repair can proceed."""
+
+        now = time.time()
+        with self.connect() as connection:
+            self._begin_immediate(connection)
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE run_id=? ORDER BY id DESC LIMIT 1",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return None
+            if str(row["status"]) == "awaiting_approval":
+                connection.execute(
+                    """
+                    UPDATE tasks SET status='blocked',updated_at=?,requires_human=1,
+                        exception_reason='approval expired',recovery_action='retry'
+                    WHERE id=?
+                    """,
+                    (now, int(row["id"])),
+                )
+                self.event(
+                    connection,
+                    int(row["id"]),
+                    "approval_expired",
+                    details={"run_id": run_id},
+                    now=now,
+                )
+            updated = connection.execute("SELECT * FROM tasks WHERE id=?", (int(row["id"]),)).fetchone()
+            connection.commit()
             return self.record(updated)
 
     def abort_run(self, run_id: str) -> TaskRecord:

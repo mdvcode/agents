@@ -23,7 +23,7 @@ REPOSITORIES_CONFIG = ROOT / ".agent-repositories.yaml"
 DEFAULT_BUDGETS = {
     "max_roles": 40,
     "max_repair_iterations": 12,
-    "max_duration_seconds": 7200,
+    "max_duration_seconds": 3600,
     "max_tokens": 300000,
 }
 LOOP_DEFAULTS = {
