@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-import time
-import sys
 import sqlite3
+import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -273,3 +275,13 @@ def test_worker_registration_heartbeat_and_stale_monitor(tmp_path: Path) -> None
     assert [record.worker_id for record in stale] == ["svc-1"]
     assert stale[0].status == "stalled"
     assert queue.stop_worker("svc-1")
+
+
+def test_connect_closes_sqlite_connection_after_context(tmp_path: Path) -> None:
+    queue = TaskQueue(tmp_path / "queue.db")
+
+    with queue.connect() as connection:
+        connection.execute("SELECT 1").fetchone()
+
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        connection.execute("SELECT 1")

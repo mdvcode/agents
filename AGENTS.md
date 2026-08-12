@@ -193,3 +193,10 @@ A task is not done until:
 - Keep local agent memory private; do not copy private issue journals into public PR text unless explicitly approved and sanitized.
 - Route every model-backed role through the provider-neutral `Runtime` contract. In Step 2 only local-subscription `codex-cli` is a production runtime; direct provider SDK/CLI calls from Harness code and Model Router behavior are forbidden.
 - Treat `.agent/project.yaml` as local execution identity only. It must never grant publication, merge, deployment, credential, network, protected-path, or provider-routing authority.
+
+## Mobilistics preflight
+- For work in `mobilistics-artificial-intelligence`, `webcrawler`, `mai-nextjs`, or `vpagent/frontend`, every planning, implementation, repair, and review role must use the user-level `$naivy-preflight-review` skill.
+- Run the skill before editing to build an impact map and after verification to audit the complete diff. Load every applicable backend, crawler, or frontend profile.
+- Record the impact-map decisions in the role-owned plan artifact and the final evidence in the role-owned review or verdict artifact; do not introduce a parallel workflow-state location.
+- Reject `local_complete` when an applicable evidence field is missing, a required realistic integration check was replaced only by mocks, or an unresolved P1/P2 finding remains.
+- Treat the skill as a quality gate, not publication authority. Continue to follow `.agent-policy.yaml`, the active user instruction, and the existing publication and approval lifecycle.

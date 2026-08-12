@@ -19,7 +19,7 @@
     "lessons_updated"
   ],
   "enums": {
-    "decision": ["publish_pr", "await_approval", "reject", "no_changes"],
+    "decision": ["publish_pr", "local_complete", "await_approval", "reject", "no_changes"],
     "execution_status": ["planned", "running", "completed", "blocked", "failed"],
     "project_profile": ["agent_workspace", "django", "nextjs_web"],
     "risk_class": ["low", "medium", "high"]

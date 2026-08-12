@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from runtime_contracts import load_json as load_schema, validate_contract
+from security_approval import security_scope
 from task_queue import DEFAULT_DB, TaskQueue, TaskRecord
 from ai_harness.recovery.policy import load_recovery_policy
 
@@ -104,9 +105,22 @@ def append_error(run_dir: Path, *, code: str, message: str) -> None:
 def canonical_scope(scope: dict[str, Any]) -> dict[str, Any]:
     actions = sorted({str(item) for item in scope.get("actions", []) if isinstance(item, str)})
     paths = sorted({str(item) for item in scope.get("paths", []) if isinstance(item, str)})
+    finding_ids = sorted(
+        {str(item) for item in scope.get("finding_ids", []) if isinstance(item, str)}
+    )
     gate = str(scope.get("gate", ""))
     risk_class = str(scope.get("risk_class", ""))
-    return {"actions": actions, "paths": paths, "gate": gate, "risk_class": risk_class}
+    security_fingerprint = str(scope.get("security_fingerprint", ""))
+    verifier_fingerprint = str(scope.get("verifier_fingerprint", ""))
+    return {
+        "actions": actions,
+        "paths": paths,
+        "gate": gate,
+        "risk_class": risk_class,
+        "finding_ids": finding_ids,
+        "security_fingerprint": security_fingerprint,
+        "verifier_fingerprint": verifier_fingerprint,
+    }
 
 
 def scope_covers(requested: dict[str, Any], approved: dict[str, Any]) -> bool:
@@ -154,12 +168,36 @@ def default_scope(workflow: dict[str, Any], role: str) -> dict[str, Any]:
         security = read_json(security_path)
         if security.get("status") in {"fail", "blocked"} or security.get("verdict") == "broken":
             actions.append("accept_security_finding")
+            security_details = security_scope(security)
+        else:
+            security_details = {}
+    else:
+        security_details = {}
+    verifier_artifacts = {
+        "architecture-consistency-agent": "architecture_consistency.json",
+        "semantic-conflict-agent": "semantic_conflict.json",
+        "reviewer": "review.json",
+    }
+    verifier_name = verifier_artifacts.get(role)
+    verifier_path = Path(str(workflow.get("artifacts_dir", ""))) / str(verifier_name or "")
+    if verifier_name and verifier_path.is_file():
+        actions.append("accept_unavailable_verification")
+        verifier = read_json(verifier_path)
+        verifier_details = {
+            "verifier_fingerprint": hashlib.sha256(
+                json.dumps(verifier, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+        }
+    else:
+        verifier_details = {}
     return canonical_scope(
         {
             "actions": actions,
             "paths": paths,
             "gate": role,
             "risk_class": risk_class,
+            **security_details,
+            **verifier_details,
         }
     )
 
@@ -364,6 +402,7 @@ def _prepare_resume_locked(run_dir: Path) -> dict[str, Any]:
                     "approval_id": approval["approval_id"],
                     "gate": role,
                     "scope": approval["approved_scope"],
+                    "checkpoint_fingerprint": approval["checkpoint_fingerprint"],
                     "granted_at": approval["decided_at"],
                     "reason": approval["reason"],
                 }
@@ -406,6 +445,7 @@ def resume_run(run_dir: Path, *, queue: TaskQueue) -> tuple[dict[str, Any], Task
             priority=100,
             max_retries=2,
             run_id=run_dir.name,
+            supersede_awaiting_approval=True,
         )
         if not result["already_consumed"]:
             append_event(run_dir, "workflow.resume_queued", approval)

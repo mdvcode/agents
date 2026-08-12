@@ -123,3 +123,21 @@
   Example bad pattern: `Path(__file__).resolve().parents[2] / ".agent-recovery.yaml"` inside an installed module.
   Example good pattern: resolve `harness_home() / ".agent-recovery.yaml"`, load and validate it in readiness checks, then verify the installed worker after reinstalling.
   Scope: packaged agent control plane and worker startup
+
+- Date: 2026-08-07
+  Agent: Codex
+  Failure: Security, semantic-verifier, and reviewer approvals were consumed but the deterministic router recreated the same gate, producing repeated confirmation prompts and duplicate resume records.
+  Root cause: Approval scopes authorized resume without encoding the exact accepted finding or verifier artifact, and downstream blocker/gate validation ignored durable accepted-grant evidence.
+  Prevention rule: Scope exceptional acceptance to a canonical artifact fingerprint, consume it once, teach every downstream blocker and required-gate check to recognize the same durable grant, and retain backward compatibility only for already-recorded explicit grants.
+  Example bad pattern: pop `approval_override`, then route the unchanged broken artifact back to `approval-gate` and enqueue another active resume record.
+  Example good pattern: persist exact finding or verifier fingerprints, supersede older awaiting records atomically, and advance with a draft-only warning while critical findings remain hard-blocked.
+  Scope: approval lifecycle, deterministic routing, and scheduler attention
+
+- Date: 2026-08-07
+  Agent: Codex
+  Failure: A long-lived worker repeatedly opened `tasks.db` until it failed with `Too many open files` and could no longer heartbeat or update service state.
+  Root cause: Python's SQLite connection context manager commits or rolls back but does not close the connection; queue methods used `with connection` as if it owned connection cleanup.
+  Prevention rule: Wrap SQLite connection creation in an owning context manager that always closes in `finally`, and test that a connection is unusable after leaving the queue context.
+  Example bad pattern: return a raw `sqlite3.Connection` from `connect()` and rely on `with self.connect()` to close it.
+  Example good pattern: yield the connection from a `contextmanager`, preserve transaction semantics, and call `connection.close()` in `finally`.
+  Scope: SQLite-backed worker queues and long-lived control-plane services

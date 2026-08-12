@@ -8,9 +8,10 @@ import json
 import sqlite3
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -110,12 +111,17 @@ class TaskQueue:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
 
-    def connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.path, timeout=1, isolation_level=None)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA busy_timeout = 1000")
         connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     @staticmethod
     def _begin_immediate(connection: sqlite3.Connection) -> None:
@@ -274,6 +280,7 @@ class TaskQueue:
         priority: int = 0,
         max_retries: int = 2,
         run_id: str = "",
+        supersede_awaiting_approval: bool = False,
     ) -> TaskRecord:
         if not task_key.strip():
             raise ValueError("task_key is required")
@@ -297,6 +304,31 @@ class TaskQueue:
                 raise RuntimeError("failed to enqueue task")
             if cursor.rowcount == 1:
                 self.event(connection, int(row["id"]), "enqueued", details={"priority": priority}, now=now)
+            if supersede_awaiting_approval and run_id:
+                superseded = connection.execute(
+                    """
+                    SELECT id FROM tasks
+                    WHERE run_id=? AND status='awaiting_approval' AND id<>?
+                    ORDER BY id
+                    """,
+                    (run_id, int(row["id"])),
+                ).fetchall()
+                connection.execute(
+                    """
+                    UPDATE tasks SET status='completed',updated_at=?,requires_human=0,
+                        exception_reason='',recovery_action=''
+                    WHERE run_id=? AND status='awaiting_approval' AND id<>?
+                    """,
+                    (now, run_id, int(row["id"])),
+                )
+                for previous in superseded:
+                    self.event(
+                        connection,
+                        int(previous["id"]),
+                        "superseded_by_resume",
+                        details={"successor_task_id": int(row["id"]), "run_id": run_id},
+                        now=now,
+                    )
             connection.commit()
             return self.record(row)
 
