@@ -66,8 +66,8 @@ def normalize_event(
     if workspace_mode not in {"isolated", "current_branch"}:
         raise EventError("event workspace_mode must be isolated or current_branch")
     mode = text(payload.get("mode"), "auto")
-    if mode not in {"auto", "fast", "full"}:
-        raise EventError("event mode must be auto, fast, or full")
+    if mode not in {"auto", "fast", "full", "goal"}:
+        raise EventError("event mode must be auto, fast, full, or goal")
     run_id = text(payload.get("run_id"))
     try:
         priority = int(payload.get("priority", 0) or 0)

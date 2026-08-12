@@ -4,6 +4,7 @@ import importlib.util
 import json
 import shlex
 import sys
+import time
 from pathlib import Path
 
 
@@ -112,6 +113,224 @@ workflows:
 
     assert result == 0
     assert calls == [17]
+
+
+def test_workflow_runner_caps_step_timeout_to_remaining_duration_budget(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    workflows_path = tmp_path / ".agent-workflows.yaml"
+    workflows_path.write_text(
+        """
+version: 1
+workflows:
+  sample:
+    budgets:
+      max_duration_seconds: 3
+    timeout_seconds: 17
+    steps:
+      - name: "bounded"
+        command: "python3 -c 'print(42)'"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run_workflow, "WORKFLOWS", workflows_path)
+    monkeypatch.setattr(run_workflow, "RUNS_DIR", tmp_path / ".agent-runs")
+    calls: list[int] = []
+
+    def fake_run_command(command: str, cwd: Path, timeout_seconds: int) -> tuple[int, str, str]:
+        calls.append(timeout_seconds)
+        return 0, "ok", ""
+
+    monkeypatch.setattr(run_workflow, "run_command", fake_run_command)
+
+    result = run_workflow.run_workflow("sample", root=tmp_path)
+
+    assert result == 0
+    assert calls == [3]
+
+
+def test_workflow_runner_enforces_mode_specific_duration_budget(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    workflows_path = tmp_path / ".agent-workflows.yaml"
+    workflows_path.write_text(
+        """
+version: 1
+workflows:
+  sample:
+    budgets:
+      max_duration_seconds: 120
+    mode_budgets:
+      fast:
+        max_duration_seconds: 7
+      goal:
+        max_duration_seconds: 19
+    timeout_seconds: 60
+    steps:
+      - name: "bounded-fast-step"
+        command: "python3 -c 'print(42)'"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run_workflow, "WORKFLOWS", workflows_path)
+    monkeypatch.setattr(run_workflow, "RUNS_DIR", tmp_path / ".agent-runs")
+    calls: list[int] = []
+
+    def fake_run_command(command: str, cwd: Path, timeout_seconds: int) -> tuple[int, str, str]:
+        calls.append(timeout_seconds)
+        return 0, "ok", ""
+
+    monkeypatch.setattr(run_workflow, "run_command", fake_run_command)
+
+    result = run_workflow.run_workflow("sample", root=tmp_path, mode="fast")
+    goal_result = run_workflow.run_workflow("sample", root=tmp_path, mode="goal")
+
+    assert result == 0
+    assert goal_result == 0
+    assert calls == [7, 19]
+
+
+def test_resumed_workflow_is_capped_to_remaining_recovery_budget(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    workflows_path = tmp_path / ".agent-workflows.yaml"
+    workflows_path.write_text(
+        """
+version: 1
+workflows:
+  sample:
+    budgets:
+      max_duration_seconds: 120
+    timeout_seconds: 60
+    steps:
+      - name: "recovery-step"
+        command: "python3 -c 'print(42)'"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    runs = tmp_path / ".agent-runs"
+    run_dir = runs / "recovery-run"
+    run_dir.mkdir(parents=True)
+    recovery_limit = run_workflow.load_recovery_policy().max_recovery_duration_seconds
+    (run_dir / "workflow.json").write_text(
+        json.dumps(
+            {
+                "run_id": "recovery-run",
+                "task_id": "recovery-task",
+                "execution_status": "retry_wait",
+                "recovery": {"started_at": time.time() - recovery_limit + 5},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run_workflow, "WORKFLOWS", workflows_path)
+    monkeypatch.setattr(run_workflow, "RUNS_DIR", runs)
+    calls: list[int] = []
+
+    def fake_run_command(command: str, cwd: Path, timeout_seconds: int) -> tuple[int, str, str]:
+        calls.append(timeout_seconds)
+        return 0, "ok", ""
+
+    monkeypatch.setattr(run_workflow, "run_command", fake_run_command)
+
+    result = run_workflow.run_workflow(
+        "sample",
+        root=tmp_path,
+        run_id="recovery-run",
+        task_id="recovery-task",
+        resume=True,
+    )
+
+    assert result == 0
+    assert len(calls) == 1
+    assert 1 <= calls[0] <= 5
+
+
+def test_expired_recovery_budget_dead_letters_without_running_step(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    workflows_path = tmp_path / ".agent-workflows.yaml"
+    workflows_path.write_text(
+        """
+version: 1
+workflows:
+  sample:
+    steps:
+      - name: "must-not-run"
+        command: "python3 -c 'print(42)'"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    runs = tmp_path / ".agent-runs"
+    run_dir = runs / "expired-recovery-run"
+    run_dir.mkdir(parents=True)
+    recovery_limit = run_workflow.load_recovery_policy().max_recovery_duration_seconds
+    (run_dir / "workflow.json").write_text(
+        json.dumps(
+            {
+                "run_id": "expired-recovery-run",
+                "task_id": "expired-recovery-task",
+                "execution_status": "resuming",
+                "recovery": {"started_at": time.time() - recovery_limit - 1},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run_workflow, "WORKFLOWS", workflows_path)
+    monkeypatch.setattr(run_workflow, "RUNS_DIR", runs)
+    calls: list[str] = []
+
+    def fake_run_command(command: str, cwd: Path, timeout_seconds: int) -> tuple[int, str, str]:
+        calls.append(command)
+        return 0, "ok", ""
+
+    monkeypatch.setattr(run_workflow, "run_command", fake_run_command)
+
+    result = run_workflow.run_workflow(
+        "sample",
+        root=tmp_path,
+        run_id="expired-recovery-run",
+        task_id="expired-recovery-task",
+        resume=True,
+    )
+
+    assert result == run_workflow.EXIT_DEAD_LETTER
+    assert calls == []
+    state = json.loads((run_dir / "workflow.json").read_text(encoding="utf-8"))
+    assert state["execution_status"] == "dead_letter"
+    assert state["recovery_action"] == "dead_letter"
+    assert state["recovery_reason"] == "task recovery budget exhausted before resume"
+
+
+def test_run_command_timeout_terminates_descendant_processes(tmp_path: Path) -> None:
+    marker = tmp_path / "descendant-survived"
+    child = (
+        "import time; from pathlib import Path; "
+        f"time.sleep(1.3); Path({str(marker)!r}).write_text('survived')"
+    )
+    parent = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {child!r}]); "
+        "time.sleep(30)"
+    )
+
+    started = time.monotonic()
+    returncode, _, stderr = run_workflow.run_command(
+        f"{shlex.quote(sys.executable)} -c {shlex.quote(parent)}",
+        tmp_path,
+        1,
+    )
+    duration = time.monotonic() - started
+    time.sleep(0.5)
+
+    assert returncode == 124
+    assert "timed out" in stderr or "produced no output" in stderr
+    assert duration < 4
+    assert not marker.exists()
 
 
 def test_workflow_runner_does_not_retry_after_authoritative_attention_pause(

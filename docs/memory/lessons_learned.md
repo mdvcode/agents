@@ -124,20 +124,29 @@
   Example good pattern: resolve `harness_home() / ".agent-recovery.yaml"`, load and validate it in readiness checks, then verify the installed worker after reinstalling.
   Scope: packaged agent control plane and worker startup
 
-- Date: 2026-08-07
+- Date: 2026-08-11
   Agent: Codex
-  Failure: Security, semantic-verifier, and reviewer approvals were consumed but the deterministic router recreated the same gate, producing repeated confirmation prompts and duplicate resume records.
-  Root cause: Approval scopes authorized resume without encoding the exact accepted finding or verifier artifact, and downstream blocker/gate validation ignored durable accepted-grant evidence.
-  Prevention rule: Scope exceptional acceptance to a canonical artifact fingerprint, consume it once, teach every downstream blocker and required-gate check to recognize the same durable grant, and retain backward compatibility only for already-recorded explicit grants.
-  Example bad pattern: pop `approval_override`, then route the unchanged broken artifact back to `approval-gate` and enqueue another active resume record.
-  Example good pattern: persist exact finding or verifier fingerprints, supersede older awaiting records atomically, and advance with a draft-only warning while critical findings remain hard-blocked.
-  Scope: approval lifecycle, deterministic routing, and scheduler attention
+  Failure: A paused role could ask the same question again after the user had answered it, creating an unlimited answer/resume cycle with no implementation progress; technical failures could also be presented as answerable questions.
+  Root cause: Retry suppression stopped one active workflow process but question identity was not preserved across the answer/resume boundary, and answerability was inferred from broad non-completed statuses.
+  Prevention rule: Fingerprint every answerable question across its full run lifecycle, stop a repeated answered fingerprint as an explicit technical blocker, and accept informational answers only for an explicit `awaiting_approval` role question.
+  Example bad pattern: classify `blocked`, `failed`, and `awaiting_approval` alike, then reopen a new answer gate whenever the resumed role repeats its summary.
+  Example good pattern: carry a stable question id and structured choices, record the fingerprint with the answer, resume the same checkpoint once, and surface any repeated fingerprint as `repeated_question` without creating another approval request.
+  Scope: agent control-plane workflow, runtime role contract, CLI, and dashboard UX
 
-- Date: 2026-08-07
+- Date: 2026-08-11
   Agent: Codex
-  Failure: A long-lived worker repeatedly opened `tasks.db` until it failed with `Too many open files` and could no longer heartbeat or update service state.
-  Root cause: Python's SQLite connection context manager commits or rolls back but does not close the connection; queue methods used `with connection` as if it owned connection cleanup.
-  Prevention rule: Wrap SQLite connection creation in an owning context manager that always closes in `finally`, and test that a connection is unusable after leaving the queue context.
-  Example bad pattern: return a raw `sqlite3.Connection` from `connect()` and rely on `with self.connect()` to close it.
-  Example good pattern: yield the connection from a `contextmanager`, preserve transaction semantics, and call `connection.close()` in `finally`.
-  Scope: SQLite-backed worker queues and long-lived control-plane services
+  Failure: Configured task timeouts did not bound every execution path: a large stdin write could block before monitoring began, workflow steps could outlive their duration or recovery budget, timed-out descendants could survive, and successful termination still paid the full grace delay.
+  Root cause: Time limits were attached to configuration or a parent process instead of the complete lifecycle from input delivery through descendant shutdown, and resumed work received a fresh timeout instead of the remaining wall-clock budget.
+  Prevention rule: Start no potentially blocking pipe operation before timeout supervision; run every workflow step in a killable process group, cap each attempt to the remaining workflow and recovery budgets, synchronize timeout/expiry transitions across workflow and queue state, and test both descendant death and prompt timeout return.
+  Example bad pattern: synchronously write a large prompt to `PIPE`, call `subprocess.run(timeout=...)` for only the parent, then poll a stale set of descendant PIDs during shutdown.
+  Example good pattern: provide stdin from a prepared temporary file, monitor a new process session, terminate its entire tree, recalculate live descendants during grace, pass the minimum remaining deadline into every resumed step, and make an expired approval recoverable in both workflow and queue state.
+  Scope: agent control-plane subprocess, workflow, recovery, worker, and watch boundaries
+
+- Date: 2026-08-11
+  Agent: Codex
+  Failure: User-facing documentation presented a per-role executor timeout, a fast-session budget, and a broad full-workflow budget as comparable task durations, while ordinary work could inherit a two-hour cap without an explicit long-running objective.
+  Root cause: Role attempts, total session time, repair iterations, recovery, human attention, and deliberate multi-hour goals were collapsed into one informal concept of “how long a task runs.”
+  Prevention rule: Name and enforce every stopping dimension independently; keep ordinary work bounded to an interactive session, require explicit opt-in for multi-hour goals, and never let automatic routing choose that mode.
+  Example bad pattern: document `role = 30 minutes`, `fast = 15 minutes`, and `full = 2 hours` as three alternatives without explaining that the first bounds one executor and the others bound a workflow.
+  Example good pattern: expose `fast = 15 minutes`, `full = 60 minutes`, and explicit checkpointed `goal = 4 hours`, while separately enforcing the 30-minute per-role emergency cap, iteration/token guards, stuck detection, and recovery deadlines.
+  Scope: agent control-plane execution modes, routing, CLI/dashboard UX, and operator documentation

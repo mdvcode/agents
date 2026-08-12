@@ -266,6 +266,9 @@ def expire_if_needed(run_dir: Path, approval: dict[str, Any], now: datetime | No
         workflow["execution_status"] = "blocked"
         workflow["blockers"] = ["approval expired"]
         write_json_atomic(run_dir / "workflow.json", workflow)
+        queue_path = run_dir.parent.parent / ".agent-queue" / "tasks.db"
+        if queue_path.is_file():
+            TaskQueue(queue_path).mark_approval_expired(str(workflow.get("run_id", run_dir.name)))
         append_event(run_dir, "approval.expired", approval)
         append_error(run_dir, code="APPROVAL_EXPIRED", message="The scoped approval expired before resume.")
     return approval

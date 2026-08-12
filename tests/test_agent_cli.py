@@ -293,7 +293,17 @@ def test_agent_task_accepts_custom_prefix_and_auto_starts_worker(
     assert not (state_root / ".agent-worktrees").exists()
 
 
-def test_agent_task_accepts_fast_execution_mode(
+@pytest.mark.parametrize(
+    ("mode", "goal", "task_id"),
+    [
+        ("fast", "Fix CSS color", "fast-css"),
+        ("goal", "Complete checkpointed objective", "long-goal"),
+    ],
+)
+def test_agent_task_accepts_requested_execution_mode(
+    mode: str,
+    goal: str,
+    task_id: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: object,
@@ -307,11 +317,11 @@ def test_agent_task_accepts_fast_execution_mode(
     configure_temporary_harness(monkeypatch, tmp_path)
 
     assert cli.main(
-        ["task", "Fix CSS color", "--repo", str(repository), "--task-id", "fast-css", "--mode", "fast", "--json"]
+        ["task", goal, "--repo", str(repository), "--task-id", task_id, "--mode", mode, "--json"]
     ) == 0
     result = json.loads(capsys.readouterr().out)
 
-    assert result["mode"] == "fast"
+    assert result["mode"] == mode
 
 
 @pytest.mark.parametrize("prefix", ["../", "bad prefix/", "feature//", ".hidden/"])
@@ -753,6 +763,25 @@ def test_agent_answer_records_requested_input_and_resumes_same_run(
             "details": ["Choose CSV or JSON."],
             "role": "planner",
             "action": "answer_or_approve",
+            "fingerprint": "sha256:question",
+            "question": {
+                "id": "export_format",
+                "options": [
+                    {
+                        "label": "JSON",
+                        "description": "Preserves nested data.",
+                        "value": "Use JSON",
+                        "recommended": True,
+                    },
+                    {
+                        "label": "CSV",
+                        "description": "Simple tabular export.",
+                        "value": "Use CSV",
+                        "recommended": False,
+                    },
+                ],
+                "allow_custom": True,
+            },
         },
         "last_route": {"next_role": "approval-gate", "reason": "User input is required."},
         "roles": [
@@ -797,6 +826,8 @@ def test_agent_answer_records_requested_input_and_resumes_same_run(
     assert result["answer_recorded"] is True
     human_input = json.loads((run_dir / "human-input.json").read_text(encoding="utf-8"))
     assert human_input["entries"][-1]["response"] == "Use JSON"
+    assert human_input["entries"][-1]["question_id"] == "export_format"
+    assert human_input["entries"][-1]["question_fingerprint"] == "sha256:question"
     assert (run_dir / "human-input.json").stat().st_mode & 0o777 == 0o600
     approval = json.loads((run_dir / "artifacts" / "approval.json").read_text(encoding="utf-8"))
     resumed = json.loads((run_dir / "workflow.json").read_text(encoding="utf-8"))
@@ -900,7 +931,25 @@ def test_agent_status_and_watch_show_actionable_attention(
                     "summary": "Which API environment should be used?",
                     "details": ["Choose staging or local."],
                     "role": "implementation-agent",
-                    "action": "answer_or_approve",
+                    "action": "answer",
+                    "question": {
+                        "id": "api_environment",
+                        "options": [
+                            {
+                                "label": "Local",
+                                "description": "Use local services.",
+                                "value": "local",
+                                "recommended": True,
+                            },
+                            {
+                                "label": "Staging",
+                                "description": "Use shared staging services.",
+                                "value": "staging",
+                                "recommended": False,
+                            },
+                        ],
+                        "allow_custom": True,
+                    },
                 },
                 "last_route": {"next_role": "approval-gate", "reason": "Input required."},
                     "roles": [
@@ -923,6 +972,8 @@ def test_agent_status_and_watch_show_actionable_attention(
     status_output = capsys.readouterr().out
     assert "ATTENTION REQUIRED: question-task" in status_output
     assert "Which API environment should be used?" in status_output
+    assert "option 1: Local (recommended)" in status_output
+    assert "option 2: Staging" in status_output
     assert "agent answer" in status_output
     assert "agent approve" not in status_output
 
@@ -932,6 +983,36 @@ def test_agent_status_and_watch_show_actionable_attention(
     watch_output = capsys.readouterr().out
     assert "ATTENTION REQUIRED: question-task" in watch_output
     assert "agent answer" in watch_output
+
+
+def test_agent_watch_returns_immediately_when_worker_is_not_running(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    task_queue = cli.load_harness_module(state_root, "task_queue")
+    task_queue.TaskQueue(state_root / ".agent-queue" / "tasks.db").enqueue(
+        task_key="waiting-task",
+        payload={"task_id": "waiting-task", "repository": str(repository)},
+    )
+
+    assert cli.main(["watch", "--repo", str(repository), "--task-id", "waiting-task"]) == 0
+
+    output = capsys.readouterr().out
+    assert "worker service is not running" in output
+    assert f"agent start --repo {repository}" in output
+
+
+def test_agent_watch_default_timeout_is_bounded() -> None:
+    args = cli.build_parser().parse_args(["watch"])
+
+    assert args.timeout == 1800.0
 
 
 def test_agent_task_rejects_default_branch_before_queue_mutation(

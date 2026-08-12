@@ -61,6 +61,51 @@ def awaiting_run(runs: Path, repository: Path) -> Path:
     return run
 
 
+def test_metrics_expose_bounded_structured_question(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    run = runs / "question-run"
+    write_json(
+        run / "workflow.json",
+        {
+            "run_id": "question-run",
+            "task_id": "question-task",
+            "repository": str(tmp_path),
+            "execution_status": "awaiting_approval",
+            "attention": {
+                "required": True,
+                "summary": "Choose an environment.",
+                "details": ["Select one option."],
+                "action": "answer",
+                "question": {
+                    "id": "environment",
+                    "options": [
+                        {
+                            "label": "Local",
+                            "description": "Use local services.",
+                            "value": "local",
+                            "recommended": True,
+                        },
+                        {
+                            "label": "Staging",
+                            "description": "Use shared services.",
+                            "value": "staging",
+                            "recommended": False,
+                        },
+                    ],
+                    "allow_custom": True,
+                },
+            },
+        },
+    )
+
+    metrics = collect_metrics(runs_dir=runs, db_path=tmp_path / "queue.db")
+
+    attention = metrics["runs"]["items"][0]["attention"]
+    assert attention["action"] == "answer"
+    assert attention["question"]["id"] == "environment"
+    assert attention["question"]["options"][0]["recommended"] is True
+
+
 def api_request(url: str, token: str, *, method: str = "GET", body: dict[str, object] | None = None) -> dict[str, object]:
     data = json.dumps(body).encode() if body is not None else None
     request = Request(
@@ -179,7 +224,13 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         assert 'id="executionMode"' in dashboard
         assert '<option value="fast">' in dashboard
         assert '<option value="full">' in dashboard
+        assert '<option value="goal">' in dashboard
+        assert "Долгая цель — до 4 часов" in dashboard
         assert 'id="workspaceMode"' in dashboard
+        assert "Другой ответ" in dashboard
+        assert "question.options" in dashboard
+        assert "answers:{}" in dashboard
+        assert "contains(document.activeElement)" in dashboard
         assert "api-run" not in dashboard
 
         config = api_request(f"{base}/config", access_key)
@@ -261,6 +312,17 @@ def test_dashboard_task_and_run_controls_delegate_to_product_cli(
                 "execution_mode": "fast",
             },
         )
+        goal_launched = api_request(
+            f"{base}/ui/tasks",
+            token,
+            method="POST",
+            body={
+                "repository": str(tmp_path),
+                "goal": "Execute checkpointed objective",
+                "workspace_mode": "worktree",
+                "execution_mode": "goal",
+            },
+        )
         legacy_launched = api_request(
             f"{base}/ui/tasks",
             token,
@@ -316,6 +378,7 @@ def test_dashboard_task_and_run_controls_delegate_to_product_cli(
         thread.join(timeout=5)
 
     assert launched["task_id"] == "kc-432"
+    assert goal_launched["task_id"] == "kc-432"
     assert legacy_launched["task_id"] == "kc-432"
     assert aborted["status"] == "queued"
     assert answered["status"] == "queued"
@@ -323,6 +386,10 @@ def test_dashboard_task_and_run_controls_delegate_to_product_cli(
     assert retried["status"] == "queued"
     assert calls == [
         (tmp_path, ["task", "Implement KC-432", "--mode", "fast", "--worktree"]),
+        (
+            tmp_path,
+            ["task", "Execute checkpointed objective", "--mode", "goal", "--worktree"],
+        ),
         (
             tmp_path,
             ["task", "Continue legacy dashboard task", "--mode", "auto", "--current-branch"],

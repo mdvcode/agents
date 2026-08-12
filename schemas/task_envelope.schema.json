@@ -13,6 +13,6 @@
   "enums": {
     "source": ["cli", "github_issue", "webhook", "api", "ci"],
     "workspace_mode": ["isolated", "current_branch"],
-    "mode": ["auto", "fast", "full"]
+    "mode": ["auto", "fast", "full", "goal"]
   }
 }

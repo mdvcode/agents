@@ -8,11 +8,15 @@ A background task that cannot continue autonomously must enter explicit attentio
 
 `agent status` and `agent watch` are the user-facing attention surfaces. `agent watch` follows state transitions and exits when the task completes or needs action. Missing information is supplied with `agent answer <run-id> "..."`; the sanitized response stays in the private run directory, the exact pending continuation gate is consumed once, and the same checkpoint resumes with prior answers included in the role prompt.
 
+When a question has a small closed answer set, the role may attach 2-3 structured options with a recommendation and concise tradeoff. The dashboard renders them as a select control and retains a custom-answer path. Text-only questions and older `answer_or_approve` records remain compatible.
+
 Information and authority remain separate. `agent answer` is accepted only for attention explicitly classified as a role question. The user-facing status does not suggest approval as a substitute for missing information. HIGH risk, security, protected-path, publication, and other decision gates remain `approve` and require `agent approve`.
 
 ## Retry rule
 
 When a child workflow has already selected approval, blocked, retry, repair, resume, dead letter, or failure state, the outer step runner stops immediately instead of repeating the same command. Existing repair loops continue to compare failure and diff fingerprints and stop on a repeated no-progress result.
+
+Answered questions are fingerprinted by role plus stable question identity. If the same role asks the same question after its answer was recorded, the workflow does not create another answer or approval gate. It enters a visible technical blocker that identifies the repeated question and directs the operator to inspect the role prompt or task context. A `blocked` or `failed` role result is never classified as an informational question; only an explicit `awaiting_approval` role result may accept `agent answer`.
 
 ## Consequences
 
