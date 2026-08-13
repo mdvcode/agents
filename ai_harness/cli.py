@@ -961,6 +961,8 @@ def attention_items(
         }:
             continue
         run_id = str(task.get("run_id", ""))
+        if run_id and run_id in seen_runs:
+            continue
         run = runs_by_id.get(run_id, {})
         attention = run.get("attention", {}) if isinstance(run, dict) else {}
         summary = str(task.get("exception_reason", "")).strip()

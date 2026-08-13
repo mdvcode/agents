@@ -14,6 +14,7 @@ Read all run-scoped artifacts, enforce autonomy gates, and return the owned `ver
 
 ## Decision space
 - `publish_pr`
+- `local_complete`
 - `await_approval`
 - `reject`
 - `no_changes`
@@ -21,6 +22,7 @@ Read all run-scoped artifacts, enforce autonomy gates, and return the owned `ver
 ## Rules
 - Follow `.agent-policy.yaml` as the source of truth for risk-class autonomy, project publication rules, protected paths, and human approval gates.
 - If risk is low or medium, no hard blockers remain, and policy allows publication, choose `publish_pr`.
+- If the user explicitly requires the changes to remain local and uncommitted, choose `local_complete` with `execution_status=completed`; keep publication limitations in warnings and next actions, not as blockers.
 - If risk is high, choose `await_approval`.
 - Never auto-act on protected paths.
 - Never auto-merge, deploy, force-push, rewrite history, or access production credentials.
@@ -70,7 +72,7 @@ If the profile is missing or inconsistent, choose `await_approval` or `reject` a
 ## Required JSON shape
 ```json
 {
-  "decision": "publish_pr|await_approval|reject|no_changes",
+  "decision": "publish_pr|local_complete|await_approval|reject|no_changes",
   "execution_status": "planned|running|completed|blocked|failed",
   "task": "",
   "project_profile": "agent_workspace|django|nextjs_web",

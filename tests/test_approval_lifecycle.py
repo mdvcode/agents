@@ -152,6 +152,22 @@ def test_resume_enqueues_same_run_and_checkpoint(tmp_path: Path) -> None:
     request_approval(run, reason="HIGH risk")
     approve_run(run, actor="reviewer")
     queue = TaskQueue(tmp_path / "queue.db")
+    predecessor = queue.enqueue(
+        task_key="original-task",
+        payload={"task_id": "approval-task", "repository": str(tmp_path)},
+        run_id="run-approval",
+    )
+    claimed = queue.claim(worker_id="original-worker")
+    assert claimed is not None and claimed.id == predecessor.id
+    assert queue.mark_running(predecessor.id, "original-worker")
+    queue.finish(
+        task_id=predecessor.id,
+        worker_id="original-worker",
+        status="awaiting_approval",
+        run_id="run-approval",
+        requires_human=True,
+        exception_reason="approval required",
+    )
 
     transition, record = resume_run(run, queue=queue)
 
@@ -160,6 +176,12 @@ def test_resume_enqueues_same_run_and_checkpoint(tmp_path: Path) -> None:
     assert record.payload["run_id"] == "run-approval"
     assert record.payload["repository"] == str(tmp_path)
     assert record.status == "queued"
+    superseded = queue.get(predecessor.id)
+    assert superseded is not None and superseded.status == "completed"
+    assert any(
+        event["event"] == "superseded_by_resume"
+        for event in queue.events(predecessor.id)
+    )
     replay, replay_record = resume_run(run, queue=queue)
     assert replay["already_consumed"] is True
     assert replay_record.id == record.id
@@ -194,3 +216,69 @@ def test_high_risk_request_explicitly_scopes_patch_authority(tmp_path: Path) -> 
 
     assert approval["requested_scope"]["actions"] == ["patch_high_risk", "resume_workflow"]
     assert approval["requested_scope"]["risk_class"] == "high"
+
+
+def test_security_request_is_scoped_to_current_findings(tmp_path: Path) -> None:
+    run = awaiting_run(tmp_path)
+    workflow_path = run / "workflow.json"
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    workflow["roles"] = [
+        {"role": "security-agent", "result": {"status": "completed"}},
+        {"role": "approval-gate", "result": {"status": "awaiting_approval"}},
+    ]
+    workflow["artifacts_dir"] = str(run / "artifacts")
+    write_json(workflow_path, workflow)
+    write_json(
+        run / "artifacts" / "security.json",
+        {
+            "verdict": "broken",
+            "status": "fail",
+            "highest_severity": "medium",
+            "blocker_ids": ["SEC-AUTH-001"],
+            "findings": [
+                {
+                    "id": "SEC-AUTH-001",
+                    "severity": "medium",
+                    "status": "confirmed",
+                    "category": "debug_logging",
+                    "scope": "pre-existing",
+                }
+            ],
+        },
+    )
+
+    approval = request_approval(run, reason="Security acceptance required")
+
+    assert approval["requested_scope"]["actions"] == [
+        "accept_security_finding",
+        "resume_workflow",
+    ]
+    assert approval["requested_scope"]["finding_ids"] == ["SEC-AUTH-001"]
+    assert len(approval["requested_scope"]["security_fingerprint"]) == 64
+
+
+def test_verifier_request_is_scoped_to_current_artifact(tmp_path: Path) -> None:
+    run = awaiting_run(tmp_path)
+    workflow_path = run / "workflow.json"
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    workflow["roles"] = [
+        {"role": "semantic-conflict-agent", "result": {"status": "completed"}},
+        {"role": "approval-gate", "result": {"status": "awaiting_approval"}},
+    ]
+    workflow["artifacts_dir"] = str(run / "artifacts")
+    write_json(workflow_path, workflow)
+    write_json(
+        run / "artifacts" / "semantic_conflict.json",
+        {
+            "verdict": "broken",
+            "blockers": ["Browser verification is unavailable."],
+        },
+    )
+
+    approval = request_approval(run, reason="Verifier unavailable")
+
+    assert approval["requested_scope"]["actions"] == [
+        "accept_unavailable_verification",
+        "resume_workflow",
+    ]
+    assert len(approval["requested_scope"]["verifier_fingerprint"]) == 64

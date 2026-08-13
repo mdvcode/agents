@@ -645,6 +645,46 @@ def test_agent_status_is_project_scoped_and_read_only(
     }
 
 
+def test_attention_items_collapse_queue_history_by_run() -> None:
+    tasks = [
+        {
+            "queue_task_id": 3,
+            "task_id": "kc-363",
+            "run_id": "queue-task-48",
+            "status": "awaiting_approval",
+            "requires_human": True,
+            "exception_reason": "latest approval",
+        },
+        {
+            "queue_task_id": 2,
+            "task_id": "kc-363",
+            "run_id": "queue-task-48",
+            "status": "awaiting_approval",
+            "requires_human": True,
+            "exception_reason": "older approval",
+        },
+    ]
+    runs = [
+        {
+            "run_id": "queue-task-48",
+            "current_role": "implementation-agent",
+            "approval": {"status": "pending"},
+            "attention": {
+                "required": True,
+                "summary": "Approval required",
+                "details": [],
+                "action": "approve",
+            },
+        }
+    ]
+
+    items = cli.attention_items(tasks, runs)
+
+    assert len(items) == 1
+    assert items[0]["queue_task_id"] == 3
+    assert items[0]["summary"] == "latest approval"
+
+
 def test_agent_approve_resumes_the_only_pending_project_run(
     tmp_path: Path,
     monkeypatch: object,

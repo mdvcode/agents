@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -9,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from workflow_router import decide_next_role  # noqa: E402
+from security_approval import security_scope  # noqa: E402
 
 
 REQUIRED = [
@@ -265,6 +267,114 @@ def test_environmental_verifier_failure_does_not_repeat_implementation(tmp_path:
     assert "will not be repeated" in result["reason"]
 
 
+def test_environmental_verifier_approval_advances_without_reprompting(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    semantic = {
+        "verdict": "broken",
+        "blockers": ["Browser verification is unavailable because dependencies are missing."],
+        "repair_required": True,
+    }
+    artifact(artifacts_dir / "semantic_conflict.json", semantic)
+    state = completed_state(
+        approval_grants=[
+            {
+                "approval_id": "accepted-unavailable-verification",
+                "gate": "semantic-conflict-agent",
+                "scope": {
+                    "actions": ["accept_unavailable_verification", "resume_workflow"],
+                    "verifier_fingerprint": hashlib.sha256(
+                        json.dumps(semantic, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                    ).hexdigest(),
+                },
+                "reason": "semantic-conflict-agent could not verify the environment",
+            }
+        ],
+    )
+
+    result = route(tmp_path, state, "semantic-conflict-agent")
+
+    assert result["next_role"] == "reviewer"
+    assert result["stop"] is False
+    assert any("publication must remain draft" in item for item in result["warnings"])
+
+
+def test_legacy_environmental_verifier_approval_advances_current_run(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    artifact(
+        artifacts_dir / "semantic_conflict.json",
+        {
+            "verdict": "broken",
+            "blockers": ["Browser verification is unavailable because dependencies are missing."],
+            "repair_required": True,
+        },
+    )
+    state = completed_state(
+        approval_grants=[
+            {
+                "approval_id": "legacy-acceptance",
+                "gate": "semantic-conflict-agent",
+                "scope": {"actions": ["resume_workflow"]},
+                "reason": "semantic-conflict-agent could not verify the environment",
+            }
+        ],
+    )
+
+    result = route(tmp_path, state, "semantic-conflict-agent")
+
+    assert result["next_role"] == "reviewer"
+    assert result["stop"] is False
+
+
+def test_legacy_reviewer_approval_advances_unavailable_review(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    artifact(
+        artifacts_dir / "review.json",
+        {
+            "verdict": "unavailable",
+            "status": "block",
+            "blockers": ["Browser save and reload evidence is unavailable."],
+        },
+    )
+    state = completed_state(
+        approval_grants=[
+            {
+                "approval_id": "legacy-reviewer-acceptance",
+                "gate": "reviewer",
+                "scope": {"actions": ["resume_workflow"]},
+                "reason": "Workflow blockers are present; execution is awaiting approval.",
+            }
+        ],
+    )
+
+    result = route(tmp_path, state, "reviewer")
+
+    assert result["next_role"] == "orchestrator"
+    assert result["stop"] is False
+    assert any("publication must remain draft" in item for item in result["warnings"])
+
+
+def test_orchestrator_local_complete_finishes_without_publication_gate(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    artifact(
+        artifacts_dir / "verdict.json",
+        {
+            "decision": "local_complete",
+            "execution_status": "completed",
+            "checks_passed": True,
+            "blockers": [],
+            "warnings": ["Publication was not requested."],
+        },
+    )
+    state = completed_state()
+
+    result = route(tmp_path, state, "orchestrator")
+
+    assert result["next_role"] == ""
+    assert result["stop"] is False
+    assert result["publication_allowed"] is False
+    assert result["warnings"] == ["Publication was not requested."]
+
+
 def test_scoped_high_risk_grant_allows_patch_but_not_publication(tmp_path: Path) -> None:
     setup_artifacts(tmp_path, "high")
     state = completed_state(
@@ -410,6 +520,38 @@ def test_critical_security_finding_blocks_workflow(tmp_path: Path) -> None:
     assert result["stop"] is True
 
 
+def test_critical_security_finding_cannot_be_human_accepted(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    security = json.loads((artifacts_dir / "security.json").read_text(encoding="utf-8"))
+    security.update(
+        {
+            "verdict": "broken",
+            "status": "fail",
+            "highest_severity": "critical",
+            "findings": [{"id": "SEC-CRITICAL", "severity": "critical"}],
+            "blockers": ["SEC-CRITICAL"],
+            "blocker_ids": ["SEC-CRITICAL"],
+            "repair_required": True,
+        }
+    )
+    artifact(artifacts_dir / "security.json", security)
+    scope = {
+        "actions": ["accept_security_finding", "resume_workflow"],
+        "gate": "security-agent",
+        **security_scope(security),
+    }
+    state = completed_state(
+        approval_grants=[
+            {"approval_id": "critical", "gate": "security-agent", "scope": scope}
+        ]
+    )
+
+    result = route(tmp_path, state, "security-agent")
+
+    assert result["next_role"] == "blocked"
+    assert result["stop"] is True
+
+
 def test_medium_security_finding_routes_to_approval(tmp_path: Path) -> None:
     artifacts_dir = setup_artifacts(tmp_path)
     security = json.loads((artifacts_dir / "security.json").read_text(encoding="utf-8"))
@@ -460,6 +602,175 @@ def test_approved_medium_security_finding_routes_to_implementation(tmp_path: Pat
     assert result["next_role"] == "implementation-agent"
     assert result["stop"] is False
     assert result["loop"]["name"] == "security_repair"
+
+
+def test_accepted_medium_security_finding_continues_without_repair(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    security = json.loads((artifacts_dir / "security.json").read_text(encoding="utf-8"))
+    security.update(
+        {
+            "verdict": "broken",
+            "status": "warn",
+            "highest_severity": "medium",
+            "findings": [
+                {
+                    "id": "SEC-MEDIUM",
+                    "severity": "medium",
+                    "status": "confirmed",
+                    "category": "debug_logging",
+                    "scope": "pre-existing",
+                }
+            ],
+            "blockers": ["SEC-MEDIUM requires acceptance"],
+            "blocker_ids": ["SEC-MEDIUM"],
+            "repair_required": True,
+        }
+    )
+    artifact(artifacts_dir / "security.json", security)
+    scope = {
+        "actions": ["accept_security_finding", "resume_workflow"],
+        "gate": "security-agent",
+        **security_scope(security),
+    }
+    state = completed_state(
+        approval_override={
+            "approval_id": "security-acceptance",
+            "gate": "security-agent",
+            "scope": scope,
+        },
+        approval_grants=[
+            {
+                "approval_id": "security-acceptance",
+                "gate": "security-agent",
+                "scope": scope,
+            }
+        ],
+    )
+
+    result = route(
+        tmp_path,
+        state,
+        "security-agent",
+        {
+            "status": "completed",
+            "next_action": "repair",
+            "blockers": ["SEC-MEDIUM requires acceptance"],
+        },
+    )
+
+    assert result["next_role"] == "reviewer"
+    assert result["stop"] is False
+    assert state["loops"]["security_repair"]["iterations"] == 0
+
+
+def test_legacy_consumed_security_grant_remains_valid_for_existing_run(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    security = json.loads((artifacts_dir / "security.json").read_text(encoding="utf-8"))
+    security.update(
+        {
+            "verdict": "broken",
+            "status": "fail",
+            "highest_severity": "medium",
+            "findings": [{"id": "SEC-AUTH-001", "severity": "medium"}],
+            "blockers": ["SEC-AUTH-001 requires acceptance"],
+            "blocker_ids": ["SEC-AUTH-001"],
+            "repair_required": True,
+        }
+    )
+    artifact(artifacts_dir / "security.json", security)
+    state = completed_state(
+        approval_grants=[
+            {
+                "approval_id": "legacy-security-acceptance",
+                "gate": "security-agent",
+                "scope": {
+                    "actions": ["accept_security_finding", "resume_workflow"],
+                    "gate": "security-agent",
+                },
+            }
+        ]
+    )
+
+    result = route(tmp_path, state, "security-agent")
+
+    assert result["next_role"] == "reviewer"
+    assert result["stop"] is False
+
+
+def test_changed_security_finding_invalidates_scoped_acceptance(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    security = json.loads((artifacts_dir / "security.json").read_text(encoding="utf-8"))
+    security.update(
+        {
+            "verdict": "broken",
+            "status": "warn",
+            "highest_severity": "medium",
+            "findings": [{"id": "SEC-OLD", "severity": "medium"}],
+            "blockers": ["SEC-OLD"],
+            "blocker_ids": ["SEC-OLD"],
+            "repair_required": True,
+        }
+    )
+    old_scope = {
+        "actions": ["accept_security_finding", "resume_workflow"],
+        "gate": "security-agent",
+        **security_scope(security),
+    }
+    security["findings"] = [{"id": "SEC-NEW", "severity": "high"}]
+    security["blockers"] = ["SEC-NEW"]
+    security["blocker_ids"] = ["SEC-NEW"]
+    security["highest_severity"] = "high"
+    artifact(artifacts_dir / "security.json", security)
+    state = completed_state(
+        approval_override={
+            "approval_id": "stale-security-acceptance",
+            "gate": "security-agent",
+            "scope": old_scope,
+        },
+        approval_grants=[
+            {
+                "approval_id": "stale-security-acceptance",
+                "gate": "security-agent",
+                "scope": old_scope,
+            }
+        ],
+    )
+
+    result = route(tmp_path, state, "security-agent")
+
+    assert result["next_role"] == "approval-gate"
+    assert result["stop"] is True
+
+
+def test_accepted_security_artifact_is_valid_required_gate(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    security = json.loads((artifacts_dir / "security.json").read_text(encoding="utf-8"))
+    security.update(
+        {
+            "verdict": "broken",
+            "status": "warn",
+            "highest_severity": "medium",
+            "findings": [{"id": "SEC-MEDIUM", "severity": "medium"}],
+            "blockers": ["SEC-MEDIUM"],
+            "blocker_ids": ["SEC-MEDIUM"],
+            "repair_required": True,
+        }
+    )
+    artifact(artifacts_dir / "security.json", security)
+    scope = {
+        "actions": ["accept_security_finding", "resume_workflow"],
+        "gate": "security-agent",
+        **security_scope(security),
+    }
+    state = completed_state(
+        approval_grants=[
+            {"approval_id": "accepted", "gate": "security-agent", "scope": scope}
+        ]
+    )
+
+    result = route(tmp_path, state, "orchestrator")
+
+    assert result["next_role"] == "publication-prepare"
 
 
 def test_missing_frontend_evidence_allows_draft_only_publication(tmp_path: Path) -> None:

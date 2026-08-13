@@ -5,12 +5,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from security_approval import scope_accepts_security, security_finding_ids
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -316,6 +319,31 @@ def security_blockers(state: dict[str, Any], artifacts_dir: Path) -> list[str]:
     return []
 
 
+def accepted_security_finding_ids(state: dict[str, Any], artifacts_dir: Path) -> set[str]:
+    security = _artifact(artifacts_dir, "security.json")
+    if not isinstance(security, dict):
+        return set()
+    grants = state.get("approval_grants", [])
+    if not isinstance(grants, list):
+        return set()
+    for grant in grants:
+        if not isinstance(grant, dict) or grant.get("gate") != "security-agent":
+            continue
+        scope = grant.get("scope", {})
+        if not isinstance(scope, dict):
+            continue
+        if (
+            "accept_security_finding" in scope.get("actions", [])
+            and scope_accepts_security(scope, security)
+        ):
+            return set(security_finding_ids(security))
+    return set()
+
+
+def security_acceptance_granted(state: dict[str, Any], artifacts_dir: Path) -> bool:
+    return bool(accepted_security_finding_ids(state, artifacts_dir))
+
+
 def _artifact_resolves_role_blockers(role: str, artifacts_dir: Path) -> bool:
     artifact_names = {
         "quality-runner": "quality.json",
@@ -340,9 +368,26 @@ def workflow_blockers(
     state: dict[str, Any],
     current_result: dict[str, Any],
     artifacts_dir: Path,
+    current_role: str,
 ) -> list[str]:
-    blockers = _list_values(state.get("blockers"))
-    blockers.extend(_list_values(current_result.get("blockers")))
+    accepted_ids = accepted_security_finding_ids(state, artifacts_dir)
+
+    def unresolved(values: Any) -> list[str]:
+        return [
+            value
+            for value in _list_values(values)
+            if not any(
+                re.search(
+                    rf"(?<![A-Za-z0-9_-]){re.escape(finding_id)}(?![A-Za-z0-9_-])",
+                    value,
+                )
+                for finding_id in accepted_ids
+            )
+        ]
+
+    blockers = unresolved(state.get("blockers"))
+    if not verifier_unavailability_accepted(state, artifacts_dir, current_role):
+        blockers.extend(unresolved(current_result.get("blockers")))
     latest_results: dict[str, dict[str, Any]] = {}
     for entry in _role_entries(state):
         role = str(entry["role"])
@@ -356,9 +401,11 @@ def workflow_blockers(
         # failed result for the same role.
         if role == "approval-gate":
             continue
+        if verifier_unavailability_accepted(state, artifacts_dir, role):
+            continue
         if _artifact_resolves_role_blockers(role, artifacts_dir):
             continue
-        blockers.extend(f"{role}: {value}" for value in _list_values(result.get("blockers")))
+        blockers.extend(f"{role}: {value}" for value in unresolved(result.get("blockers")))
     return sorted(set(blockers))
 
 
@@ -440,6 +487,60 @@ def verifier_environment_unavailable(artifacts_dir: Path, artifact_name: str) ->
         "did not complete",
     )
     return any(marker in text_value for marker in markers)
+
+
+def verifier_artifact_fingerprint(artifacts_dir: Path, artifact_name: str) -> str:
+    artifact = _artifact(artifacts_dir, artifact_name)
+    if not isinstance(artifact, dict):
+        return ""
+    return hashlib.sha256(
+        json.dumps(artifact, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def verifier_unavailability_accepted(
+    state: dict[str, Any],
+    artifacts_dir: Path,
+    role: str,
+) -> bool:
+    artifact_names = {
+        "architecture-consistency-agent": "architecture_consistency.json",
+        "semantic-conflict-agent": "semantic_conflict.json",
+        "reviewer": "review.json",
+    }
+    artifact_name = artifact_names.get(role)
+    if not artifact_name or not verifier_environment_unavailable(artifacts_dir, artifact_name):
+        return False
+    fingerprint = verifier_artifact_fingerprint(artifacts_dir, artifact_name)
+    grants = state.get("approval_grants", [])
+    if not isinstance(grants, list):
+        return False
+    for grant in grants:
+        if not isinstance(grant, dict) or grant.get("gate") != role:
+            continue
+        scope = grant.get("scope", {})
+        if not isinstance(scope, dict):
+            continue
+        actions = scope.get("actions", [])
+        if (
+            "accept_unavailable_verification" in actions
+            and scope.get("verifier_fingerprint") == fingerprint
+        ):
+            return True
+        # Backward compatibility for explicit grants created before verifier
+        # artifact fingerprints were added.
+        reason = str(grant.get("reason", "")).lower()
+        if (
+            "resume_workflow" in actions
+            and not scope.get("verifier_fingerprint")
+            and (
+                "could not verify" in reason
+                or "unavailable" in reason
+                or (role == "reviewer" and "workflow blockers" in reason)
+            )
+        ):
+            return True
+    return False
 
 
 def diff_hash(state: dict[str, Any], artifacts_dir: Path) -> str:
@@ -692,7 +793,17 @@ def _invalid_required_gates(state: dict[str, Any], artifacts_dir: Path, current_
                     "architecture-consistency-agent",
                     "semantic-conflict-agent",
                     "reviewer",
-                } and value.get("verdict") != "works":
+                } and value.get("verdict") != "works" and not (
+                    role_name == "security-agent"
+                    and security_acceptance_granted(state, artifacts_dir)
+                ) and not (
+                    role_name in {
+                        "architecture-consistency-agent",
+                        "semantic-conflict-agent",
+                        "reviewer",
+                    }
+                    and verifier_unavailability_accepted(state, artifacts_dir, role_name)
+                ):
                     invalid.append(role_name)
                 if role_name == "frontend-qa-agent" and value.get("verdict") not in {"works", "unavailable"}:
                     invalid.append(role_name)
@@ -811,11 +922,18 @@ def decide_next_role(
         and "patch_high_risk" in item["scope"].get("actions", [])
         for item in valid_grants
     )
-    security_approved = any(
-        item.get("gate") == "security-agent"
-        and isinstance(item.get("scope"), dict)
-        and "accept_security_finding" in item["scope"].get("actions", [])
-        for item in valid_grants
+    security_approved = security_acceptance_granted(state, artifacts_dir)
+    security_artifact = _artifact(artifacts_dir, "security.json")
+    accept_security_override = (
+        bypass_approval
+        and "accept_security_finding" in override_scope.get("actions", [])
+        and isinstance(security_artifact, dict)
+        and scope_accepts_security(override_scope, security_artifact)
+    )
+    invalid_security_acceptance = (
+        bypass_approval
+        and "accept_security_finding" in override_scope.get("actions", [])
+        and not accept_security_override
     )
     budget_approved = any(
         isinstance(item.get("scope"), dict)
@@ -842,13 +960,20 @@ def decide_next_role(
     if risk_class == "high" and not (bypass_approval or risk_approved):
         return _approval("Risk class is HIGH. Publication is not allowed without human approval.", warnings)
 
-    if security and not (bypass_approval or security_approved):
+    if security and (
+        invalid_security_acceptance or not (bypass_approval or security_approved)
+    ):
         return _approval(
             f"A {severity.upper()} security finding requires human approval.",
             warnings + security,
         )
 
-    if security and current_role == "security-agent" and bypass_approval:
+    if (
+        security
+        and current_role == "security-agent"
+        and bypass_approval
+        and not accept_security_override
+    ):
         return _repair_route(
             "security_repair",
             state=state,
@@ -881,13 +1006,30 @@ def decide_next_role(
                 route["next_role"] = "ci-repair-agent"
                 route["reason"] = "CI checks failed; starting bounded CI repair loop."
         return route
-    if current_role == "reviewer" and review_status(state, artifacts_dir) == "block":
-        route = _repair_route("review_repair", state=state, role_result=result, artifacts_dir=artifacts_dir, routing=routing)
-        if not route["stop"]:
-            after_loop_budget = _budget_blockers(state, workflows)
-            if after_loop_budget:
-                return _approval("Workflow repair budget exceeded; execution is awaiting approval.", after_loop_budget) | {"loop": route.get("loop")}
-        return route
+    if current_role == "reviewer":
+        reviewer_status = review_status(state, artifacts_dir)
+        reviewer_environment_unavailable = verifier_environment_unavailable(
+            artifacts_dir, "review.json"
+        )
+        reviewer_unavailability_accepted = verifier_unavailability_accepted(
+            state, artifacts_dir, current_role
+        )
+        if reviewer_environment_unavailable:
+            if not reviewer_unavailability_accepted:
+                return _approval(
+                    "reviewer could not verify the environment; independent review acceptance is required.",
+                    warnings + ["Repair the environment or explicitly accept unavailable independent verification."],
+                )
+            warnings.append(
+                "Accepted unavailable independent verification from reviewer; publication must remain draft."
+            )
+        elif reviewer_status == "block":
+            route = _repair_route("review_repair", state=state, role_result=result, artifacts_dir=artifacts_dir, routing=routing)
+            if not route["stop"]:
+                after_loop_budget = _budget_blockers(state, workflows)
+                if after_loop_budget:
+                    return _approval("Workflow repair budget exceeded; execution is awaiting approval.", after_loop_budget) | {"loop": route.get("loop")}
+            return route
     if current_role == "frontend-qa-agent":
         frontend_verdict = verifier_verdict(artifacts_dir, "frontend_qa.json")
         if frontend_verdict == "broken":
@@ -915,25 +1057,52 @@ def decide_next_role(
             else "semantic_conflict.json"
         )
         verification = verifier_verdict(artifacts_dir, artifact_name)
+        unavailability_accepted = verifier_unavailability_accepted(
+            state, artifacts_dir, current_role
+        )
         if verification == "broken":
             if verifier_environment_unavailable(artifacts_dir, artifact_name):
-                return _approval(
-                    f"{current_role} could not verify the environment; implementation will not be repeated.",
-                    warnings + ["Repair the environment or explicitly accept unavailable independent verification."],
+                if not unavailability_accepted:
+                    return _approval(
+                        f"{current_role} could not verify the environment; implementation will not be repeated.",
+                        warnings + ["Repair the environment or explicitly accept unavailable independent verification."],
+                    )
+                warnings.append(
+                    f"Accepted unavailable independent verification from {current_role}; publication must remain draft."
                 )
-            return _repair_route(
-                "review_repair",
-                state=state,
-                role_result=result,
-                artifacts_dir=artifacts_dir,
-                routing=routing,
-            )
+            else:
+                return _repair_route(
+                    "review_repair",
+                    state=state,
+                    role_result=result,
+                    artifacts_dir=artifacts_dir,
+                    routing=routing,
+                )
         if verification == "unavailable":
-            return _approval(f"{current_role} is unavailable; independent code verification is required.", warnings)
+            if not unavailability_accepted:
+                return _approval(f"{current_role} is unavailable; independent code verification is required.", warnings)
+            warnings.append(
+                f"Accepted unavailable independent verification from {current_role}; publication must remain draft."
+            )
     if current_role == "ci-repair-agent":
         return _route("quality-runner", "CI repair completed; quality must be re-run.", warnings=warnings)
 
-    blockers = workflow_blockers(state, result, artifacts_dir)
+    verdict = _artifact(artifacts_dir, "verdict.json")
+    if (
+        current_role == "orchestrator"
+        and isinstance(verdict, dict)
+        and verdict.get("decision") == "local_complete"
+        and verdict.get("execution_status") == "completed"
+        and verdict.get("checks_passed") is True
+        and not _blocker_values(verdict)
+    ):
+        return _route(
+            "",
+            "Local work is complete; publication remains outside the authorized scope.",
+            warnings=warnings + _list_values(verdict.get("warnings")),
+        )
+
+    blockers = workflow_blockers(state, result, artifacts_dir, current_role)
     if blockers:
         return _approval("Workflow blockers are present; execution is awaiting approval.", warnings + blockers)
 
