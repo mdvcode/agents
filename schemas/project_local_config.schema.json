@@ -19,7 +19,7 @@
       "type": "object",
       "required": ["provider"],
       "properties": {
-        "provider": {"type": "string", "enum": ["codex-cli"]}
+        "provider": {"type": "string", "enum": ["codex-sdk", "codex-cli"]}
       },
       "additionalProperties": false
     }

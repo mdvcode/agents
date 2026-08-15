@@ -26,6 +26,7 @@ from typing import Any, Sequence
 import yaml
 
 from . import __version__
+from .build import harness_build_fingerprint
 from .paths import HarnessNotFoundError, harness_home
 from .project import (
     SUPPORTED_PROFILES,
@@ -74,6 +75,7 @@ class DoctorCheck:
 
 
 RUNTIME_IMPORTS = (
+    "openai_codex",
     "yaml",
     "opentelemetry.trace",
     "opentelemetry.sdk.trace",
@@ -359,9 +361,14 @@ def handle_task(args: argparse.Namespace) -> int:
         queue = task_queue.TaskQueue(queue_path) if queue_path.is_file() else None
     except (sqlite3.Error, ValueError) as exc:
         raise CLIError(f"task queue could not be opened: {exc}") from exc
+    queued_items = queue.list() if queue is not None else []
+    existing_same_task = next(
+        (item for item in queued_items if item.task_key == envelope["task_key"]),
+        None,
+    )
     current_branch_conflicts = [
         item
-        for item in (queue.list() if queue is not None else [])
+        for item in queued_items
         if item.task_key != envelope["task_key"]
         and item.status not in {"completed", "cancelled"}
         and item.payload.get("workspace_mode") == "current_branch"
@@ -390,20 +397,28 @@ def handle_task(args: argparse.Namespace) -> int:
     if missing:
         raise CLIError(f"missing runtime dependencies: {', '.join(missing)}; {dependency_repair_hint()}")
     branch_warnings: list[str] = list(supersession_warnings)
-    if not args.current_branch and workspace_mode == "current_branch":
+    prepared: dict[str, object] | None = None
+    if not args.current_branch and workspace_mode == "current_branch" and existing_same_task is None:
         assert worktree_manager is not None
         prepared = worktree_manager.prepare_task_branch(repository, branch, config.base_branch)
         preparation_errors = [str(item) for item in prepared.get("errors", [])]
         branch_warnings.extend(str(item) for item in prepared.get("warnings", []))
         if preparation_errors:
+            rollback_errors = worktree_manager.rollback_prepared_task_branch(repository, prepared)
+            if rollback_errors:
+                preparation_errors.append(f"branch rollback failed: {'; '.join(rollback_errors)}")
             raise CLIError("; ".join(preparation_errors))
-    service = worker_service_status(root)
-    worker = service if service["alive"] else run_worker_command(root, "start", workers=3)
     try:
         queue = queue or task_queue.TaskQueue(queue_path)
         record = event_ingestion.enqueue_envelope(queue, envelope)
-    except (sqlite3.Error, ValueError) as exc:
-        raise CLIError(f"task could not be queued: {exc}") from exc
+    except (sqlite3.Error, RuntimeError, ValueError) as exc:
+        rollback_errors: list[str] = []
+        if prepared is not None:
+            rollback_errors = worktree_manager.rollback_prepared_task_branch(repository, prepared)
+        rollback_note = f"; branch rollback failed: {'; '.join(rollback_errors)}" if rollback_errors else ""
+        raise CLIError(f"task could not be queued: {exc}{rollback_note}") from exc
+    service = worker_service_status(root)
+    worker = service if service["alive"] else run_worker_command(root, "start", workers=3)
     stored_branch = str(record.payload.get("branch", branch))
     result = {
         "status": record.status,
@@ -506,6 +521,14 @@ def worker_service_status(root: Path) -> dict[str, Any]:
     pid = safe_int(state.get("pid", 0))
     alive = process_alive(pid)
     recorded_status = str(state.get("status", "not_started"))
+    current_build_fingerprint = harness_build_fingerprint(root)
+    worker_build_fingerprint = str(state.get("build_fingerprint", ""))
+    stale_build = bool(
+        alive
+        and worker_build_fingerprint
+        and current_build_fingerprint
+        and worker_build_fingerprint != current_build_fingerprint
+    )
     if not state:
         status = "not_started"
     elif alive:
@@ -522,6 +545,9 @@ def worker_service_status(root: Path) -> dict[str, Any]:
         "status": status,
         "log": str(root / ".agent-queue" / "worker-service.log"),
         "last_error": last_worker_error(root) if status == "unhealthy" else {},
+        "build_fingerprint": worker_build_fingerprint,
+        "current_build_fingerprint": current_build_fingerprint,
+        "stale_build": stale_build,
     }
 
 
@@ -1927,6 +1953,26 @@ def handle_doctor(args: argparse.Namespace) -> int:
         except subprocess.TimeoutExpired:
             checks.append(DoctorCheck("runtime_preflight", "fail", "runtime preflight timed out after 90s"))
     if root is not None:
+        if (
+            repository is not None
+            and repository.resolve() != root.resolve()
+            and (repository / "scripts" / "worker_service.py").is_file()
+            and (repository / "ai_harness" / "build.py").is_file()
+        ):
+            installed_fingerprint = harness_build_fingerprint(root)
+            source_fingerprint = harness_build_fingerprint(repository)
+            source_synced = installed_fingerprint == source_fingerprint
+            checks.append(
+                DoctorCheck(
+                    "installed_build",
+                    "pass" if source_synced else "fail",
+                    "installed harness matches this source checkout"
+                    if source_synced
+                    else "installed harness differs from this source checkout; run `agent update --source .`",
+                )
+            )
+            if not source_synced:
+                next_actions.append(f"agent update --source {repository}")
         service = worker_service_status(root)
         service_detail = (
             f"running pid={service['pid']}"
@@ -1938,10 +1984,20 @@ def handle_doctor(args: argparse.Namespace) -> int:
                 f"; last error: {service['last_error'].get('error_type', '')}: "
                 f"{service['last_error'].get('message', '')}"
             )
+        worker_status = "pass" if service["alive"] and not service["stale_build"] else (
+            "fail" if service["stale_build"] else "warn"
+        )
+        if service["stale_build"]:
+            service_detail += "; running worker uses an older installed build"
+            next_actions.append("agent restart")
+        elif service["alive"] and not service["build_fingerprint"]:
+            worker_status = "warn"
+            service_detail += "; restart once to record the worker build fingerprint"
+            next_actions.append("agent restart")
         checks.append(
             DoctorCheck(
                 "worker_service",
-                "pass" if service["alive"] else "warn",
+                worker_status,
                 service_detail,
             )
         )

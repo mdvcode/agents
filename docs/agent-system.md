@@ -2,7 +2,7 @@
 
 ## Product UX
 
-The control plane is packaged as `ai-harness` and exposes project intake/status/doctor commands plus structured failure, retry, resume, abort, and dead-letter recovery commands. One pipx installation can serve multiple repositories without submodules. Each initialized repository owns `.agent/project.yaml`; this config selects local execution identity and the existing Codex CLI runtime, while central Harness policy continues to own publication, recovery policy, and side-effect authorization.
+The control plane is packaged as `ai-harness` and exposes project intake/status/doctor commands plus structured failure, retry, resume, abort, and dead-letter recovery commands. One pipx installation can serve multiple repositories without submodules. Each initialized repository owns `.agent/project.yaml`; this config selects local execution identity and the local-subscription Codex runtime, while central Harness policy continues to own publication, recovery policy, and side-effect authorization.
 
 ## Current State
 - The repository has a good role split: planner, risk classifier, implementation agent, test generator, quality runner, security agent, reviewer, report agent, and orchestrator.
@@ -71,17 +71,17 @@ Security routing is severity-aware. A `critical` finding returns a hard `blocked
 The Harness controls a provider-neutral runtime boundary:
 
 ```text
-Harness -> Runtime Adapter -> Codex CLI
+Harness -> Runtime Adapter -> Python Codex SDK -> local Codex app-server
 ```
 
-Every model-backed role uses `Runtime.execute(role, context, task, worktree, artifacts)`. Harness code never constructs `codex exec`, calls an OpenAI or Anthropic API, or imports provider-specific execution code. `.agent-runtime.yaml` configures the only Step 2 production provider, `codex-cli`, using a local subscription transport with `api_required: false`. Runtime identity and provenance are stored in each authoritative run.
+Every model-backed role uses `Runtime.execute(role, context, task, worktree, artifacts)`. Harness orchestration never constructs provider calls or imports provider-specific execution code. `.agent-runtime.yaml` configures official Python `codex-sdk` over ChatGPT subscription authentication with `api_required: false`; the CLI adapter remains a compatibility fallback. The SDK adapter owns structured output, token evidence, sandbox selection, fixed Sol/high/Fast settings, and subscription-account enforcement. Runtime identity and provenance are stored in each authoritative run.
 
-Additional OpenAI, Claude, or Ollama adapters are deferred to Step 3. A Model Router is explicitly deferred to Step 4; deterministic workflow routing remains authoritative and is not a model-selection router.
+Additional API-backed providers remain out of scope. Model Router remains disabled; deterministic workflow routing is authoritative and is not a model-selection router.
 
-Step 2 production acceptance is evidence-gated by `make step2-verify`. It requires real concurrent Codex CLI runtime runs, isolated worktrees, independent gates, governed tool traces, at least one PR, and at least one human exception; fixture-only concurrency is not sufficient.
+Production acceptance is evidence-gated by `make step2-verify`. It requires real Codex runtime runs, independent gates, governed tool traces, at least one PR, and at least one human exception; fixture-only concurrency is not sufficient. Ordinary single-task execution uses a task branch in the current checkout, while isolated worktrees remain available for explicit parallel execution.
 
 ## Runtime And Step 1 Gates
-The configured production runtime has a provider-neutral preflight; Codex CLI also retains its explicit compatibility gate and real smoke:
+The configured production runtime has a provider-neutral preflight; the CLI adapter retains a compatibility gate and the SDK has a real smoke:
 
 ```sh
 make runtime-preflight
@@ -89,6 +89,6 @@ make codex-preflight
 make codex-smoke
 ```
 
-`make codex-preflight` aliases the configured runtime preflight. The smoke must run against a real authenticated Codex CLI. It verifies that the Planner role completes, creates `plan.md` and `project_profile.json`, preserves a clean read-only repository, and records raw JSONL plus token usage.
+`make codex-preflight` aliases the configured runtime preflight. The smoke must run against a real SDK session authenticated with ChatGPT. It verifies that the Planner role completes, creates `plan.md` and `project_profile.json`, preserves a clean read-only repository, and records raw provider evidence plus token usage.
 
 Step 1 closes only after a selected 10-20 run manifest passes `make step1-verify`. The verifier rejects fake/external adapter provenance, missing gates, default-branch mutations, HIGH publication, missing PRs for LOW/MEDIUM, duplicate publications, secret leakage, missing token evidence, and unstructured terminal errors.

@@ -15,24 +15,25 @@ if str(SCRIPTS) not in sys.path:
 
 from runtimes.base import RuntimeDescriptor
 from runtimes.codex_cli import CodexCliRuntime
+from runtimes.codex_sdk import CodexSdkRuntime
 from runtimes.registry import RuntimeConfigurationError, create_runtime, load_runtime_config
 from runtimes.subprocess_runtime import SubprocessRuntime
 
 
-def test_configured_runtime_is_local_codex_cli_without_api_or_router() -> None:
+def test_configured_runtime_is_local_codex_sdk_without_api_or_router() -> None:
     config = load_runtime_config()
 
-    assert config["provider"] == "codex-cli"
+    assert config["provider"] == "codex-sdk"
     assert config["transport"] == "local_subscription"
     assert config["api_required"] is False
     assert config["model_router"] is False
 
 
-def test_registry_builds_the_only_step2_production_runtime() -> None:
+def test_registry_builds_the_primary_subscription_sdk_runtime() -> None:
     runtime = create_runtime()
 
-    assert isinstance(runtime, CodexCliRuntime)
-    assert runtime.descriptor.provider == "codex-cli"
+    assert isinstance(runtime, CodexSdkRuntime)
+    assert runtime.descriptor.provider == "codex-sdk"
     assert runtime.descriptor.kind == "runtime_adapter"
     assert runtime.descriptor.transport == "local_subscription"
     assert runtime.descriptor.production is True
@@ -48,7 +49,14 @@ def test_production_runtime_command_cannot_be_overridden(monkeypatch: pytest.Mon
     monkeypatch.delenv("AGENT_HARNESS_TEST_MODE", raising=False)
 
     with pytest.raises(RuntimeConfigurationError, match="restricted to harness test mode"):
-        create_runtime(provider="codex-cli", command="python fake-runtime.py")
+        create_runtime(provider="codex-sdk", command="python fake-runtime.py")
+
+
+def test_registry_keeps_codex_cli_as_explicit_compatibility_fallback() -> None:
+    runtime = create_runtime(provider="codex-cli")
+
+    assert isinstance(runtime, CodexCliRuntime)
+    assert runtime.descriptor.command.endswith("scripts/adapters/codex_cli_executor.py")
 
 
 @pytest.mark.parametrize(
@@ -68,11 +76,15 @@ def test_registry_enforces_step2_transport_and_router_boundary(
     config = {
         "version": 1,
         "runtime": {
-            "provider": "codex-cli",
-            "executor_command": "python3 scripts/adapters/codex_cli_executor.py",
+            "provider": "codex-sdk",
+            "executor_command": "python3 scripts/adapters/codex_sdk_executor.py",
             "transport": "local_subscription",
             "api_required": False,
             "model_router": False,
+            "model": "gpt-5.6-sol",
+            "reasoning_effort": "high",
+            "service_tier": "fast",
+            "require_account_type": "chatgpt",
         },
     }
     config["runtime"][field] = value

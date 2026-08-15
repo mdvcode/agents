@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from task_queue import TaskQueue
 from worker_service import WorkerService
+from ai_harness.build import harness_build_fingerprint
 from worker_pool import WorkerOutcome
 import worker_pool
 
@@ -18,6 +19,25 @@ import worker_pool
 class EmptyPool:
     def run_wave(self) -> list[object]:
         return []
+
+
+def test_build_fingerprint_is_layout_independent(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    installed = tmp_path / "installed-share"
+    installed_package = tmp_path / "site-packages" / "ai_harness"
+    (source / "ai_harness").mkdir(parents=True)
+    (source / "scripts").mkdir()
+    installed.mkdir()
+    (installed / "scripts").mkdir()
+    installed_package.mkdir(parents=True)
+    (source / "ai_harness" / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (installed_package / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (source / "scripts" / "worker.py").write_text("RUN = True\n", encoding="utf-8")
+    (installed / "scripts" / "worker.py").write_text("RUN = True\n", encoding="utf-8")
+
+    assert harness_build_fingerprint(source) == harness_build_fingerprint(
+        installed, package_root=installed_package
+    )
 
 
 def test_worker_service_registers_reports_health_and_stops_gracefully(tmp_path: Path) -> None:
@@ -44,6 +64,7 @@ def test_worker_service_registers_reports_health_and_stops_gracefully(tmp_path: 
     assert len(health["workers"]) == 2
     assert result == 0
     assert state["status"] == "stopped"
+    assert len(state["build_fingerprint"]) == 64
     assert {record.status for record in workers} == {"stopped"}
 
 

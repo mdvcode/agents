@@ -129,7 +129,7 @@ def prepare_task_branch(
     branch: str,
     base_branch: str,
 ) -> dict[str, object]:
-    """Create or select one task branch in the current clean checkout."""
+    """Create a fresh task branch in the current clean checkout."""
 
     repo = repo.resolve()
     checkout = inspect_current_checkout(repo, require_clean=True)
@@ -149,7 +149,16 @@ def prepare_task_branch(
             "warnings": warnings,
         }
     current_branch = str(checkout["branch"])
-    if current_branch != branch:
+    created_branch = False
+    base_ref = ""
+    base_sha = ""
+    branch_head = ""
+    if current_branch == branch:
+        errors.append(
+            f"task branch {branch!r} already exists in the current checkout; "
+            "use --current-branch to intentionally work on it or choose another task id"
+        )
+    else:
         base_ref, warnings = resolve_base_ref(repo, base_branch)
         if not base_ref:
             errors.append(
@@ -157,10 +166,18 @@ def prepare_task_branch(
             )
         else:
             branch_exists = run_git(repo, ["show-ref", "--verify", f"refs/heads/{branch}"]).returncode == 0
-            arguments = ["switch", branch] if branch_exists else ["switch", "-c", branch, base_ref]
-            switched = run_git(repo, arguments)
-            if switched.returncode != 0:
-                errors.append(switched.stderr.strip() or switched.stdout.strip() or "cannot switch task branch")
+            if branch_exists:
+                errors.append(
+                    f"task branch {branch!r} already exists; refusing to reuse it for a new task"
+                )
+            else:
+                base_sha_result = run_git(repo, ["rev-parse", "--verify", base_ref])
+                base_sha = base_sha_result.stdout.strip() if base_sha_result.returncode == 0 else ""
+                switched = run_git(repo, ["switch", "-c", branch, base_ref])
+                if switched.returncode != 0:
+                    errors.append(switched.stderr.strip() or switched.stdout.strip() or "cannot create task branch")
+                else:
+                    created_branch = True
     if not errors:
         verified = inspect_current_checkout(
             repo,
@@ -169,6 +186,8 @@ def prepare_task_branch(
             require_clean=True,
         )
         errors.extend(str(item) for item in verified["errors"])
+        head = run_git(repo, ["rev-parse", "HEAD"])
+        branch_head = head.stdout.strip() if head.returncode == 0 else ""
     return {
         "repository": str(repo),
         "branch": branch,
@@ -177,7 +196,40 @@ def prepare_task_branch(
         "execution_status": "blocked" if errors else "completed",
         "errors": errors,
         "warnings": warnings,
+        "previous_branch": current_branch,
+        "base_ref": base_ref,
+        "base_sha": base_sha,
+        "branch_head": branch_head,
+        "created_branch": created_branch,
     }
+
+
+def rollback_prepared_task_branch(repo: Path, prepared: dict[str, object]) -> list[str]:
+    """Undo only a clean, newly-created branch whose HEAD has not moved."""
+
+    if prepared.get("created_branch") is not True:
+        return []
+    repo = repo.resolve()
+    branch = str(prepared.get("branch", ""))
+    previous_branch = str(prepared.get("previous_branch", ""))
+    expected_head = str(prepared.get("branch_head", ""))
+    checkout = inspect_current_checkout(repo, expected_branch=branch, require_clean=True)
+    errors = [str(item) for item in checkout["errors"]]
+    head = run_git(repo, ["rev-parse", "HEAD"])
+    actual_head = head.stdout.strip() if head.returncode == 0 else ""
+    if expected_head and actual_head != expected_head:
+        errors.append("task branch HEAD changed after preparation; automatic rollback was skipped")
+    if not previous_branch:
+        errors.append("previous branch is unknown; automatic rollback was skipped")
+    if errors:
+        return errors
+    switched = run_git(repo, ["switch", previous_branch])
+    if switched.returncode != 0:
+        return [switched.stderr.strip() or switched.stdout.strip() or "cannot restore previous branch"]
+    deleted = run_git(repo, ["branch", "-d", branch])
+    if deleted.returncode != 0:
+        return [deleted.stderr.strip() or deleted.stdout.strip() or "cannot remove unused task branch"]
+    return []
 
 
 def create_worktree(

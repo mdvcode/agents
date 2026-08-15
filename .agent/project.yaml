@@ -6,4 +6,4 @@ project:
   base_branch: main
   branch_prefix: feat/
 runtime:
-  provider: codex-cli
+  provider: codex-sdk

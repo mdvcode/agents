@@ -37,9 +37,9 @@ The queue coordinates tasks; it never replaces `.agent-runs/<run-id>/` as the au
 
 ## Runtime Flow
 
-Harness role request -> provider-neutral `Runtime.execute(...)` -> configured Runtime Adapter -> Codex CLI local subscription -> structured role result + provider trace -> authoritative run state.
+Harness role request -> provider-neutral `Runtime.execute(...)` -> Python Codex SDK adapter -> local Codex app-server with ChatGPT subscription -> structured role result + provider trace -> authoritative run state.
 
-Step 2 has one production provider (`codex-cli`) and no Model Router. Future provider adapters are isolated Step 3 additions behind the same contract; model selection is deferred to Step 4.
+The official `codex-sdk` is the production provider, `codex-cli` is a compatibility fallback, and Model Router is disabled. Model, reasoning effort, and service tier are fixed in runtime configuration rather than dynamically routed.
 
 ## Deterministic Gate Flow
 

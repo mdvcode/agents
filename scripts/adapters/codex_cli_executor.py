@@ -468,13 +468,18 @@ def role_prompt_payload(
     )
 
 
-def parse_role_result(stdout: str, output_contract: dict[str, Any], duration_ms: int) -> dict[str, Any]:
+def parse_role_result(
+    stdout: str,
+    output_contract: dict[str, Any],
+    duration_ms: int,
+    provider_name: str = "Codex CLI",
+) -> dict[str, Any]:
     try:
         result = json.loads(stdout)
     except json.JSONDecodeError as exc:
-        return blocked_result("Codex CLI returned malformed JSON.", [f"{exc.msg} at line {exc.lineno}"])
+        return blocked_result(f"{provider_name} returned malformed JSON.", [f"{exc.msg} at line {exc.lineno}"])
     if not isinstance(result, dict):
-        return blocked_result("Codex CLI returned a non-object JSON value.", ["role result must be an object"])
+        return blocked_result(f"{provider_name} returned a non-object JSON value.", ["role result must be an object"])
     result.setdefault("duration_ms", duration_ms)
     result.setdefault("artifacts", [])
     role_result_contract = load_json(SCHEMAS / "role_result.schema.json")
@@ -494,7 +499,7 @@ def parse_role_result(stdout: str, output_contract: dict[str, Any], duration_ms:
             result["next_action"] = "awaiting_approval"
     errors = validate_contract(result, output_contract, "role_result")
     if errors:
-        return blocked_result("Codex CLI result failed schema validation.", errors)
+        return blocked_result(f"{provider_name} result failed schema validation.", errors)
     return result
 
 

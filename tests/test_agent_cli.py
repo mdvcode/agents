@@ -16,6 +16,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from ai_harness import cli
+from ai_harness.build import harness_build_fingerprint
 from ai_harness.project import load_project_config, safe_branch
 from agent_role_runner import resolve_registry_record
 from repository_registry import load_local_project_record
@@ -80,7 +81,7 @@ def test_agent_init_creates_local_config_and_preserves_existing_agents_file(
     assert result["created"] == {"project_config": True, "agents_md": False}
     assert config.project_id == "my-project"
     assert config.profile == "nextjs_web"
-    assert config.runtime_provider == "codex-cli"
+    assert config.runtime_provider == "codex-sdk"
     assert Path(result["local_trust"]).is_file()
     assert (repository / "AGENTS.md").read_text(encoding="utf-8") == existing_agents
 
@@ -642,6 +643,9 @@ def test_agent_status_is_project_scoped_and_read_only(
         "status": "not_started",
         "log": str(state_root / ".agent-queue" / "worker-service.log"),
         "last_error": {},
+        "build_fingerprint": "",
+        "current_build_fingerprint": harness_build_fingerprint(state_root),
+        "stale_build": False,
     }
 
 
@@ -1462,7 +1466,7 @@ def test_generated_project_config_matches_public_schema(tmp_path: Path, capsys: 
     assert validate_contract(document, schema, "project_config") == []
     assert document["version"] == 1
     assert document["project"]["repository"] == "."
-    assert document["runtime"] == {"provider": "codex-cli"}
+    assert document["runtime"] == {"provider": "codex-sdk"}
 
 
 def test_python_module_exposes_agent_version() -> None:
@@ -1475,7 +1479,7 @@ def test_python_module_exposes_agent_version() -> None:
     )
 
     assert completed.returncode == 0
-    assert completed.stdout.strip() == "agent 0.1.0"
+    assert completed.stdout.strip() == "agent 0.2.0"
 
 
 @pytest.mark.parametrize(

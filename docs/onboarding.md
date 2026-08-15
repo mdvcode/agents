@@ -44,9 +44,9 @@ make codex-preflight
 make codex-smoke
 ```
 
-`.agent-runtime.yaml` selects the only Step 2 production runtime, `codex-cli`, using the local subscription with no API dependency. `make runtime-preflight` loads it through the runtime registry; `make codex-preflight` is its compatibility alias. The preflight checks that `codex exec` is available, authenticated, supports the required JSON/schema/output flags, can access the target repo, and can apply the requested sandbox. `make codex-smoke` runs the strict real-Codex planner smoke: `plan.md` and `project_profile.json` must be created, raw JSONL and token usage must be saved, and the read-only role must leave the repo unchanged.
+`.agent-runtime.yaml` selects the official Python `codex-sdk` as the production runtime. It reuses Sign in with ChatGPT, rejects API-key sessions, and therefore stays on the ChatGPT subscription instead of provider API billing. GPT-5.6 Sol, high reasoning, and the Fast service tier are explicit. `make runtime-preflight` verifies the SDK, subscription account type, and repository access without starting a model turn; `make codex-preflight` remains a compatibility alias. `make codex-smoke` runs the strict real-Codex planner smoke: `plan.md` and `project_profile.json` must be created, raw provider evidence and token usage must be saved, and the read-only role must leave the repo unchanged.
 
-Harness code may call only `Runtime.preflight(...)` and `Runtime.execute(...)`; provider commands and SDK calls belong inside runtime adapters. New provider adapters are Step 3 work. Model selection is Step 4 work and must not be added to the deterministic workflow router.
+Harness code may call only `Runtime.preflight(...)` and `Runtime.execute(...)`; provider commands and SDK calls belong inside runtime adapters. Model selection stays fixed in runtime configuration and must not be added to the deterministic workflow router.
 
 After smoke, Step 1 acceptance requires `make step1-verify RUN_ID=<evidence-run-id> STEP1_MANIFEST=<run-id-list-file>` against 10-20 real task runs.
 

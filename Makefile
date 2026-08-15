@@ -40,12 +40,12 @@ validate-artifacts:
 	fi
 
 runtime-preflight:
-	AGENT_CODEX_CLI_COMMAND="$(CODEX_CLI)" python3 scripts/check_runtime.py --repo .
+	python3 scripts/check_runtime.py --repo .
 
 codex-preflight: runtime-preflight
 
 codex-smoke:
-	AGENT_REAL_CODEX_SMOKE=1 AGENT_CODEX_CLI_COMMAND="$(CODEX_CLI)" \
+	AGENT_REAL_CODEX_SMOKE=1 \
 	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_real_codex_smoke.py -q
 
 runtime-chaos:
