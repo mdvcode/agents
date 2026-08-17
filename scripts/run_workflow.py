@@ -727,6 +727,16 @@ def run_workflow(
                 )
                 print(str(run_dir))
                 return finish(EXIT_AWAITING_APPROVAL, "awaiting_approval")
+            if isinstance(state_data, dict) and state_data.get("execution_status") == "waiting_children":
+                append_trace(
+                    layout,
+                    {
+                        "time": datetime.now(timezone.utc).isoformat(),
+                        "event": "workflow_waiting_for_children",
+                    },
+                )
+                print(str(run_dir))
+                return finish(0, "waiting_children")
             write_checkpoint(
                 run_dir,
                 RoleCheckpoint(

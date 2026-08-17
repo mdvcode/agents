@@ -35,6 +35,11 @@ from runtime_contracts import (  # noqa: E402
 )
 from check_codex_runtime import configured_codex_base_command  # noqa: E402
 from ai_harness.processes import ManagedProcessResult, run_managed_process  # noqa: E402
+from ai_harness.model_policy import (  # noqa: E402
+    ModelPolicyError,
+    load_execution_profiles,
+    validate_request_profile,
+)
 from ai_harness.recovery.policy import load_recovery_policy  # noqa: E402
 
 
@@ -275,6 +280,7 @@ def standard_role_result_schema(output_contract: dict[str, Any]) -> dict[str, An
                 "type": ["object", "null"],
                 "properties": {
                     "id": {"type": "string"},
+                    "requirement": {"type": "string"},
                     "options": {
                         "type": "array",
                         "minItems": 2,
@@ -293,8 +299,37 @@ def standard_role_result_schema(output_contract: dict[str, Any]) -> dict[str, An
                     },
                     "allow_custom": {"type": "boolean"},
                 },
-                "required": ["id", "options", "allow_custom"],
+                "required": ["id", "requirement", "options", "allow_custom"],
                 "additionalProperties": False,
+            },
+            "child_tasks": {
+                "type": "array",
+                "maxItems": 3,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": {"type": "string"},
+                        "goal": {"type": "string"},
+                        "repository": {"type": "string"},
+                        "relation": {
+                            "type": "string",
+                            "enum": ["repair", "investigation", "test", "implementation"],
+                        },
+                        "dependency_mode": {
+                            "type": "string",
+                            "enum": ["blocking", "non_blocking"],
+                        },
+                        "spawn_reason": {"type": "string"},
+                        "allowed_paths": {"type": "array", "items": {"type": "string"}},
+                        "max_tokens": {"type": "integer"},
+                        "max_duration_seconds": {"type": "integer"},
+                    },
+                    "required": [
+                        "task_id", "goal", "repository", "relation", "dependency_mode",
+                        "spawn_reason", "allowed_paths", "max_tokens", "max_duration_seconds"
+                    ],
+                    "additionalProperties": False,
+                },
             },
         },
         "required": [
@@ -421,7 +456,9 @@ def human_input_contents(request: dict[str, Any]) -> str:
         response = str(entry.get("response", "")).strip()
         if response:
             question_id = str(entry.get("question_id", "")).strip()[:80]
-            prefix = f"[{question_id}] " if question_id else ""
+            requirement_id = str(entry.get("requirement_id", "")).strip()[:120]
+            identity = requirement_id or question_id
+            prefix = f"[{identity}] " if identity else ""
             lines.append(f"- {prefix}{response[:2000]}")
     return "\n".join(lines)[:10_000] or "No user answer has been recorded for this run."
 
@@ -450,7 +487,9 @@ def role_prompt_payload(
                 "a user decision, access, or external state is genuinely required, do not invent it and do not "
                 "perform empty retries. Return status=awaiting_approval, next_action=awaiting_approval, put one "
                 "concise question or required action in summary, and put every concrete missing item in blockers. "
-                "When the question has a small closed set of answers, also return question with a stable short id, "
+                "Request information for only one missing requirement at a time. When the question has a small "
+                "closed set of answers, also return question with a stable short id, a stable semantic requirement "
+                "name, "
                 "2-3 mutually exclusive options, the recommended option first, concise descriptions, and "
                 "allow_custom=true unless free-form input would be unsafe. Treat recorded user answers as "
                 "authoritative: never ask a substantially identical question again after it was answered. If an "
@@ -652,9 +691,25 @@ def run_codex(
     output_contract: dict[str, Any],
     manifest: dict[str, Any],
 ) -> dict[str, Any]:
+    try:
+        execution_settings = validate_request_profile(request)
+    except ModelPolicyError as exc:
+        return failure_result(
+            "Codex CLI execution profile is invalid.",
+            [str(exc)],
+            kind="policy_block",
+            error_type="InvalidExecutionProfile",
+        )
+    request = {**request, **execution_settings}
     schema_path = write_standard_schema(request=request, manifest=manifest, output_contract=output_contract)
     result_path = role_result_output_path(request, manifest)
     command = with_exec_subcommand(configured_codex_base_command()) + [
+        "--model",
+        execution_settings["model"],
+        "--config",
+        f"model_reasoning_effort={execution_settings['reasoning_effort']}",
+        "--config",
+        "features.fast_mode=true",
         "--json",
         "--sandbox",
         sandbox_for_filesystem_access(str(request.get("filesystem_access", "read_only"))),
@@ -763,6 +818,11 @@ def run_codex(
         for repair_attempt in range(1, MAX_OUTPUT_REPAIR_ATTEMPTS + 1):
             repair_path = raw_outputs_dir(request, manifest) / f"{str(request['role']).replace('/', '-')}-repair-{repair_attempt}-result.json"
             repair_command = list(command)
+            economy = load_execution_profiles()["economy"]
+            repair_command[repair_command.index("--model") + 1] = economy["model"]
+            repair_command[repair_command.index("--config") + 1] = (
+                f"model_reasoning_effort={economy['reasoning_effort']}"
+            )
             repair_command[repair_command.index("--sandbox") + 1] = "read-only"
             repair_command[repair_command.index("--output-last-message") + 1] = str(repair_path)
             repair_prompt = "\n".join(
@@ -831,6 +891,11 @@ def run_codex(
     )
     if usage_total:
         result["tokens_used"] = usage_total
+    result["execution_profile"] = str(execution_settings["execution_profile"])
+    result["model"] = execution_settings["model"]
+    result["reasoning_effort"] = execution_settings["reasoning_effort"]
+    result["profile_reason"] = str(request.get("profile_reason", ""))
+    result["escalation_level"] = int(request.get("escalation_level", 0) or 0)
     return result
 
 

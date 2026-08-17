@@ -9,7 +9,10 @@
     "tokens_used",
     "token_budget",
     "stop_reason",
-    "thread_id"
+    "thread_id",
+    "execution_profile",
+    "model",
+    "reasoning_effort"
   ],
   "types": {
     "run_id": "str",
@@ -21,6 +24,9 @@
     "tokens_used": "int",
     "token_budget": "int",
     "stop_reason": "str",
-    "thread_id": "str"
+    "thread_id": "str",
+    "execution_profile": "str",
+    "model": "str",
+    "reasoning_effort": "str"
   }
 }

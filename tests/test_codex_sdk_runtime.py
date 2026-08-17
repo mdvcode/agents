@@ -57,14 +57,15 @@ def test_sdk_preflight_requires_and_reports_chatgpt_subscription(
     assert result["plan_type"] == "plus"
 
 
-def test_sdk_runtime_settings_default_to_sol_high_fast(monkeypatch: object) -> None:
+def test_sdk_runtime_settings_default_to_balanced_profile(monkeypatch: object) -> None:
     monkeypatch.delenv("AGENT_CODEX_MODEL", raising=False)
     monkeypatch.delenv("AGENT_CODEX_REASONING_EFFORT", raising=False)
     monkeypatch.delenv("AGENT_CODEX_SERVICE_TIER", raising=False)
 
-    assert sdk_settings() == {
-        "model": "gpt-5.6-sol",
-        "reasoning_effort": "high",
+    assert sdk_settings({}) == {
+        "execution_profile": "balanced",
+        "model": "gpt-5.6-terra",
+        "reasoning_effort": "medium",
         "service_tier": "fast",
     }
 

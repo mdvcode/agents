@@ -253,6 +253,84 @@ def code_changed(state: dict[str, Any], artifacts_dir: Path) -> bool:
     return any(Path(path).suffix.lower() in CODE_EXTENSIONS for path in files)
 
 
+def changed_line_count(state: dict[str, Any]) -> int:
+    repository = state.get("checkout_path") or state.get("worktree") or state.get("repository")
+    if not isinstance(repository, str) or not Path(repository).is_dir():
+        return 0
+    result = subprocess.run(
+        ["git", "diff", "--numstat", "HEAD"],
+        cwd=repository,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    total = 0
+    if result.returncode == 0:
+        for line in result.stdout.splitlines():
+            columns = line.split("\t", 2)
+            if len(columns) >= 2 and columns[0].isdigit() and columns[1].isdigit():
+                total += int(columns[0]) + int(columns[1])
+    return total
+
+
+def risk_class_value(state: dict[str, Any], artifacts_dir: Path) -> str:
+    risk = _artifact(artifacts_dir, "risk.json")
+    if isinstance(risk, dict) and isinstance(risk.get("risk_class"), str):
+        return str(risk["risk_class"])
+    return str(state.get("risk_class", "low"))
+
+
+def architecture_review_required(state: dict[str, Any], artifacts_dir: Path) -> bool:
+    files = changed_files(state, artifacts_dir)
+    if len(files) > 5 or changed_line_count(state) > 200:
+        return True
+    markers = (
+        "architecture",
+        "contract",
+        "migration",
+        "model",
+        "pyproject",
+        "routing",
+        "schema",
+        "settings",
+        "workflow",
+    )
+    return any(any(marker in path.casefold() for marker in markers) for path in files)
+
+
+def semantic_review_required(state: dict[str, Any], artifacts_dir: Path) -> bool:
+    if risk_class_value(state, artifacts_dir) not in {"medium", "high"}:
+        return False
+    if not code_changed(state, artifacts_dir):
+        return False
+    markers = (
+        "api",
+        "contract",
+        "domain",
+        "model",
+        "permission",
+        "serializer",
+        "service",
+        "schema",
+    )
+    files = changed_files(state, artifacts_dir)
+    return len(files) > 3 or any(
+        any(marker in path.casefold() for marker in markers) for path in files
+    )
+
+
+def reviewer_requires_llm(state: dict[str, Any], artifacts_dir: Path) -> bool:
+    files = changed_files(state, artifacts_dir)
+    risk_class = risk_class_value(state, artifacts_dir)
+    return (
+        risk_class in {"medium", "high"}
+        or code_changed(state, artifacts_dir)
+        or ui_changed(state, artifacts_dir)
+        or len(files) > 5
+        or changed_line_count(state) > 200
+    )
+
+
 def _blocker_values(value: Any) -> list[str]:
     if isinstance(value, dict):
         for key in ("blocker_ids", "security_blocker_ids", "review_blocker_ids", "blockers", "errors"):
@@ -716,11 +794,15 @@ def required_gate_roles(state: dict[str, Any], artifacts_dir: Path) -> list[str]
     routing = load_yaml(ROUTING_CONFIG)
     configured = routing.get("required_before_publication", [])
     required = [str(role) for role in configured if isinstance(role, str)] if isinstance(configured, list) else []
+    if not code_changed(state, artifacts_dir) and "test-generator" in required:
+        required.remove("test-generator")
     optional: list[str] = []
     if ui_changed(state, artifacts_dir):
         optional.append("frontend-qa-agent")
-    if code_changed(state, artifacts_dir):
-        optional.extend(["architecture-consistency-agent", "semantic-conflict-agent"])
+    if architecture_review_required(state, artifacts_dir):
+        optional.append("architecture-consistency-agent")
+    if semantic_review_required(state, artifacts_dir):
+        optional.append("semantic-conflict-agent")
     insert_at = required.index("reviewer") if "reviewer" in required else len(required)
     for role in optional:
         if role not in required:
@@ -1122,7 +1204,10 @@ def decide_next_role(
         next_role, reason = "risk-classifier", "Planner output is advisory; risk classification is the next required gate."
     elif current_role == "risk-classifier":
         if state.get("fast_escalation_reasons") and "implementation-agent" in completed_roles(state):
-            next_role, reason = "test-generator", "Escalated implementation already exists; continue full verification."
+            if code:
+                next_role, reason = "test-generator", "Escalated code implementation already exists; continue test verification."
+            else:
+                next_role, reason = "quality-runner", "Escalated non-code implementation already exists; continue deterministic verification."
         else:
             next_role, reason = "implementation-agent", "Risk is below HIGH; implementation is the next required gate."
     elif current_role == "implementation-agent":
@@ -1135,8 +1220,10 @@ def decide_next_role(
                 warnings.extend(escalation)
             else:
                 next_role, reason = "quality-runner", "Fast implementation is bounded; run deterministic quality checks."
-        else:
+        elif code:
             next_role, reason = "test-generator", "Implementation completed; test generation is the next required gate."
+        else:
+            next_role, reason = "quality-runner", "No code files changed; run deterministic quality checks."
     elif current_role == "test-generator":
         next_role, reason = "quality-runner", "Tests are recorded; quality checks are required."
     elif current_role == "quality-runner":
@@ -1146,17 +1233,21 @@ def decide_next_role(
             next_role, reason = "reviewer", "Fast security checks passed; independent review is next."
         elif ui:
             next_role, reason = "frontend-qa-agent", "User-visible or UI files changed; visual evidence gate is required."
-        elif code:
+        elif architecture_review_required(state, artifacts_dir):
             next_role, reason = "architecture-consistency-agent", "Code changed; architecture consistency gate is required."
+        elif semantic_review_required(state, artifacts_dir):
+            next_role, reason = "semantic-conflict-agent", "Risk-bearing domain code changed; semantic conflict review is required."
         else:
             next_role, reason = "reviewer", "No optional UI or code-impacting gate is required; review is next."
     elif current_role == "frontend-qa-agent":
-        if code:
+        if architecture_review_required(state, artifacts_dir):
             next_role, reason = "architecture-consistency-agent", "Frontend evidence is recorded; code-impacting architecture gate is required."
+        elif semantic_review_required(state, artifacts_dir):
+            next_role, reason = "semantic-conflict-agent", "Frontend evidence is recorded; semantic conflict review is required."
         else:
             next_role, reason = "reviewer", "Frontend evidence is recorded; review is next."
     elif current_role == "architecture-consistency-agent":
-        if code:
+        if semantic_review_required(state, artifacts_dir):
             next_role, reason = "semantic-conflict-agent", "Architecture check is recorded; semantic conflict gate is required."
         else:
             next_role, reason = "reviewer", "Architecture check is recorded; review is next."
@@ -1202,12 +1293,14 @@ def decide_next_role(
 __all__ = [
     "changed_areas",
     "changed_files",
+    "changed_line_count",
     "code_changed",
     "decide_next_role",
     "diff_hash",
     "failure_fingerprint",
     "load_yaml",
     "required_gate_roles",
+    "reviewer_requires_llm",
     "security_blockers",
     "ui_changed",
     "workflow_blockers",

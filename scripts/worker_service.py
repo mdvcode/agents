@@ -98,6 +98,7 @@ class WorkerService:
             heartbeat_seconds=heartbeat_seconds,
             worker_prefix=service_id,
             shutdown_requested=self.stop_event.is_set,
+            follow_dynamic_tasks=True,
         )
 
     def register(self) -> None:

@@ -15,6 +15,7 @@ from typing import Any
 from list_runs import collect
 from task_queue import DEFAULT_DB, TaskQueue
 from worker_service import SERVICE_STATE, process_alive, read_state
+from ai_harness.branch_conflicts import analyze_branch_conflicts
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -239,6 +240,10 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
         "runtime_timeouts": runtime_timeouts,
         "duplicate_side_effects_prevented": len(reconciled_steps) if isinstance(reconciled_steps, list) else 0,
         "pr_time_seconds": pr_time_seconds,
+        "pr_state": str(publication.get("pr_state", "")),
+        "pr_url": str(publication.get("pr_url", "")),
+        "publication_ready": publication.get("pr_created_or_updated") is True
+        or str(publication.get("pr_state", "")) in {"ready", "ready_pr", "draft", "draft_pr"},
         "budgets": {
             "max_roles": int(budgets.get("max_roles", 0) or 0),
             "max_tokens": int(budgets.get("max_tokens", 0) or 0),
@@ -248,6 +253,28 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
         "approval_status": str(approval.get("status", "")),
         "updated_at": run_dir.joinpath("workflow.json").stat().st_mtime,
     }
+
+
+def lifecycle_stage(task: Any, run: dict[str, Any] | None) -> str:
+    if task.status in {"awaiting_approval", "blocked"}:
+        return "needs_input"
+    if task.status in {"dead_letter", "failed"}:
+        return "failed"
+    if run and run.get("publication_ready") is True:
+        return "pr_ready"
+    role = str(run.get("current_role", "")) if run else ""
+    if role in {
+        "test-generator", "quality-runner", "security-agent", "frontend-qa-agent",
+        "architecture-consistency-agent", "semantic-conflict-agent", "reviewer", "orchestrator",
+    } and task.status in {"claimed", "leased", "running", "repairing", "resuming"}:
+        return "testing"
+    if task.status in {"claimed", "leased", "running", "repairing", "resuming", "waiting_children"}:
+        return "running"
+    if task.status in {"queued", "retry_wait"}:
+        return "queued"
+    if task.status == "completed":
+        return "pr_ready"
+    return "failed" if task.status == "cancelled" else "queued"
 
 
 def collect_metrics(
@@ -263,6 +290,13 @@ def collect_metrics(
     ] if runs_dir.exists() else []
     queue = TaskQueue(db_path)
     tasks = queue.list()
+    runs_by_id = {str(run["run_id"]): run for run in runs}
+    queue_items = []
+    for task in tasks:
+        item = asdict(task)
+        item["lifecycle_stage"] = lifecycle_stage(task, runs_by_id.get(task.run_id))
+        queue_items.append(item)
+    branch_conflicts = analyze_branch_conflicts(queue_items, runs_by_id)
     events = queue.events()
     events_by_task: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for event in events:
@@ -322,7 +356,8 @@ def collect_metrics(
         },
         "queue": {
             "counts": dict(Counter(item.status for item in tasks)),
-            "items": [asdict(item) for item in tasks],
+            "lifecycle_counts": dict(Counter(item["lifecycle_stage"] for item in queue_items)),
+            "items": queue_items,
         },
         "leases": {
             "active": [
@@ -363,6 +398,10 @@ def collect_metrics(
         "loops": {
             "total_iterations": sum(int(run["loop_iterations"]) for run in runs),
             "runs_with_loops": sum(int(run["loop_iterations"]) > 0 for run in runs),
+        },
+        "conflicts": {
+            "count": len(branch_conflicts),
+            "items": branch_conflicts,
         },
         "failures": {
             "total": total_failures,

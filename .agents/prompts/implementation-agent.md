@@ -100,8 +100,15 @@ At completion, return `implementation.json` with:
 
 ## Verification handoff
 Do not claim the task is complete. After implementation, hand off to:
-1. Test Generator Agent, if tests are incomplete
-2. Quality Runner Agent
-3. Security Agent
-4. Reviewer Agent
-5. Orchestrator Agent
+1. Test Generator Agent when code changed and test work is required
+2. deterministic Quality Runner
+3. deterministic Security Agent
+4. optional impact-specific verifiers selected from changed files and risk
+5. Reviewer Agent, model-backed only for code, UI, risk-bearing, or large changes
+6. deterministic Orchestrator Agent
+
+## Independent background work
+
+Keep blocking compile/test failures in the current run's bounded repair loop. Only when a newly discovered repair or investigation is independent enough to run in a separate worktree may you propose up to three top-level `child_tasks` in the structured role result. The Harness, not the model, decides whether to enqueue them.
+
+Each proposal must stay inside the current repository and include `task_id`, `goal`, `repository`, `relation`, `dependency_mode`, `spawn_reason`, a narrow `allowed_paths` list, `max_tokens` no greater than 40000, and `max_duration_seconds` no greater than 900. Use `blocking` when the parent cannot pass its next gate without the result; otherwise use `non_blocking`. Do not propose a child merely to repeat the current role, bypass a failed gate, change protected scope, publish, merge, deploy, or access another repository. Return an empty `child_tasks` list when no genuinely independent work exists.

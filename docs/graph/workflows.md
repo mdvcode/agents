@@ -21,6 +21,12 @@ Within one `.agent-runs/<run-id>/`: `plan.md` -> `risk.json` -> implementation -
 
 Task enqueue -> SQLite lease -> worker heartbeat + worker-owned SDK sidecar -> Task Intake binds the prepared branch or creates an opted-in worktree -> authoritative router -> one run-bound SDK thread across implementation, bounded repair, user-answer continuation, and independent verification -> publication from the same workspace or compact exception -> terminal queue status.
 
+Batch YAML/UI/API -> validate all repository aliases and task bounds -> ordinary task intake per item -> UI `parallel` maps to `workspace_mode=worktree` -> atomic repository concurrency limits -> independent workers across repositories/branches -> one dashboard lifecycle view.
+
+Independent subtask proposal -> deterministic role/scope/depth/budget validation -> deduplicate by fingerprint -> child queue item with `root_run_id` + `parent_run_id` -> separate worktree/branch/SDK thread -> child verification -> scoped binary patch artifact -> parent `waiting_children`/`joining_children` -> conflict-aware patch join -> same parent thread resumes -> full combined verification -> parent-only publication.
+
+A blocking compiler/test failure remains in the parent run's bounded sequential repair loop. Child work is reserved for independent progress. Automatic child writers are same-repository and path-scoped; cross-repository work is expressed explicitly through batch intake. Fan-out is at most three children and depth is at most two.
+
 Approval required -> run-scoped request and checkpoint fingerprint -> exact-scope human decision -> consume once -> queue existing run id -> resume same worktree/checkpoint -> continue deterministic gates.
 
 Missing information -> role returns `awaiting_approval` with a concrete question and optional 2-3 structured choices -> workflow and queue preserve `ATTENTION REQUIRED` details -> dashboard/status/watch show the choices plus a custom-answer path -> `agent answer <run-id> ...` records sanitized private input -> consumes only the matching scoped continuation gate -> same run/checkpoint resumes with the answer in its role prompt -> a repeated fingerprint after an answer stops as a visible technical blocker instead of opening another question gate.
@@ -41,7 +47,7 @@ Harness role request -> provider-neutral `Runtime.execute(...)` -> bounded Pytho
 
 The worker heartbeat checks the sidecar lifecycle. SDK notifications and tool activity update `progress.json`; process idle detection watches that file and `sdk-events.jsonl`, so a quiet stdout does not look stuck while the SDK is progressing. Sidecar age/request budgets trigger recycle, and a replacement process resumes the persisted thread id.
 
-The official `codex-sdk` is the production provider, `codex-cli` is a compatibility fallback, and Model Router is disabled. Model, reasoning effort, and service tier are fixed in runtime configuration rather than dynamically routed.
+The official `codex-sdk` is the production provider, `codex-cli` is a compatibility fallback, and Model Router is disabled. Runtime configuration defines exact Sol/high, Terra/medium, and Luna/low profiles with the Fast service tier; local deterministic policy selects one profile from role, risk, change impact, repair iteration, and actual failure state.
 
 ## Deterministic Gate Flow
 
@@ -72,6 +78,8 @@ Production contract datasets -> specialized deterministic scorers -> current cor
 Queue task -> worker task span -> W3C trace-context injection -> workflow span -> step/retry/iteration spans -> sanitized run-scoped JSONL + optional OTLP/HTTP exporter.
 
 Authoritative run artifacts + scheduler database + bounded recent spans -> operational snapshot -> authenticated JSON API -> data-free loopback dashboard shell. Telemetry delivery failure never changes workflow outcome.
+
+Active checkout diffs -> same-repository branch overlap analysis -> probable conflict badge -> older queued branch publishes first -> later branch rebases and repeats final verification.
 
 ## Stop Flow
 Protected path or high risk -> update risk/verdict -> stop and request approval.

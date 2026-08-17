@@ -44,6 +44,7 @@ from .project import (
 from .recovery.checkpoints import RoleCheckpoint, read_checkpoint, write_checkpoint
 from .recovery.models import sanitized_message
 from .recovery.policy import load_recovery_policy
+from .task_batch import BatchManifestError, parse_batch_manifest
 
 
 AGENTS_TEMPLATE = """# AGENTS.md
@@ -333,6 +334,14 @@ def handle_task(args: argparse.Namespace) -> int:
         "mode": args.mode,
         "priority": args.priority,
         "max_retries": args.max_retries,
+        "repository_max_parallel_tasks": int(
+            getattr(args, "max_parallel_tasks", 0) or 0
+        ),
+        "batch_id": str(getattr(args, "batch_id", "")),
+        "batch_index": int(getattr(args, "batch_index", 0) or 0),
+        "allowed_child_repositories": list(
+            getattr(args, "allowed_child_repositories", []) or [str(repository)]
+        ),
         "run_id": datetime.now(timezone.utc).strftime(f"%Y%m%dT%H%M%S.%fZ-{task_id}"),
         "checkout_path": str(repository),
         "task_branch": branch,
@@ -349,8 +358,13 @@ def handle_task(args: argparse.Namespace) -> int:
     except event_ingestion.EventError as exc:
         raise CLIError(f"task request is invalid: {exc}") from exc
     if args.dry_run:
+        dry_result = {"status": "dry_run", "envelope": envelope, "task_id": task_id, "repository": str(repository)}
+        collector = getattr(args, "result_collector", None)
+        if callable(collector):
+            collector(dry_result)
+            return 0
         emit(
-            {"status": "dry_run", "envelope": envelope},
+            dry_result,
             as_json=args.json,
             lines=(
                 f"Dry run: {task_id}",
@@ -449,6 +463,10 @@ def handle_task(args: argparse.Namespace) -> int:
         },
         "warnings": branch_warnings,
     }
+    collector = getattr(args, "result_collector", None)
+    if callable(collector):
+        collector(result)
+        return 0
     emit(
         result,
         as_json=args.json,
@@ -467,6 +485,84 @@ def handle_task(args: argparse.Namespace) -> int:
         ),
     )
     return 0
+
+
+def handle_batch(args: argparse.Namespace) -> int:
+    """Validate one YAML manifest and submit each bounded task through normal intake."""
+
+    if args.file == "-":
+        raw = sys.stdin.buffer.read(1_048_577)
+        if len(raw) > 1_048_576:
+            raise CLIError("batch manifest must not exceed 1 MiB")
+        source = raw
+        base_dir = Path.cwd()
+    else:
+        path = Path(args.file).expanduser().resolve()
+        try:
+            if path.stat().st_size > 1_048_576:
+                raise CLIError("batch manifest must not exceed 1 MiB")
+            source = path.read_bytes()
+        except OSError as exc:
+            raise CLIError(f"cannot read batch manifest: {exc}") from exc
+        base_dir = path.parent
+    try:
+        tasks = parse_batch_manifest(source, base_dir=base_dir)
+    except BatchManifestError as exc:
+        raise CLIError(str(exc)) from exc
+    fingerprint = hashlib.sha256(source).hexdigest()[:12]
+    batch_id = datetime.now(timezone.utc).strftime(f"%Y%m%dT%H%M%S.%fZ-batch-{fingerprint}")
+    allowed_repositories = sorted({str(task["repository"]) for task in tasks})
+    accepted: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for task in tasks:
+        item_result: list[dict[str, Any]] = []
+        task_args = argparse.Namespace(
+            goal=[str(task["goal"])],
+            repo=str(task["repository"]),
+            task_id=str(task["task_id"]),
+            branch="",
+            current_branch=False,
+            worktree=bool(task["parallel"]),
+            keep_paused=False,
+            mode=str(task["mode"]),
+            priority=int(task["priority"]),
+            max_retries=int(task["max_retries"]),
+            max_parallel_tasks=int(task["max_parallel_tasks"]),
+            dry_run=bool(args.dry_run),
+            json=True,
+            batch_id=batch_id,
+            batch_index=int(task["batch_index"]),
+            allowed_child_repositories=allowed_repositories,
+            result_collector=item_result.append,
+        )
+        try:
+            handle_task(task_args)
+        except CLIError as exc:
+            errors.append(
+                {
+                    "index": task["batch_index"],
+                    "repository": str(task["repository"]),
+                    "error": str(exc),
+                }
+            )
+            continue
+        accepted.extend(item_result)
+    payload = {
+        "status": "accepted" if not errors else ("partial" if accepted else "error"),
+        "batch_id": batch_id,
+        "accepted": accepted,
+        "errors": errors,
+    }
+    emit(
+        payload,
+        as_json=args.json,
+        lines=(
+            f"Batch {batch_id}: {len(accepted)} task(s) accepted, {len(errors)} rejected.",
+            *(f"  accepted: {item['task_id']} ({item['repository']})" for item in accepted),
+            *(f"  error[{item['index']}]: {item['error']}" for item in errors),
+        ),
+    )
+    return 0 if accepted else 1
 
 
 def task_workspace_label(args: argparse.Namespace) -> str:
@@ -631,6 +727,7 @@ def workflow_attention(workflow: dict[str, Any]) -> dict[str, Any]:
             "action": str(raw.get("action", "")),
             "question": raw.get("question", {}) if isinstance(raw.get("question"), dict) else {},
             "repeated_question": raw.get("repeated_question") is True,
+            "repeated_requirement": raw.get("repeated_requirement") is True,
         }
     status = str(workflow.get("execution_status", ""))
     if status not in {"awaiting_approval", "blocked", "dead_letter", "failed"}:
@@ -642,6 +739,7 @@ def workflow_attention(workflow: dict[str, Any]) -> dict[str, Any]:
             "action": "",
             "question": {},
             "repeated_question": False,
+            "repeated_requirement": False,
         }
     values: list[str] = []
     blockers = workflow.get("blockers", [])
@@ -671,6 +769,7 @@ def workflow_attention(workflow: dict[str, Any]) -> dict[str, Any]:
         "action": "approve" if status == "awaiting_approval" else "fix_then_retry",
         "question": {},
         "repeated_question": False,
+        "repeated_requirement": False,
     }
 
 
@@ -757,6 +856,9 @@ def project_runs(runs_dir: Path, repository: Path) -> list[dict[str, Any]]:
                     else int(progress.get("token_budget", 0) or 0),
                     "stop_reason": str(progress.get("stop_reason", workflow.get("recovery_reason", ""))),
                     "thread_id": str(progress.get("thread_id", "")),
+                    "execution_profile": str(progress.get("execution_profile", "")),
+                    "model": str(progress.get("model", "")),
+                    "reasoning_effort": str(progress.get("reasoning_effort", "")),
                 },
             }
         )
@@ -875,6 +977,11 @@ def record_human_input(
     }
     if isinstance(attention, dict):
         entry["question_fingerprint"] = str(attention.get("fingerprint", ""))[:100]
+        requirement = attention.get("requirement", {})
+        if isinstance(requirement, dict):
+            entry["requirement_id"] = sanitized_message(
+                str(requirement.get("requirement_id", "")), limit=120
+            )
         question = attention.get("question", {})
         if isinstance(question, dict):
             entry["question_id"] = sanitized_message(str(question.get("id", "")), limit=80)
@@ -916,6 +1023,28 @@ def resolve_answer_attention(run_dir: Path) -> None:
         }
     )
     workflow["attention_history"] = history[-50:]
+    requirement = attention.get("requirement", {})
+    if isinstance(requirement, dict) and requirement.get("requirement_id"):
+        closed = workflow.get("closed_requirements", [])
+        if not isinstance(closed, list):
+            closed = []
+        requirement_id = str(requirement["requirement_id"])
+        closed = [
+            item
+            for item in closed
+            if not isinstance(item, dict)
+            or str(item.get("requirement_id", "")) != requirement_id
+        ]
+        closed.append(
+            {
+                **requirement,
+                "role": str(attention.get("role", "")),
+                "fingerprint": str(attention.get("fingerprint", "")),
+                "closed_at": datetime.now(timezone.utc).isoformat(),
+                "resolution": "answer_recorded",
+            }
+        )
+        workflow["closed_requirements"] = closed[-50:]
     workflow.pop("attention", None)
     blockers = workflow.get("blockers", [])
     if isinstance(blockers, list):
@@ -1179,7 +1308,8 @@ def handle_status(args: argparse.Namespace) -> int:
                 f"  run {run['run_id']}: phase={progress.get('phase') or run['status']} "
                 f"event={progress.get('last_sdk_event') or '-'} tool={progress.get('active_tool') or '-'} "
                 f"idle={progress.get('seconds_since_progress', 0)}s "
-                f"budget={progress.get('tokens_used', 0)}/{progress.get('token_budget', 0)}"
+                f"budget={progress.get('tokens_used', 0)}/{progress.get('token_budget', 0)} "
+                f"profile={progress.get('execution_profile') or '-'}"
             )
             if progress.get("stop_reason"):
                 lines.append(f"    stop reason: {progress['stop_reason']}")
@@ -1282,6 +1412,7 @@ def handle_watch(args: argparse.Namespace) -> int:
                     f"  phase={progress.get('phase') or '-'} event={progress.get('last_sdk_event') or '-'} "
                     f"tool={progress.get('active_tool') or '-'} idle={progress.get('seconds_since_progress', 0)}s "
                     f"budget={progress.get('tokens_used', 0)}/{progress.get('token_budget', 0)} "
+                    f"profile={progress.get('execution_profile') or '-'} "
                     f"stop={progress.get('stop_reason') or '-'}"
                 )
             last_signature = signature
@@ -2153,9 +2284,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     task_parser.add_argument("--priority", type=int, choices=range(-100, 101), default=0)
     task_parser.add_argument("--max-retries", type=int, choices=range(0, 11), default=2)
+    task_parser.add_argument(
+        "--max-parallel-tasks",
+        type=int,
+        choices=range(1, 33),
+        default=0,
+        help=argparse.SUPPRESS,
+    )
+    task_parser.add_argument("--batch-id", default="", help=argparse.SUPPRESS)
+    task_parser.add_argument("--batch-index", type=int, default=0, help=argparse.SUPPRESS)
+    task_parser.add_argument(
+        "--allowed-child-repository",
+        dest="allowed_child_repositories",
+        action="append",
+        default=[],
+        help=argparse.SUPPRESS,
+    )
     task_parser.add_argument("--dry-run", action="store_true")
     task_parser.add_argument("--json", action="store_true")
     task_parser.set_defaults(handler=handle_task)
+
+    batch_parser = subparsers.add_parser(
+        "batch", help="enqueue a validated YAML batch across initialized projects"
+    )
+    batch_parser.add_argument("--file", required=True, help="YAML manifest path or - for stdin")
+    batch_parser.add_argument("--dry-run", action="store_true")
+    batch_parser.add_argument("--json", action="store_true")
+    batch_parser.set_defaults(handler=handle_batch)
 
     start_parser = subparsers.add_parser("start", help="validate this project and start autonomous workers")
     start_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")

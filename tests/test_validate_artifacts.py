@@ -89,7 +89,7 @@ def test_issue_intake_contract_is_explicitly_non_llm_harness_stage() -> None:
     ]
 
 
-def test_runtime_config_requires_subscription_sdk_sol_high_fast_without_router() -> None:
+def test_runtime_config_requires_subscription_sdk_profiles_without_router() -> None:
     config = {
         "version": 1,
         "runtime": {
@@ -98,9 +98,12 @@ def test_runtime_config_requires_subscription_sdk_sol_high_fast_without_router()
             "transport": "local_subscription",
             "api_required": False,
             "model_router": False,
-            "model": "gpt-5.6-sol",
-            "reasoning_effort": "high",
-            "service_tier": "fast",
+            "default_execution_profile": "balanced",
+            "execution_profiles": {
+                "complex": {"model": "gpt-5.6-sol", "reasoning_effort": "high", "service_tier": "fast"},
+                "balanced": {"model": "gpt-5.6-terra", "reasoning_effort": "medium", "service_tier": "fast"},
+                "economy": {"model": "gpt-5.6-luna", "reasoning_effort": "low", "service_tier": "fast"},
+            },
             "require_account_type": "chatgpt",
         },
     }

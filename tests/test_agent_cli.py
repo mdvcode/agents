@@ -768,6 +768,11 @@ def test_agent_answer_records_requested_input_and_resumes_same_run(
             "role": "planner",
             "action": "answer_or_approve",
             "fingerprint": "sha256:question",
+            "requirement": {
+                "requirement_id": "export_format",
+                "semantic_aliases": ["export format"],
+                "source_question_id": "export_format",
+            },
             "question": {
                 "id": "export_format",
                 "options": [
@@ -832,6 +837,7 @@ def test_agent_answer_records_requested_input_and_resumes_same_run(
     assert human_input["entries"][-1]["response"] == "Use JSON"
     assert human_input["entries"][-1]["question_id"] == "export_format"
     assert human_input["entries"][-1]["question_fingerprint"] == "sha256:question"
+    assert human_input["entries"][-1]["requirement_id"] == "export_format"
     assert (run_dir / "human-input.json").stat().st_mode & 0o777 == 0o600
     approval = json.loads((run_dir / "artifacts" / "approval.json").read_text(encoding="utf-8"))
     resumed = json.loads((run_dir / "workflow.json").read_text(encoding="utf-8"))
@@ -841,6 +847,8 @@ def test_agent_answer_records_requested_input_and_resumes_same_run(
     assert "attention" not in resumed
     assert resumed["blockers"] == []
     assert resumed["attention_history"][-1]["resolution"] == "answer_recorded"
+    assert resumed["closed_requirements"][-1]["requirement_id"] == "export_format"
+    assert resumed["closed_requirements"][-1]["resolution"] == "answer_recorded"
     checkpoint = json.loads((checkpoints / "planner.json").read_text(encoding="utf-8"))
     assert checkpoint["state"] == "role_pending"
     assert checkpoint["output_fingerprint"] == ""

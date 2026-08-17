@@ -227,6 +227,13 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         assert '<option value="goal">' in dashboard
         assert "Долгая цель — до 4 часов" in dashboard
         assert 'id="workspaceMode"' in dashboard
+        assert 'id="parallelTask"' in dashboard
+        assert 'id="batchManifest"' in dashboard
+        assert "Queued" in dashboard
+        assert "PR ready" in dashboard
+        assert 'id="repositoryFilter"' in dashboard
+        assert 'id="branchFilter"' in dashboard
+        assert 'id="workerFilter"' in dashboard
         assert "Другой ответ" in dashboard
         assert "question.options" in dashboard
         assert "answers:{}" in dashboard
@@ -413,3 +420,68 @@ def test_dashboard_task_and_run_controls_delegate_to_product_cli(
         ),
         (tmp_path, ["retry", "run-432"]),
     ]
+
+
+def test_dashboard_batch_maps_parallel_to_worktree_and_repository_limit(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    calls: list[tuple[Path, list[str]]] = []
+
+    def command(
+        _handler: object,
+        repository: Path,
+        arguments: list[str],
+        *,
+        timeout: int = 120,
+    ) -> dict[str, object]:
+        calls.append((repository, arguments))
+        return {"status": "queued", "task_id": arguments[1], "timeout": timeout}
+
+    monkeypatch.setattr(ControlPlaneHandler, "agent_command", command)
+    queue = TaskQueue(tmp_path / "queue.db")
+    token = "dashboard-batch-token"
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        handler_factory(
+            queue=queue,
+            runs_dir=tmp_path / "runs",
+            auth_token=token,
+            webhook_secret="",
+            default_repository=tmp_path,
+        ),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    manifest = f"""
+version: 1
+repositories:
+  project:
+    path: {tmp_path}
+    max_parallel_tasks: 2
+tasks:
+  - repo: project
+    goal: First task
+  - repo: project
+    goal: Parallel task
+    parallel: true
+"""
+    try:
+        result = api_request(
+            f"{base}/ui/tasks/batch",
+            token,
+            method="POST",
+            body={"manifest": manifest},
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert result["status"] == "accepted"
+    assert len(result["accepted"]) == 2
+    assert "--worktree" not in calls[0][1]
+    assert "--worktree" in calls[1][1]
+    assert calls[0][1][calls[0][1].index("--max-parallel-tasks") + 1] == "2"
+    assert "--batch-id" in calls[0][1]

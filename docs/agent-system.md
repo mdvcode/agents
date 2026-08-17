@@ -8,6 +8,8 @@ The control plane is packaged as `ai-harness` and exposes project intake/status/
 - The repository has a good role split: planner, risk classifier, implementation agent, test generator, quality runner, security agent, reviewer, report agent, and orchestrator.
 - The skills are clear and useful, especially the Django, DRF, security, git, testing, and lessons policies.
 - Each task now has one authoritative `.agent-runs/<run-id>/` containing workflow state, context manifests, role requests/results, raw events, owned artifacts, metrics, errors, and publication audit state.
+- Batch intake accepts one bounded YAML/API request across initialized repositories. Repository-specific concurrency limits are enforced inside the atomic queue claim, and visual `parallel` intake automatically selects an isolated worktree.
+- Independent work discovered during a run can be represented as a bounded parent/child graph. Child writers have separate worktrees, branches, SDK threads, budgets, and path scopes; only the parent joins results, performs combined verification, and publishes.
 - Every model-backed role receives one token-bounded Context Package compiled by Context Engine from static knowledge sources. Runtime adapters do not read Obsidian, skills, policies, contracts, or artifacts as independent prompt inputs.
 - Repository-root `artifacts/` was removed; it is no longer a mutable compatibility path.
 - Artifact ownership is declared in `.agent-artifact-owners.yaml` and enforced after every role.
@@ -58,6 +60,8 @@ Security routing is severity-aware. A `critical` finding returns a hard `blocked
 - Task Intake establishes the authoritative task workspace before implementation. For the default CLI flow this is the dedicated branch already prepared in the current checkout; isolated parallel execution creates a worktree. Publication validates and reuses the workspace and branch recorded in `workflow.json`; it does not copy changes into a publication-only checkout.
 - `ai_harness/recovery/` and `.agent-recovery.yaml` own sanitized failure records, bounded recovery decisions, role checkpoints, backoff, validation-only output repair, and idempotency probes.
 - `scripts/task_queue.py` provides an idempotent SQLite queue with atomic leases, recovery scheduling, explicit retry/repair/resume/approval/dead-letter states, and compatible schema evolution. `scripts/worker_pool.py` runs three isolated workers by default.
+- Dynamic worker slots remain available while an active run may fan out child tasks. `waiting_children`, child completion reconciliation, idempotent patch join, and same-thread parent resume are scheduler states rather than a second source of workflow truth.
+- Worktrees receive shared package-manager download caches and repository-stable build, virtualenv, and container-layer cache roots without sharing a writable checkout.
 - `scripts/worker_service.py` is the operational wrapper: registered slots, daemon start/restart/stop, health, graceful draining, heartbeat monitoring, task-failure isolation, and consecutive system-failure degradation.
 - `.agent-queue/tasks.db` contains only scheduling state. Task workflow state remains authoritative under `.agent-runs/<run-id>/`.
 - `scripts/list_runs.py` exposes human exceptions without transcripts. `.agent-tool-policy.yaml` governs tool roles/actions/domains/credentials/timeouts and writes sanitized decisions to each run's tool-call audit.
@@ -65,6 +69,7 @@ Security routing is severity-aware. A `critical` finding returns a hard `blocked
 - `scripts/event_ingestion.py` normalizes CLI, API, webhook, GitHub Issue, and CI deliveries into one idempotent task envelope.
 - `scripts/ci_feedback.py` verifies GitHub webhook HMAC, reads failed logs through tool governance, redacts credential patterns, stores CI evidence inside the run, and queues `ci-repair-agent` against the existing branch and PR.
 - `scripts/control_plane_api.py` is a loopback-only API for intake, approvals, resume, exceptions, and metrics. `scripts/operational_metrics.py` exposes compact runs/workers/queue/leases/budgets/exceptions state without transcripts.
+- Operational metrics normalize queue/run state into six dashboard lifecycle buckets and expose repository/branch/worker filters. A deterministic branch analyzer compares active changed-path sets and recommends publish/rebase order for probable overlaps.
 
 ## Runtime Abstraction
 
@@ -74,9 +79,9 @@ The Harness controls a provider-neutral runtime boundary:
 Harness -> Runtime Adapter -> Python Codex SDK -> local Codex app-server
 ```
 
-Every model-backed role uses `Runtime.execute(role, context, task, worktree, artifacts)`. Harness orchestration never constructs provider calls or imports provider-specific execution code. `.agent-runtime.yaml` configures official Python `codex-sdk` over ChatGPT subscription authentication with `api_required: false`; the CLI adapter remains a compatibility fallback. The SDK adapter owns structured output, token evidence, sandbox selection, fixed Sol/high/Fast settings, and subscription-account enforcement. Runtime identity and provenance are stored in each authoritative run.
+Every model-backed role uses `Runtime.execute(role, context, task, worktree, artifacts)`. Harness orchestration never constructs provider calls or imports provider-specific execution code. `.agent-runtime.yaml` configures official Python `codex-sdk` over ChatGPT subscription authentication with `api_required: false`; the CLI adapter remains a compatibility fallback. The Harness deterministically selects one configured execution profile per role: Sol/high for complex implementation and risk-bearing review, Terra/medium for ordinary local work, and Luna/low for mechanical classification or a first narrow repair. A second repair or an actual failed role attempt escalates once to Sol; a user-answer continuation does not. The SDK adapter owns structured output, token evidence, sandbox selection, profile enforcement, and subscription-account enforcement. Runtime identity, selected profile, reason, and escalation level are stored in each authoritative run.
 
-Additional API-backed providers remain out of scope. Model Router remains disabled; deterministic workflow routing is authoritative and is not a model-selection router.
+Additional API-backed providers remain out of scope. Model Router remains disabled; deterministic workflow and model-profile policy are authoritative local code, not a learned router. Quality and security remain local deterministic stages. Test generation, deep architecture/semantic checks, and model-backed review are activated only by changed-file impact and risk.
 
 Production acceptance is evidence-gated by `make step2-verify`. It requires real Codex runtime runs, independent gates, governed tool traces, at least one PR, and at least one human exception; fixture-only concurrency is not sufficient. Ordinary single-task execution uses a task branch in the current checkout, while isolated worktrees remain available for explicit parallel execution.
 

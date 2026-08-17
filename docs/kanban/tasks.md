@@ -14,6 +14,8 @@
 - Milestone PR1 production runtime: every locally verifiable requirement, all 20 chaos scenarios, runtime preflight, and real Codex smoke are complete; only the user-excluded real 30-task multi-hour soak remains the production-readiness gate.
 
 ## Done
+- Parallel orchestration: bounded YAML/UI/API batch intake, visual auto-worktree selection, per-repository worker limits, shared worktree caches, branch-overlap ordering, cross-repository dashboard filters, and safe parent/child fan-out with parent-only join/publication.
+- P1 execution efficiency: deterministic Sol/Terra/Luna profiles, failure-only escalation, changed-file/risk-driven role activation, local quality/security/orchestration gates, and semantic missing-requirement deduplication with same-thread answer continuation.
 - P0 runtime continuity: one health-checked Codex app-server per worker, one reusable SDK thread per run, live event/tool/budget status, event-aware stuck detection, and canonical checkout/worktree identity.
 - Execution boundedness hardening: timeout monitoring now covers stdin delivery and full process trees, step timeouts use remaining workflow/recovery budgets, approval expiry synchronizes queue state, fast mode is enforced by the outer workflow, and watch reports missing workers without an indefinite silent wait.
 - Question-loop hardening: answered-question fingerprints stop repeated gates, technical failures remain distinct from informational questions, and the dashboard offers recommended choices plus a persistent custom-answer draft.

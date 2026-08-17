@@ -8,6 +8,7 @@ from typing import Any
 
 import yaml
 
+from ai_harness.model_policy import ModelPolicyError, load_execution_profiles
 from runtimes.base import Runtime, RuntimeDescriptor
 from runtimes.codex_cli import CodexCliRuntime
 from runtimes.codex_sdk import CodexSdkRuntime
@@ -45,12 +46,33 @@ def load_runtime_config(path: Path = RUNTIME_CONFIG) -> dict[str, Any]:
     if provider == "codex-sdk":
         if runtime.get("require_account_type") != "chatgpt":
             raise RuntimeConfigurationError("codex-sdk runtime must require ChatGPT subscription authentication")
-        if runtime.get("model") != "gpt-5.6-sol":
-            raise RuntimeConfigurationError("codex-sdk runtime must explicitly select gpt-5.6-sol")
-        if runtime.get("reasoning_effort") != "high":
-            raise RuntimeConfigurationError("codex-sdk runtime must explicitly select high reasoning effort")
-        if runtime.get("service_tier") != "fast":
-            raise RuntimeConfigurationError("codex-sdk runtime must explicitly select the fast service tier")
+        if runtime.get("default_execution_profile") != "balanced":
+            raise RuntimeConfigurationError("codex-sdk runtime must default to the balanced execution profile")
+        try:
+            profiles = load_execution_profiles(path)
+        except ModelPolicyError as exc:
+            raise RuntimeConfigurationError(str(exc)) from exc
+        expected_profiles = {
+            "complex": {
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "high",
+                "service_tier": "fast",
+            },
+            "balanced": {
+                "model": "gpt-5.6-terra",
+                "reasoning_effort": "medium",
+                "service_tier": "fast",
+            },
+            "economy": {
+                "model": "gpt-5.6-luna",
+                "reasoning_effort": "low",
+                "service_tier": "fast",
+            },
+        }
+        if profiles != expected_profiles:
+            raise RuntimeConfigurationError(
+                "codex-sdk execution profiles must be Sol/high, Terra/medium, and Luna/low"
+            )
     return runtime
 
 
