@@ -1,0 +1,26 @@
+{
+  "required": [
+    "run_id",
+    "role",
+    "phase",
+    "last_sdk_event",
+    "active_tool",
+    "last_progress_at",
+    "tokens_used",
+    "token_budget",
+    "stop_reason",
+    "thread_id"
+  ],
+  "types": {
+    "run_id": "str",
+    "role": "str",
+    "phase": "str",
+    "last_sdk_event": "str",
+    "active_tool": "str",
+    "last_progress_at": "str",
+    "tokens_used": "int",
+    "token_budget": "int",
+    "stop_reason": "str",
+    "thread_id": "str"
+  }
+}

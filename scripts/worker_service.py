@@ -189,6 +189,9 @@ class WorkerService:
                 if not records:
                     self.stop_event.wait(self.poll_seconds)
         finally:
+            close_pool = getattr(self.pool, "close", None)
+            if callable(close_pool):
+                close_pool()
             for worker_id in self.worker_ids:
                 self.queue.stop_worker(worker_id)
             self.write_service_state("stopped")

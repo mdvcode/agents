@@ -317,7 +317,7 @@ def run_workflow(
         repository=repository_value,
         branch=branch_value,
         base_branch=base_branch,
-        workspace_mode="current_branch" if current_branch else "isolated",
+        workspace_mode="checkout" if current_branch else "worktree",
         workflow_mode=mode,
     )
     existing = find_completed_run(RUNS_DIR, fingerprint, exclude_run_id="") if not resume else None
@@ -391,6 +391,12 @@ def run_workflow(
                     "workflow": workflow_name,
                     "task_id": task_id,
                     "goal": goal_value,
+                    "repository": str(repository_value),
+                    "workspace_mode": "checkout" if current_branch else "worktree",
+                    "checkout_path": str(repository_value),
+                    "task_branch": branch_value,
+                    "base_sha": "",
+                    "branch_owner_run_id": run_id,
                     "execution_status": "running",
                     "mode": mode,
                     "roles": [],
@@ -578,6 +584,13 @@ def run_workflow(
                 and "--current-branch" not in command
             ):
                 command = command + " --current-branch"
+            elif (
+                workflow_name == "full_agent_workflow"
+                and command.startswith("python3 scripts/agent_role_runner.py")
+                and "--worktree" not in command
+                and "--create-worktree" not in command
+            ):
+                command = command + " --worktree"
             for attempt in range(1, max_retries + 2):
                 remaining_seconds = budgets["max_duration_seconds"] - (time.monotonic() - started)
                 if remaining_seconds <= 0:

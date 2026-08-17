@@ -244,7 +244,7 @@ def test_agent_task_is_high_level_idempotent_queue_intake(
     assert first["queue_task_id"] == second["queue_task_id"]
     assert first["task_id"] == "fix-login"
     assert first["branch"] == "feat/fix-login"
-    assert first["workspace_mode"] == "current_branch"
+    assert first["workspace_mode"] == "checkout"
     assert first["worker"] == {"status": "starting", "pid": 4321}
     assert subprocess.run(
         ["git", "branch", "--show-current"], cwd=repository, check=True, capture_output=True, text=True
@@ -285,7 +285,7 @@ def test_agent_task_accepts_custom_prefix_and_auto_starts_worker(
     result = json.loads(capsys.readouterr().out)
 
     assert result["branch"] == "release/2026/release-notes"
-    assert result["workspace_mode"] == "current_branch"
+    assert result["workspace_mode"] == "checkout"
     assert result["worker"] == {"status": "starting", "pid": 9876}
     assert worker_calls == [("start", 3)]
     assert subprocess.run(
@@ -361,7 +361,7 @@ def test_agent_task_worktree_is_explicit_opt_in_and_keeps_checkout(
     ) == 0
     result = json.loads(capsys.readouterr().out)
 
-    assert result["workspace_mode"] == "isolated"
+    assert result["workspace_mode"] == "worktree"
     assert subprocess.run(
         ["git", "branch", "--show-current"], cwd=repository, check=True, capture_output=True, text=True
     ).stdout.strip() == original_branch
@@ -1068,14 +1068,17 @@ def test_agent_task_current_branch_queues_existing_clean_checkout_without_renami
     result = json.loads(capsys.readouterr().out)
 
     assert result["branch"] == "custom/kc-413"
-    assert result["workspace_mode"] == "current_branch"
+    assert result["workspace_mode"] == "checkout"
     assert subprocess.run(
         ["git", "branch", "--show-current"], cwd=repository, check=True, capture_output=True, text=True
     ).stdout.strip() == "custom/kc-413"
     assert not (state_root / ".agent-worktrees").exists()
     with sqlite3.connect(state_root / ".agent-queue" / "tasks.db") as connection:
         payload = json.loads(connection.execute("SELECT payload_json FROM tasks").fetchone()[0])
-    assert payload["workspace_mode"] == "current_branch"
+    assert payload["workspace_mode"] == "checkout"
+    assert payload["checkout_path"] == str(repository.resolve())
+    assert payload["task_branch"] == "custom/kc-413"
+    assert payload["branch_owner_run_id"] == result["run_id"] == payload["run_id"]
     assert payload["branch"] == "custom/kc-413"
 
 

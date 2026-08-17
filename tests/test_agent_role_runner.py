@@ -442,7 +442,10 @@ def test_current_branch_mode_uses_source_checkout_and_revalidates_branch(
     assert base == "main"
     assert not (tmp_path / ".agent-worktrees").exists()
     recorded = json.loads((runs / "run-current" / "worktree.json").read_text(encoding="utf-8"))
-    assert recorded["workspace_mode"] == "current_branch"
+    assert recorded["workspace_mode"] == "checkout"
+    assert recorded["checkout_path"] == str(tmp_path.resolve())
+    assert recorded["task_branch"] == "feature/current"
+    assert recorded["branch_owner_run_id"] == "run-current"
     assert recorded["worktree"] == str(tmp_path.resolve())
 
     subprocess.run(["git", "switch", "main"], cwd=tmp_path, check=True, capture_output=True)

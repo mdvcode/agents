@@ -151,6 +151,17 @@ def _combined_size(stdout_path: Path, stderr_path: Path) -> int:
     return total
 
 
+def _activity_signature(paths: Sequence[Path]) -> tuple[tuple[str, int, int], ...]:
+    signature: list[tuple[str, int, int]] = []
+    for path in paths:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        signature.append((str(path), stat.st_mtime_ns, stat.st_size))
+    return tuple(signature)
+
+
 def _tree_size(paths: Sequence[Path]) -> int:
     """Return bounded artifact usage without following symlinks."""
 
@@ -225,6 +236,7 @@ def run_managed_process(
     shutdown_grace_seconds: float,
     max_output_bytes: int,
     artifact_paths: Sequence[Path] = (),
+    progress_paths: Sequence[Path] = (),
     max_artifact_bytes: int | None = None,
     max_open_files: int | None = None,
     open_file_counter: Callable[[], int] = open_file_count,
@@ -252,6 +264,7 @@ def run_managed_process(
     started = time.monotonic()
     last_activity = started
     previous_size = 0
+    previous_progress = _activity_signature(progress_paths)
     timed_out = False
     idle_timed_out = False
     cancelled = False
@@ -292,6 +305,10 @@ def run_managed_process(
                     size = _combined_size(stdout_path, stderr_path)
                     if size != previous_size:
                         previous_size = size
+                        last_activity = now
+                    progress = _activity_signature(progress_paths)
+                    if progress != previous_progress:
+                        previous_progress = progress
                         last_activity = now
                     if size > max_output_bytes:
                         output_limit_exceeded = True

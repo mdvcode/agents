@@ -94,6 +94,7 @@ class SubprocessRuntime:
                 shutdown_grace_seconds=limits.shutdown_grace_seconds,
                 max_output_bytes=limits.max_output_bytes,
                 artifact_paths=(artifacts,),
+                progress_paths=(artifacts.parent / "progress.json",),
                 max_artifact_bytes=limits.max_artifact_bytes,
                 max_open_files=limits.max_open_files,
             )

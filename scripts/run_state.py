@@ -213,7 +213,7 @@ def task_fingerprint(
     repository: Path,
     branch: str,
     base_branch: str,
-    workspace_mode: str = "isolated",
+    workspace_mode: str = "worktree",
     workflow_mode: str = "auto",
 ) -> str:
     payload = {

@@ -1546,7 +1546,7 @@ def run_roles(
         task_id = str(existing.get("task_id", task_id))
         goal = str(existing.get("goal", goal or task_id))
         project = str(existing.get("project", project))
-        branch = str(existing.get("branch", branch))
+        branch = str(existing.get("task_branch", existing.get("branch", branch)))
         base_branch = str(existing.get("base_branch", base_branch))
         workflow = str(existing.get("workflow", workflow))
         mode = str(existing.get("mode", mode))
@@ -1560,7 +1560,7 @@ def run_roles(
             repository=repository,
             branch=branch,
             base_branch=base_branch,
-            workspace_mode="current_branch" if current_branch else "isolated",
+            workspace_mode="checkout" if current_branch else "worktree",
             workflow_mode=mode,
         )
         if existing.get("execution_status") == "completed" and existing.get("input_fingerprint") == fingerprint:
@@ -1612,10 +1612,10 @@ def run_roles(
             if isinstance(item, dict) and isinstance(item.get("result"), dict)
         )
         project_profile = str(state.get("project_profile", project_profile_for(project)))
-        worktree = Path(str(state.get("worktree", ""))).resolve()
-        effective_branch = str(state.get("branch", branch))
+        worktree = Path(str(state.get("checkout_path", state.get("worktree", "")))).resolve()
+        effective_branch = str(state.get("task_branch", state.get("branch", branch)))
         effective_base = str(state.get("base_branch", base_branch))
-        current_branch = str(state.get("workspace_mode", "isolated")) == "current_branch"
+        current_branch = str(state.get("workspace_mode", "worktree")) in {"checkout", "current_branch"}
         effective_mode = str(state.get("effective_mode", select_execution_mode(mode, goal)))
         stored_runtime = state.get("runtime", state.get("executor", {}))
         if not isinstance(stored_runtime, dict):
@@ -1631,7 +1631,12 @@ def run_roles(
         )
         setup_errors = []
         if not repository.is_dir() or not worktree.is_dir():
-            setup_errors.append("resume repository or task worktree is missing")
+            setup_errors.append("resume repository or checkout_path is missing")
+        branch_owner_run_id = str(state.get("branch_owner_run_id", run_id))
+        if branch_owner_run_id != run_id:
+            setup_errors.append(
+                f"task branch is owned by run {branch_owner_run_id!r}, not resumed run {run_id!r}"
+            )
         if current_branch and repository.is_dir():
             checkout = inspect_current_checkout(
                 repository,
@@ -1703,10 +1708,6 @@ def run_roles(
         )
     except RuntimeConfigurationError as exc:
         setup_errors.append(str(exc))
-    if runtime is not None and runtime.descriptor.production and not (create_task_worktree or current_branch):
-        setup_errors.append(
-            "production runtime requires an isolated task worktree or explicit --current-branch mode"
-        )
     if resume:
         if runtime is not None:
             state["runtime"] = runtime.descriptor.as_json()
@@ -1721,7 +1722,11 @@ def run_roles(
             "project_profile": project_profile,
             "repository": str(repository),
             "worktree": str(worktree.resolve()),
-            "workspace_mode": "current_branch" if current_branch else "isolated",
+            "workspace_mode": "checkout" if current_branch else "worktree",
+            "checkout_path": str(worktree.resolve()),
+            "task_branch": effective_branch,
+            "base_sha": git_ref_sha(repository, effective_base),
+            "branch_owner_run_id": run_id,
             "mode": mode,
             "effective_mode": effective_mode,
             "branch": effective_branch,
@@ -2437,7 +2442,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--adapter-command", default="", help=argparse.SUPPRESS)
     parser.add_argument("--token-budget", type=int, default=12000)
     parser.add_argument("--timeout-seconds", type=int, default=1800)
-    parser.add_argument("--create-worktree", action="store_true")
+    parser.add_argument("--worktree", action="store_true")
+    parser.add_argument("--create-worktree", dest="worktree", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--current-branch", action="store_true")
     parser.add_argument("--mode", choices=sorted(EXECUTION_MODES), default="auto")
     parser.add_argument("--resume", action="store_true")
@@ -2460,7 +2466,7 @@ def main() -> int:
         adapter_command=args.adapter_command,
         token_budget=args.token_budget,
         timeout_seconds=args.timeout_seconds,
-        create_task_worktree=args.create_worktree,
+        create_task_worktree=args.worktree,
         current_branch=args.current_branch,
         mode=args.mode,
         resume=args.resume,

@@ -54,6 +54,8 @@ def inspect_current_checkout(
         errors.append(f"current branch {branch!r} is protected or configured as the default branch")
 
     status = run_git(repo, ["status", "--porcelain=v1", "--untracked-files=normal"])
+    head = run_git(repo, ["rev-parse", "HEAD"])
+    head_sha = head.stdout.strip() if head.returncode == 0 else ""
     dirty_paths = [line[3:] if len(line) > 3 else line for line in status.stdout.splitlines() if line]
     if status.returncode != 0:
         errors.append(status.stderr.strip() or "cannot inspect current checkout status")
@@ -67,6 +69,7 @@ def inspect_current_checkout(
     return {
         "repository": str(repo),
         "branch": branch,
+        "head_sha": head_sha,
         "dirty_paths": dirty_paths,
         "errors": errors,
     }
@@ -92,6 +95,8 @@ def use_current_checkout(
         require_clean=require_clean,
     )
     errors = [str(item) for item in checkout["errors"]]
+    base = run_git(repo, ["rev-parse", "--verify", base_branch])
+    base_sha = base.stdout.strip() if base.returncode == 0 else str(checkout.get("head_sha", ""))
     result = {
         "run_id": run_id,
         "task_id": task_id,
@@ -99,7 +104,11 @@ def use_current_checkout(
         "branch": branch,
         "base_branch": base_branch,
         "worktree": str(repo),
-        "workspace_mode": "current_branch",
+        "workspace_mode": "checkout",
+        "checkout_path": str(repo),
+        "task_branch": branch,
+        "base_sha": base_sha,
+        "branch_owner_run_id": run_id,
         "execution_status": "blocked" if errors else "completed",
         "errors": errors,
         "warnings": [],
@@ -143,7 +152,11 @@ def prepare_task_branch(
             "repository": str(repo),
             "branch": branch,
             "base_branch": base_branch,
-            "workspace_mode": "current_branch",
+            "workspace_mode": "checkout",
+            "checkout_path": str(repo),
+            "task_branch": branch,
+            "base_sha": "",
+            "branch_owner_run_id": "",
             "execution_status": "blocked",
             "errors": errors,
             "warnings": warnings,
@@ -192,7 +205,10 @@ def prepare_task_branch(
         "repository": str(repo),
         "branch": branch,
         "base_branch": base_branch,
-        "workspace_mode": "current_branch",
+        "workspace_mode": "checkout",
+        "checkout_path": str(repo),
+        "task_branch": branch,
+        "branch_owner_run_id": "",
         "execution_status": "blocked" if errors else "completed",
         "errors": errors,
         "warnings": warnings,
@@ -253,12 +269,20 @@ def create_worktree(
         "branch": branch,
         "base_branch": base_branch,
         "worktree": str(worktree.resolve()),
+        "workspace_mode": "worktree",
+        "checkout_path": str(worktree.resolve()),
+        "task_branch": branch,
+        "base_sha": "",
+        "branch_owner_run_id": run_id,
         "execution_status": "planned",
         "errors": [],
         "warnings": [],
     }
     base_ref, warnings = resolve_base_ref(repo, base_branch)
     result["warnings"] = warnings
+    if base_ref:
+        base = run_git(repo, ["rev-parse", "--verify", base_ref])
+        result["base_sha"] = base.stdout.strip() if base.returncode == 0 else ""
     if not base_ref:
         result["execution_status"] = "blocked"
         result["errors"] = [

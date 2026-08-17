@@ -16,7 +16,7 @@
   ],
   "enums": {
     "execution_status": ["planned", "created", "running", "role_pending", "role_running", "role_output_received", "role_validating", "role_completed", "retry_wait", "repairing", "resuming", "awaiting_approval", "completed", "blocked", "dead_letter", "failed", "cancelled"],
-    "workspace_mode": ["isolated", "current_branch"],
+    "workspace_mode": ["checkout", "worktree", "isolated", "current_branch"],
     "mode": ["auto", "fast", "full", "goal"],
     "effective_mode": ["fast", "full", "goal"]
   },
@@ -35,6 +35,10 @@
     "base_branch_sha_before": "str",
     "base_branch_sha_after": "str",
     "workspace_mode": "str",
+    "checkout_path": "str",
+    "task_branch": "str",
+    "base_sha": "str",
+    "branch_owner_run_id": "str",
     "mode": "str",
     "effective_mode": "str",
     "fast_escalation_reasons": "list",

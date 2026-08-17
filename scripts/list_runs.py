@@ -76,9 +76,15 @@ def run_exception(run_dir: Path, *, stale_seconds: int, now: float | None = None
     ):
         reasons.append("PR draft requires evidence")
     current_time = now or time.time()
-    stalled = status == "running" and current_time - workflow_path.stat().st_mtime > stale_seconds
+    progress_path = run_dir / "progress.json"
+    activity_path = progress_path if progress_path.exists() else workflow_path
+    stalled = status == "running" and current_time - activity_path.stat().st_mtime > stale_seconds
     if stalled:
-        reasons.append("workflow heartbeat is stale")
+        progress = read_json(progress_path)
+        last_event = str(progress.get("last_sdk_event", ""))
+        active_tool = str(progress.get("active_tool", ""))
+        detail = active_tool or last_event
+        reasons.append("SDK/tool progress is stale" + (f" after {detail}" if detail else ""))
     requires_human = status in {"blocked", "failed", "awaiting_approval"} or stalled or bool(
         set(reasons) & {"security gate failed", "PR draft requires evidence"}
     )

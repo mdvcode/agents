@@ -121,7 +121,7 @@ When the role provides a small set of choices, status/watch list the recommended
 
 The answer is sanitized, stored only in the private run directory, made available to the resumed role, and resumes the same checkpoint. Do not include passwords, tokens, or customer secrets. A risk, security, protected-path, or publication decision cannot be answered away; it still requires its explicit `agent approve` command.
 
-Recovery state includes the current role, exact sanitized error type and cause, failure class, selected action, attempt budget, resume checkpoint, next retry time in UTC, branch, worktree, and worker-service health.
+Recovery state includes the current role, exact sanitized error type and cause, failure class, selected action, attempt budget, resume checkpoint, next retry time in UTC, canonical checkout/branch identity, and worker-service health. Active status and watch output additionally show the current phase, latest SDK event, active tool, seconds since progress, used/maximum token budget, and stop reason.
 
 ## Inspect and control recovery
 
@@ -138,7 +138,7 @@ agent worker restart
 agent worker stop
 ```
 
-`retry` and `resume` enqueue the existing run and preserve its task worktree. They reject an active lease. An approval-gated run must use `agent approve`, which consumes its exact scoped grant once. `abort` marks a non-active run and queue task `cancelled`; for an active run its durable flag makes the owning worker terminate the complete process group, persist the cancellation checkpoint, release the lease, and retain the worktree. Worker restart uses the bounded graceful shutdown path and expired leases resume the same run.
+`retry` and `resume` enqueue the existing run and preserve its `checkout_path`, `task_branch`, and run-bound SDK thread. They reject an active lease. An approval-gated run must use `agent approve`, which consumes its exact scoped grant once. `abort` marks a non-active run and queue task `cancelled`; for an active run its durable flag makes the owning worker terminate the complete process group, persist the cancellation checkpoint, release the lease, and retain the checkout. Worker restart uses the bounded graceful shutdown path and expired leases resume the same run.
 
 Role questions and selected recovery states stop the step-level retry loop immediately. Repair loops also stop when the failure and Git diff repeat without progress. This prevents retries that cannot change the outcome.
 

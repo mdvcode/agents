@@ -129,6 +129,11 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
     if not workflow:
         return None
     metrics = read_json(run_dir / "metrics.json")
+    progress = read_json(run_dir / "progress.json")
+    try:
+        seconds_since_progress = max(0, int(time.time() - (run_dir / "progress.json").stat().st_mtime))
+    except OSError:
+        seconds_since_progress = 0
     budgets = workflow.get("budgets", {}) if isinstance(workflow.get("budgets"), dict) else {}
     approval = read_json(run_dir / "artifacts" / "approval.json")
     runner_events = jsonl_records(run_dir / "raw-events" / "workflow-runner.jsonl")
@@ -195,13 +200,26 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
         "task_id": str(workflow.get("task_id", "")),
         "project": str(workflow.get("project", "")),
         "repository": str(workflow.get("repository", "")),
-        "branch": str(workflow.get("branch", "")),
+        "branch": str(workflow.get("task_branch", workflow.get("branch", ""))),
+        "workspace_mode": str(workflow.get("workspace_mode", "")),
+        "checkout_path": str(workflow.get("checkout_path", workflow.get("worktree", ""))),
+        "base_sha": str(workflow.get("base_sha", "")),
+        "branch_owner_run_id": str(workflow.get("branch_owner_run_id", "")),
         "current_role": str(workflow.get("current_role", "")),
         "status": str(workflow.get("execution_status", "unknown")),
         "attention": attention,
         "risk_class": str(workflow.get("risk_class", "")),
         "role_count": int(workflow.get("role_count", 0) or 0),
         "tokens_used": int(workflow.get("tokens_used", metrics.get("tokens_used", 0)) or 0),
+        "progress": {
+            "phase": str(progress.get("phase", workflow.get("execution_status", ""))),
+            "last_sdk_event": str(progress.get("last_sdk_event", "")),
+            "active_tool": str(progress.get("active_tool", "")),
+            "seconds_since_progress": seconds_since_progress,
+            "tokens_used": int(progress.get("tokens_used", workflow.get("tokens_used", 0)) or 0),
+            "token_budget": int(progress.get("token_budget", budgets.get("max_tokens", 0)) or 0),
+            "stop_reason": str(progress.get("stop_reason", workflow.get("recovery_reason", ""))),
+        },
         "elapsed_seconds": round(elapsed_seconds, 3),
         "cost_usd": run_cost(workflow, metrics),
         "loop_iterations": loop_iterations,

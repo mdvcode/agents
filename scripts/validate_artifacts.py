@@ -744,8 +744,8 @@ def validate_agent_workflows_data(
             errors.append(f"{label}: workflows.full_agent_workflow.executor must pass the shared run id")
         if not isinstance(executor, str) or "--artifacts-dir {artifacts_dir}" not in executor:
             errors.append(f"{label}: workflows.full_agent_workflow.executor must pass the run-scoped artifacts dir")
-        if not isinstance(executor, str) or "--create-worktree" not in executor:
-            errors.append(f"{label}: workflows.full_agent_workflow.executor must create a task worktree")
+        if not isinstance(executor, str) or "scripts/agent_role_runner.py" not in executor:
+            errors.append(f"{label}: workflows.full_agent_workflow.executor must invoke agent_role_runner.py")
         if not isinstance(executor, str) or "--runtime-provider {runtime_provider}" not in executor:
             errors.append(f"{label}: workflows.full_agent_workflow.executor must use the runtime provider boundary")
     mutation_rules = publish_pr.get("mutation_rules")

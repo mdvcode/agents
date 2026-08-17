@@ -62,12 +62,20 @@ def normalize_event(
     goal = title if not body else f"{title}\n\n{body}"
     branch = text(payload.get("branch") or workflow_run.get("head_branch"), f"issue/{task_id}")
     base_branch = text(payload.get("base_branch"), "main")
-    workspace_mode = text(payload.get("workspace_mode"), "isolated")
-    if workspace_mode not in {"isolated", "current_branch"}:
-        raise EventError("event workspace_mode must be isolated or current_branch")
+    workspace_mode = text(payload.get("workspace_mode"), "worktree")
+    workspace_mode = {
+        "isolated": "worktree",
+        "current_branch": "checkout",
+        "new_branch": "checkout",
+    }.get(workspace_mode, workspace_mode)
+    if workspace_mode not in {"checkout", "worktree"}:
+        raise EventError("event workspace_mode must be checkout or worktree")
     mode = text(payload.get("mode"), "auto")
     if mode not in {"auto", "fast", "full", "goal"}:
         raise EventError("event mode must be auto, fast, full, or goal")
+    runtime_provider = text(payload.get("runtime_provider"), "codex-sdk")
+    if runtime_provider not in {"codex-sdk", "codex-cli"}:
+        raise EventError("event runtime_provider must be codex-sdk or codex-cli")
     run_id = text(payload.get("run_id"))
     try:
         priority = int(payload.get("priority", 0) or 0)
@@ -89,7 +97,12 @@ def normalize_event(
         "branch": branch,
         "base_branch": base_branch,
         "workspace_mode": workspace_mode,
+        "checkout_path": text(payload.get("checkout_path"), str(repository)),
+        "task_branch": text(payload.get("task_branch"), branch),
+        "base_sha": text(payload.get("base_sha")),
+        "branch_owner_run_id": text(payload.get("branch_owner_run_id"), run_id),
         "mode": mode,
+        "runtime_provider": runtime_provider,
         "run_id": run_id,
         "priority": priority,
         "max_retries": max_retries,
@@ -122,7 +135,8 @@ def enqueue_envelope(queue: TaskQueue, envelope: dict[str, Any]) -> TaskRecord:
     payload = {
         key: envelope[key]
         for key in (
-            "task_id", "goal", "project", "repository", "branch", "base_branch", "workspace_mode", "mode",
+            "task_id", "goal", "project", "repository", "branch", "base_branch", "workspace_mode",
+            "checkout_path", "task_branch", "base_sha", "branch_owner_run_id", "mode", "runtime_provider",
             "run_id", "source", "event_id"
         )
     }

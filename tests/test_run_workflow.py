@@ -534,6 +534,40 @@ workflows:
     assert shlex.split(commands[0])[-1] == "--current-branch"
 
 
+def test_full_workflow_passes_explicit_worktree_mode_to_agent_role_runner(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    workflows_path = tmp_path / ".agent-workflows.yaml"
+    workflows_path.write_text(
+        """
+version: 1
+workflows:
+  full_agent_workflow:
+    max_iterations: 1
+    retry:
+      max_retries: 0
+      backoff_seconds: 0
+    steps:
+      - name: "role"
+        command: "python3 scripts/agent_role_runner.py --workflow sample"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run_workflow, "WORKFLOWS", workflows_path)
+    monkeypatch.setattr(run_workflow, "RUNS_DIR", tmp_path / ".agent-runs")
+    commands: list[str] = []
+    monkeypatch.setattr(
+        run_workflow,
+        "run_command",
+        lambda command, _cwd, _timeout: (commands.append(command) or 0, "ok", ""),
+    )
+
+    result = run_workflow.run_workflow("full_agent_workflow", root=tmp_path)
+
+    assert result == 0
+    assert shlex.split(commands[0])[-1] == "--worktree"
+
+
 def test_workflow_runner_cli_accepts_goal(monkeypatch: object) -> None:
     goal = "Add service background photos"
     monkeypatch.setattr(
