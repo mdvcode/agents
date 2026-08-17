@@ -74,7 +74,7 @@ def test_workers_serialize_current_branch_tasks_in_the_same_checkout(
             payload={
                 "task_id": f"current-{index}",
                 "repository": str(tmp_path / "checkout"),
-                "workspace_mode": "current_branch",
+                "workspace_mode": "checkout",
             },
         )
     lock = threading.Lock()
@@ -163,7 +163,7 @@ def test_worker_rejects_unknown_workspace_mode(tmp_path: Path) -> None:
     try:
         safe_payload(record)
     except ValueError as exc:
-        assert "workspace_mode must be isolated or current_branch" in str(exc)
+        assert "workspace_mode must be checkout or worktree" in str(exc)
     else:
         raise AssertionError("unknown workspace modes must be rejected")
 

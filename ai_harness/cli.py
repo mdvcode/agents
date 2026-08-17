@@ -26,6 +26,7 @@ from typing import Any, Sequence
 import yaml
 
 from . import __version__
+from .build import harness_build_fingerprint
 from .paths import HarnessNotFoundError, harness_home
 from .project import (
     SUPPORTED_PROFILES,
@@ -74,6 +75,7 @@ class DoctorCheck:
 
 
 RUNTIME_IMPORTS = (
+    "openai_codex",
     "yaml",
     "opentelemetry.trace",
     "opentelemetry.sdk.trace",
@@ -292,10 +294,11 @@ def handle_task(args: argparse.Namespace) -> int:
         raise CLIError("--current-branch cannot be combined with --branch")
     if args.current_branch and args.worktree:
         raise CLIError("--current-branch cannot be combined with --worktree")
-    workspace_mode = "isolated" if args.worktree else "current_branch"
+    workspace_mode = "worktree" if args.worktree else "checkout"
     root = harness_home()
     event_ingestion = load_harness_module(root, "event_ingestion")
     worktree_manager = load_harness_module(root, "worktree_manager") if not args.worktree else None
+    intake_base_sha = ""
     if args.current_branch:
         assert worktree_manager is not None
         checkout = worktree_manager.inspect_current_checkout(
@@ -307,6 +310,7 @@ def handle_task(args: argparse.Namespace) -> int:
         if checkout_errors:
             raise CLIError("; ".join(checkout_errors))
         branch = str(checkout.get("branch", ""))
+        intake_base_sha = str(checkout.get("head_sha", ""))
     else:
         branch = args.branch or generated_task_branch(config.branch_prefix, task_id)
     if not safe_branch(branch):
@@ -329,6 +333,11 @@ def handle_task(args: argparse.Namespace) -> int:
         "mode": args.mode,
         "priority": args.priority,
         "max_retries": args.max_retries,
+        "run_id": datetime.now(timezone.utc).strftime(f"%Y%m%dT%H%M%S.%fZ-{task_id}"),
+        "checkout_path": str(repository),
+        "task_branch": branch,
+        "base_sha": intake_base_sha,
+        "runtime_provider": config.runtime_provider,
     }
     try:
         envelope = event_ingestion.normalize_event(
@@ -359,18 +368,23 @@ def handle_task(args: argparse.Namespace) -> int:
         queue = task_queue.TaskQueue(queue_path) if queue_path.is_file() else None
     except (sqlite3.Error, ValueError) as exc:
         raise CLIError(f"task queue could not be opened: {exc}") from exc
+    queued_items = queue.list() if queue is not None else []
+    existing_same_task = next(
+        (item for item in queued_items if item.task_key == envelope["task_key"]),
+        None,
+    )
     current_branch_conflicts = [
         item
-        for item in (queue.list() if queue is not None else [])
+        for item in queued_items
         if item.task_key != envelope["task_key"]
         and item.status not in {"completed", "cancelled"}
-        and item.payload.get("workspace_mode") == "current_branch"
+        and item.payload.get("workspace_mode") in {"checkout", "current_branch"}
         and bool(item.payload.get("repository"))
         and Path(str(item.payload["repository"])).resolve() == repository.resolve()
     ]
     supersession_warnings: list[str] = []
     if (
-        workspace_mode == "current_branch"
+        workspace_mode == "checkout"
         and len(current_branch_conflicts) == 1
         and not args.keep_paused
         and current_branch_conflicts[0].status in REPLACEABLE_CHECKOUT_STATUSES
@@ -379,7 +393,7 @@ def handle_task(args: argparse.Namespace) -> int:
             supersede_paused_checkout_task(root, queue, current_branch_conflicts[0], task_id)
         )
         current_branch_conflicts = []
-    if workspace_mode == "current_branch" and current_branch_conflicts:
+    if workspace_mode == "checkout" and current_branch_conflicts:
         conflict = current_branch_conflicts[0]
         raise CLIError(
             f"task {conflict.payload.get('task_id', conflict.id)!r} still owns this checkout "
@@ -390,26 +404,39 @@ def handle_task(args: argparse.Namespace) -> int:
     if missing:
         raise CLIError(f"missing runtime dependencies: {', '.join(missing)}; {dependency_repair_hint()}")
     branch_warnings: list[str] = list(supersession_warnings)
-    if not args.current_branch and workspace_mode == "current_branch":
+    prepared: dict[str, object] | None = None
+    if not args.current_branch and workspace_mode == "checkout" and existing_same_task is None:
         assert worktree_manager is not None
         prepared = worktree_manager.prepare_task_branch(repository, branch, config.base_branch)
         preparation_errors = [str(item) for item in prepared.get("errors", [])]
         branch_warnings.extend(str(item) for item in prepared.get("warnings", []))
         if preparation_errors:
+            rollback_errors = worktree_manager.rollback_prepared_task_branch(repository, prepared)
+            if rollback_errors:
+                preparation_errors.append(f"branch rollback failed: {'; '.join(rollback_errors)}")
             raise CLIError("; ".join(preparation_errors))
-    service = worker_service_status(root)
-    worker = service if service["alive"] else run_worker_command(root, "start", workers=3)
+        envelope["base_sha"] = str(prepared.get("base_sha", ""))
+        envelope["checkout_path"] = str(repository)
+        envelope["task_branch"] = branch
+        envelope["branch_owner_run_id"] = str(envelope.get("run_id", ""))
     try:
         queue = queue or task_queue.TaskQueue(queue_path)
         record = event_ingestion.enqueue_envelope(queue, envelope)
-    except (sqlite3.Error, ValueError) as exc:
-        raise CLIError(f"task could not be queued: {exc}") from exc
+    except (sqlite3.Error, RuntimeError, ValueError) as exc:
+        rollback_errors: list[str] = []
+        if prepared is not None:
+            rollback_errors = worktree_manager.rollback_prepared_task_branch(repository, prepared)
+        rollback_note = f"; branch rollback failed: {'; '.join(rollback_errors)}" if rollback_errors else ""
+        raise CLIError(f"task could not be queued: {exc}{rollback_note}") from exc
+    service = worker_service_status(root)
+    worker = service if service["alive"] else run_worker_command(root, "start", workers=3)
     stored_branch = str(record.payload.get("branch", branch))
     result = {
         "status": record.status,
         "queue_task_id": record.id,
         "task_id": task_id,
         "task_key": record.task_key,
+        "run_id": record.run_id,
         "repository": str(repository),
         "branch": stored_branch,
         "workspace_mode": str(record.payload.get("workspace_mode", workspace_mode)),
@@ -506,6 +533,14 @@ def worker_service_status(root: Path) -> dict[str, Any]:
     pid = safe_int(state.get("pid", 0))
     alive = process_alive(pid)
     recorded_status = str(state.get("status", "not_started"))
+    current_build_fingerprint = harness_build_fingerprint(root)
+    worker_build_fingerprint = str(state.get("build_fingerprint", ""))
+    stale_build = bool(
+        alive
+        and worker_build_fingerprint
+        and current_build_fingerprint
+        and worker_build_fingerprint != current_build_fingerprint
+    )
     if not state:
         status = "not_started"
     elif alive:
@@ -522,6 +557,9 @@ def worker_service_status(root: Path) -> dict[str, Any]:
         "status": status,
         "log": str(root / ".agent-queue" / "worker-service.log"),
         "last_error": last_worker_error(root) if status == "unhealthy" else {},
+        "build_fingerprint": worker_build_fingerprint,
+        "current_build_fingerprint": current_build_fingerprint,
+        "stale_build": stale_build,
     }
 
 
@@ -554,7 +592,11 @@ def project_tasks(db_path: Path, repository: Path) -> list[dict[str, Any]]:
                 "queue_task_id": int(row["id"]),
                 "task_id": str(task_payload.get("task_id", "")),
                 "goal": str(task_payload.get("goal", "")),
-                "workspace_mode": str(task_payload.get("workspace_mode", "isolated")),
+                "workspace_mode": str(task_payload.get("workspace_mode", "worktree")),
+                "checkout_path": str(task_payload.get("checkout_path", repository_value)),
+                "task_branch": str(task_payload.get("task_branch", task_payload.get("branch", ""))),
+                "base_sha": str(task_payload.get("base_sha", "")),
+                "branch_owner_run_id": str(task_payload.get("branch_owner_run_id", row["run_id"])),
                 "status": str(row["status"]),
                 "run_id": str(row["run_id"]),
                 "requires_human": bool(row["requires_human"]),
@@ -651,6 +693,20 @@ def project_runs(runs_dir: Path, repository: Path) -> list[dict[str, Any]]:
         approval = read_json_object(run_dir / "artifacts" / "approval.json")
         verdict = read_json_object(run_dir / "artifacts" / "verdict.json")
         current_failure = read_json_object(run_dir / "failures" / f"{workflow.get('failure_id', '')}.json")
+        progress = read_json_object(run_dir / "progress.json")
+        progress_time = str(progress.get("last_progress_at", ""))
+        seconds_since_progress = 0
+        if progress_time:
+            try:
+                seconds_since_progress = max(
+                    0,
+                    int(
+                        datetime.now(timezone.utc).timestamp()
+                        - datetime.fromisoformat(progress_time).timestamp()
+                    ),
+                )
+            except ValueError:
+                seconds_since_progress = 0
         verdict_blockers = verdict.get("blockers", [])
         approval_detail = str(approval.get("reason", ""))
         if isinstance(verdict_blockers, list) and verdict_blockers:
@@ -667,9 +723,9 @@ def project_runs(runs_dir: Path, repository: Path) -> list[dict[str, Any]]:
                 "status": str(workflow.get("execution_status", "unknown")),
                 "role_count": int(workflow.get("role_count", 0) or 0),
                 "tokens_used": int(workflow.get("tokens_used", 0) or 0),
-                "branch": str(workflow.get("branch", "")),
-                "worktree": str(workflow.get("worktree", workflow.get("repository", ""))),
-                "workspace_mode": str(workflow.get("workspace_mode", "isolated")),
+                "branch": str(workflow.get("task_branch", workflow.get("branch", ""))),
+                "worktree": str(workflow.get("checkout_path", workflow.get("worktree", workflow.get("repository", "")))),
+                "workspace_mode": str(workflow.get("workspace_mode", "worktree")),
                 "blockers": [str(item) for item in workflow.get("blockers", [])],
                 "current_role": str(workflow.get("current_role", "")),
                 "failure_id": str(workflow.get("failure_id", "")),
@@ -690,6 +746,18 @@ def project_runs(runs_dir: Path, repository: Path) -> list[dict[str, Any]]:
                     "registration_required": registration_required,
                 },
                 "attention": workflow_attention(workflow),
+                "progress": {
+                    "phase": str(progress.get("phase", workflow.get("execution_status", ""))),
+                    "last_sdk_event": str(progress.get("last_sdk_event", "")),
+                    "active_tool": str(progress.get("active_tool", "")),
+                    "seconds_since_progress": seconds_since_progress,
+                    "tokens_used": int(progress.get("tokens_used", workflow.get("tokens_used", 0)) or 0),
+                    "token_budget": int(progress.get("token_budget", workflow.get("budgets", {}).get("max_tokens", 0)) or 0)
+                    if isinstance(workflow.get("budgets", {}), dict)
+                    else int(progress.get("token_budget", 0) or 0),
+                    "stop_reason": str(progress.get("stop_reason", workflow.get("recovery_reason", ""))),
+                    "thread_id": str(progress.get("thread_id", "")),
+                },
             }
         )
     return selected
@@ -1088,6 +1156,10 @@ def handle_status(args: argparse.Namespace) -> int:
             f"  task {item['queue_task_id']}: {item['task_id']} [{item['status']}]{marker} "
             f"workspace={item['workspace_mode']} age={age_seconds}s"
         )
+        lines.append(
+            f"    checkout: {item['checkout_path']}; branch: {item['task_branch'] or 'unknown'}; "
+            f"base: {item['base_sha'] or 'pending'}; owner: {item['branch_owner_run_id'] or item['run_id'] or 'pending'}"
+        )
         if item["failure_kind"]:
             lines.append(
                 f"    failure: {item['failure_kind']}; action: {item['recovery_action'] or 'none'}; "
@@ -1101,6 +1173,16 @@ def handle_status(args: argparse.Namespace) -> int:
         if item["cancellation_requested_at"]:
             lines.append("    cancellation requested; worker is terminating the process group")
     for run in runs[: args.limit]:
+        progress = run.get("progress", {})
+        if isinstance(progress, dict) and run["status"] not in {"completed", "cancelled"}:
+            lines.append(
+                f"  run {run['run_id']}: phase={progress.get('phase') or run['status']} "
+                f"event={progress.get('last_sdk_event') or '-'} tool={progress.get('active_tool') or '-'} "
+                f"idle={progress.get('seconds_since_progress', 0)}s "
+                f"budget={progress.get('tokens_used', 0)}/{progress.get('token_budget', 0)}"
+            )
+            if progress.get("stop_reason"):
+                lines.append(f"    stop reason: {progress['stop_reason']}")
         if run["status"] in {"retry_wait", "repairing", "resuming", "dead_letter", "failed"}:
             lines.append(
                 f"  run {run['run_id']}: {run['status']} role={run['current_role'] or 'unknown'} "
@@ -1186,6 +1268,7 @@ def handle_watch(args: argparse.Namespace) -> int:
             "run_status": run_status,
             "current_role": role,
             "attention": attention,
+            "progress": selected_run.get("progress", {}) if selected_run else {},
         }
         signature = json.dumps(snapshot, sort_keys=True, ensure_ascii=False)
         if not args.json and signature != last_signature:
@@ -1193,6 +1276,14 @@ def handle_watch(args: argparse.Namespace) -> int:
                 f"Task {task_id}: queue={task_status or '-'} run={run_status or '-'} "
                 f"role={role or '-'}"
             )
+            progress = snapshot["progress"]
+            if isinstance(progress, dict) and progress:
+                print(
+                    f"  phase={progress.get('phase') or '-'} event={progress.get('last_sdk_event') or '-'} "
+                    f"tool={progress.get('active_tool') or '-'} idle={progress.get('seconds_since_progress', 0)}s "
+                    f"budget={progress.get('tokens_used', 0)}/{progress.get('token_budget', 0)} "
+                    f"stop={progress.get('stop_reason') or '-'}"
+                )
             last_signature = signature
         if attention:
             emit(
@@ -1927,6 +2018,26 @@ def handle_doctor(args: argparse.Namespace) -> int:
         except subprocess.TimeoutExpired:
             checks.append(DoctorCheck("runtime_preflight", "fail", "runtime preflight timed out after 90s"))
     if root is not None:
+        if (
+            repository is not None
+            and repository.resolve() != root.resolve()
+            and (repository / "scripts" / "worker_service.py").is_file()
+            and (repository / "ai_harness" / "build.py").is_file()
+        ):
+            installed_fingerprint = harness_build_fingerprint(root)
+            source_fingerprint = harness_build_fingerprint(repository)
+            source_synced = installed_fingerprint == source_fingerprint
+            checks.append(
+                DoctorCheck(
+                    "installed_build",
+                    "pass" if source_synced else "fail",
+                    "installed harness matches this source checkout"
+                    if source_synced
+                    else "installed harness differs from this source checkout; run `agent update --source .`",
+                )
+            )
+            if not source_synced:
+                next_actions.append(f"agent update --source {repository}")
         service = worker_service_status(root)
         service_detail = (
             f"running pid={service['pid']}"
@@ -1938,10 +2049,20 @@ def handle_doctor(args: argparse.Namespace) -> int:
                 f"; last error: {service['last_error'].get('error_type', '')}: "
                 f"{service['last_error'].get('message', '')}"
             )
+        worker_status = "pass" if service["alive"] and not service["stale_build"] else (
+            "fail" if service["stale_build"] else "warn"
+        )
+        if service["stale_build"]:
+            service_detail += "; running worker uses an older installed build"
+            next_actions.append("agent restart")
+        elif service["alive"] and not service["build_fingerprint"]:
+            worker_status = "warn"
+            service_detail += "; restart once to record the worker build fingerprint"
+            next_actions.append("agent restart")
         checks.append(
             DoctorCheck(
                 "worker_service",
-                "pass" if service["alive"] else "warn",
+                worker_status,
                 service_detail,
             )
         )

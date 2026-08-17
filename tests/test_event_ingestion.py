@@ -25,7 +25,11 @@ def test_all_sources_normalize_to_one_task_envelope(tmp_path: Path, source: str)
     assert envelope["source"] == source
     assert envelope["task_id"] == f"task-{source}"
     assert envelope["repository"] == str(tmp_path.resolve())
-    assert envelope["workspace_mode"] == "isolated"
+    assert envelope["workspace_mode"] == "worktree"
+    assert envelope["checkout_path"] == str(tmp_path.resolve())
+    assert envelope["task_branch"] == f"issue/task-{source}"
+    assert envelope["base_sha"] == ""
+    assert envelope["branch_owner_run_id"] == ""
     assert envelope["mode"] == "auto"
     assert envelope["event_id"]
 
@@ -71,8 +75,8 @@ def test_current_branch_workspace_mode_survives_normalization_and_queueing(tmp_p
 
     record = enqueue_envelope(queue, envelope)
 
-    assert envelope["workspace_mode"] == "current_branch"
-    assert record.payload["workspace_mode"] == "current_branch"
+    assert envelope["workspace_mode"] == "checkout"
+    assert record.payload["workspace_mode"] == "checkout"
 
 
 def test_execution_mode_survives_normalization_and_queueing(tmp_path: Path) -> None:

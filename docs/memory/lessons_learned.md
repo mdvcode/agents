@@ -150,3 +150,12 @@
   Example bad pattern: document `role = 30 minutes`, `fast = 15 minutes`, and `full = 2 hours` as three alternatives without explaining that the first bounds one executor and the others bound a workflow.
   Example good pattern: expose `fast = 15 minutes`, `full = 60 minutes`, and explicit checkpointed `goal = 4 hours`, while separately enforcing the 30-minute per-role emergency cap, iteration/token guards, stuck detection, and recovery deadlines.
   Scope: agent control-plane execution modes, routing, CLI/dashboard UX, and operator documentation
+
+- Date: 2026-08-15
+  Agent: Codex
+  Failure: A long-lived installed worker could keep executing old role logic after the Harness files were updated, while PID-based health still reported it as healthy.
+  Root cause: Readiness checked process liveness and package version but had no immutable build identity shared by the running worker and installed control-plane files.
+  Prevention rule: Fingerprint the installed policy/runtime/scripts at worker start, retain that fingerprint for the life of the process, and make readiness compare worker, installed build, and an active Harness source checkout before reporting healthy.
+  Example bad pattern: treat an alive PID and static semantic version as proof that the worker runs current code.
+  Example good pattern: fail readiness on source/install drift, fail worker health on install/process fingerprint drift, and repair through `agent update` or `agent restart`.
+  Scope: packaged agent control plane, worker lifecycle, and readiness diagnostics

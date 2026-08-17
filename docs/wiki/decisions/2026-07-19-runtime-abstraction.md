@@ -2,6 +2,8 @@
 
 Date: 2026-07-19
 
+Status: runtime boundary remains active; the CLI-only production selection was superseded by `2026-08-15-python-codex-sdk-runtime.md`.
+
 ## Decision
 
 The Harness manages runtimes; it does not embed a model provider.

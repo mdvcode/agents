@@ -161,7 +161,7 @@ def default_config(
         profile=selected_profile,
         base_branch=selected_base_branch,
         branch_prefix=branch_prefix.strip(),
-        runtime_provider="codex-cli",
+        runtime_provider="codex-sdk",
     )
 
 
@@ -175,8 +175,8 @@ def validate_config(config: ProjectConfig) -> list[str]:
         errors.append("project.base_branch must be a safe git branch name")
     if not safe_branch_prefix(config.branch_prefix):
         errors.append("project.branch_prefix must form a safe Git branch name")
-    if config.runtime_provider != "codex-cli":
-        errors.append("runtime.provider must be codex-cli in Step 2")
+    if config.runtime_provider not in {"codex-sdk", "codex-cli"}:
+        errors.append("runtime.provider must be codex-sdk or the codex-cli compatibility fallback")
     return errors
 
 

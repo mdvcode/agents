@@ -19,7 +19,7 @@ Within one `.agent-runs/<run-id>/`: `plan.md` -> `risk.json` -> implementation -
 
 ## Concurrent Task Flow
 
-Task enqueue -> SQLite lease -> worker heartbeat -> Task Intake binds the prepared branch or creates an opted-in worktree -> authoritative router -> implementation and bounded repair loops -> independent verification plane -> publication from the same workspace or compact exception -> terminal queue status.
+Task enqueue -> SQLite lease -> worker heartbeat + worker-owned SDK sidecar -> Task Intake binds the prepared branch or creates an opted-in worktree -> authoritative router -> one run-bound SDK thread across implementation, bounded repair, user-answer continuation, and independent verification -> publication from the same workspace or compact exception -> terminal queue status.
 
 Approval required -> run-scoped request and checkpoint fingerprint -> exact-scope human decision -> consume once -> queue existing run id -> resume same worktree/checkpoint -> continue deterministic gates.
 
@@ -37,15 +37,17 @@ The queue coordinates tasks; it never replaces `.agent-runs/<run-id>/` as the au
 
 ## Runtime Flow
 
-Harness role request -> provider-neutral `Runtime.execute(...)` -> configured Runtime Adapter -> Codex CLI local subscription -> structured role result + provider trace -> authoritative run state.
+Harness role request -> provider-neutral `Runtime.execute(...)` -> bounded Python Codex SDK adapter -> worker-owned Unix socket -> persistent local Codex app-server with ChatGPT subscription -> one `run_id`-bound thread -> streamed SDK/tool progress + structured role result -> authoritative run state.
 
-Step 2 has one production provider (`codex-cli`) and no Model Router. Future provider adapters are isolated Step 3 additions behind the same contract; model selection is deferred to Step 4.
+The worker heartbeat checks the sidecar lifecycle. SDK notifications and tool activity update `progress.json`; process idle detection watches that file and `sdk-events.jsonl`, so a quiet stdout does not look stuck while the SDK is progressing. Sidecar age/request budgets trigger recycle, and a replacement process resumes the persisted thread id.
+
+The official `codex-sdk` is the production provider, `codex-cli` is a compatibility fallback, and Model Router is disabled. Model, reasoning effort, and service tier are fixed in runtime configuration rather than dynamically routed.
 
 ## Deterministic Gate Flow
 
 HIGH risk -> approval; CRITICAL security -> blocked; MEDIUM/HIGH security -> approval; UI changed -> frontend verifier; quality/review/CI/frontend broken -> bounded repair; repeated failure plus unchanged diff -> approval; all required gates valid -> publication. Model `next_action` is advisory throughout.
 
-Issue Intake is a deterministic harness stage (`llm_invocation=false`), not an LLM role. It records task/worktree identity before any model-backed role runs.
+Issue Intake is a deterministic harness stage (`llm_invocation=false`), not an LLM role. It records `workspace_mode`, `checkout_path`, `task_branch`, `base_sha`, and `branch_owner_run_id` before any model-backed role runs.
 
 ## Knowledge Flow
 Static source -> Knowledge Source -> Retriever -> Context Builder -> Context Package -> Runtime -> role.

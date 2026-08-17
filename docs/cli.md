@@ -29,7 +29,7 @@ An installation old enough not to recognize `agent update` must be bootstrapped 
 
 Contributors may still use `pip install -e .` or direct pipx commands, but users do not need to manage those environments themselves.
 
-The installation bundles the policy, workflow, schemas, prompts, scripts, and sole Step 2 Codex CLI runtime under an isolated environment. `AI_HARNESS_HOME` may point at a source checkout when developing or diagnosing a custom installation.
+The installation bundles the policy, workflow, schemas, prompts, scripts, official Python Codex SDK, and CLI compatibility adapter under an isolated environment. `AI_HARNESS_HOME` may point at a source checkout when developing or diagnosing a custom installation.
 
 ## Initialize a project
 
@@ -49,7 +49,7 @@ MyProject/
 
 Existing files are preserved. Re-running `agent init` trusts the existing project configuration instead of silently replacing it. `--force` replaces `.agent/project.yaml` but still preserves an existing `AGENTS.md`; add `--replace-agents` only when replacing that instruction file is intentional. Profile and base-branch detection recognize this agent workspace, Django projects, Next.js/web projects, remote default branches, and common local default branches. Either can also be selected explicitly.
 
-`.agent/project.yaml` is local execution identity, not publication authority. It may select the project profile, base branch, task branch prefix, and `codex-cli` runtime. It cannot authorize push, PR publication, merge, deployment, credentials, protected paths, or a different model provider.
+`.agent/project.yaml` is local execution identity, not publication authority. It may select the project profile, base branch, task branch prefix, and local-subscription Codex runtime. It cannot authorize push, PR publication, merge, deployment, credentials, protected paths, or a different model provider.
 
 `agent init` also records the absolute repository path and configuration fingerprint in the current user's private Harness config. A copied or merely committed `.agent/project.yaml` is not execution authority; after moving or editing the project config, run `agent init` again.
 
@@ -84,7 +84,7 @@ agent watch --task-id fix-login
 
 Task mode defaults to `auto`. Auto uses the guarded fast path unless the goal names a sensitive or broad change such as authentication, migrations, payments, production, dependencies, architecture, or a refactor; it never selects a multi-hour mode. Fast mode invokes only implementation and review models; context, quality, security, and verdict stages are deterministic. It escalates to the full workflow when the resulting patch exceeds five files or 200 changed lines, touches protected areas, or reports increased risk. The complete fast workflow has a 15-minute budget, while `full` runs the complete specialist chain for at most 60 minutes. Use `--mode goal` only for an explicit checkpointed objective that may run for up to 4 hours. The separate 30-minute role timeout bounds one model executor and does not define total task duration.
 
-By default, the command creates or selects a dedicated task branch in the current checkout from the configured base branch. It does not create a worktree. The checkout must be clean. Setup files intentionally ignored by Git may stay local and must not be force-added; otherwise commit or intentionally ignore new setup files and commit or stash other intended changes before starting the first task. Only one unfinished current-checkout task may own a repository at a time. This prevents concurrent workers from switching the same directory between branches.
+By default, the command creates a fresh dedicated task branch in the current checkout from the configured base branch. It never silently reuses an existing branch and does not create a worktree. Repeating the same queued task id is idempotent; intentional work on an existing branch requires `--current-branch`. If queueing fails before ownership is recorded, a newly created clean branch is rolled back. The checkout must be clean. Setup files intentionally ignored by Git may stay local and must not be force-added; otherwise commit or intentionally ignore new setup files and commit or stash other intended changes before starting the first task. Only one unfinished current-checkout task may own a repository at a time.
 
 Generated branches use the prefix selected during initialization and never use the default branch. The prefix is not restricted to a fixed list: any safe Git prefix is accepted, including `feat/`, `fix/`, `chore/`, `release/2026/`, or `team/mobile/`:
 
@@ -121,7 +121,7 @@ When the role provides a small set of choices, status/watch list the recommended
 
 The answer is sanitized, stored only in the private run directory, made available to the resumed role, and resumes the same checkpoint. Do not include passwords, tokens, or customer secrets. A risk, security, protected-path, or publication decision cannot be answered away; it still requires its explicit `agent approve` command.
 
-Recovery state includes the current role, exact sanitized error type and cause, failure class, selected action, attempt budget, resume checkpoint, next retry time in UTC, branch, worktree, and worker-service health.
+Recovery state includes the current role, exact sanitized error type and cause, failure class, selected action, attempt budget, resume checkpoint, next retry time in UTC, canonical checkout/branch identity, and worker-service health. Active status and watch output additionally show the current phase, latest SDK event, active tool, seconds since progress, used/maximum token budget, and stop reason.
 
 ## Inspect and control recovery
 
@@ -138,7 +138,7 @@ agent worker restart
 agent worker stop
 ```
 
-`retry` and `resume` enqueue the existing run and preserve its task worktree. They reject an active lease. An approval-gated run must use `agent approve`, which consumes its exact scoped grant once. `abort` marks a non-active run and queue task `cancelled`; for an active run its durable flag makes the owning worker terminate the complete process group, persist the cancellation checkpoint, release the lease, and retain the worktree. Worker restart uses the bounded graceful shutdown path and expired leases resume the same run.
+`retry` and `resume` enqueue the existing run and preserve its `checkout_path`, `task_branch`, and run-bound SDK thread. They reject an active lease. An approval-gated run must use `agent approve`, which consumes its exact scoped grant once. `abort` marks a non-active run and queue task `cancelled`; for an active run its durable flag makes the owning worker terminate the complete process group, persist the cancellation checkpoint, release the lease, and retain the checkout. Worker restart uses the bounded graceful shutdown path and expired leases resume the same run.
 
 Role questions and selected recovery states stop the step-level retry loop immediately. Repair loops also stop when the failure and Git diff repeat without progress. This prevents retries that cannot change the outcome.
 

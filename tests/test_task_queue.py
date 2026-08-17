@@ -53,18 +53,18 @@ def test_claim_serializes_current_branch_tasks_for_one_checkout(tmp_path: Path) 
     repository = str((tmp_path / "shared").resolve())
     first = queue.enqueue(
         task_key="current-1",
-        payload={"task_id": "current-1", "repository": repository, "workspace_mode": "current_branch"},
+        payload={"task_id": "current-1", "repository": repository, "workspace_mode": "checkout"},
     )
     second = queue.enqueue(
         task_key="current-2",
-        payload={"task_id": "current-2", "repository": repository, "workspace_mode": "current_branch"},
+        payload={"task_id": "current-2", "repository": repository, "workspace_mode": "checkout"},
     )
     unrelated = queue.enqueue(
         task_key="current-other",
         payload={
             "task_id": "current-other",
             "repository": str((tmp_path / "other").resolve()),
-            "workspace_mode": "current_branch",
+            "workspace_mode": "checkout",
         },
     )
 
@@ -88,14 +88,14 @@ def test_unfinished_current_branch_task_keeps_checkout_reserved(tmp_path: Path) 
         payload={
             "task_id": "approval-1",
             "repository": repository,
-            "workspace_mode": "current_branch",
+            "workspace_mode": "checkout",
             "run_id": "run-approval",
         },
         run_id="run-approval",
     )
     queue.enqueue(
         task_key="approval-2",
-        payload={"task_id": "approval-2", "repository": repository, "workspace_mode": "current_branch"},
+        payload={"task_id": "approval-2", "repository": repository, "workspace_mode": "checkout"},
     )
     claimed = queue.claim(worker_id="worker-1")
     assert claimed is not None and claimed.id == first.id

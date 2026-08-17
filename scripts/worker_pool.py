@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import subprocess
@@ -28,6 +29,7 @@ from ai_harness.observability import NoOpTelemetryRuntime, TelemetryRuntime, saf
 from ai_harness.processes import run_managed_process
 from ai_harness.recovery import RecoveryCoordinator, classify_failure, load_recovery_policy
 from ai_harness.recovery.models import persist_failure, sanitized_message
+from ai_harness.sdk_session import ManagedCodexSdkSession, SdkSessionUnavailable
 
 RUNS_DIR = ROOT / ".agent-runs"
 
@@ -113,6 +115,10 @@ def safe_payload(record: TaskRecord) -> dict[str, str]:
         "branch",
         "base_branch",
         "workspace_mode",
+        "checkout_path",
+        "task_branch",
+        "base_sha",
+        "branch_owner_run_id",
         "mode",
         "run_id",
         "adapter_command",
@@ -129,9 +135,9 @@ def safe_payload(record: TaskRecord) -> dict[str, str]:
     missing = [field for field in required if not isinstance(record.payload.get(field), str) or not record.payload[field]]
     if missing:
         raise ValueError("missing task payload fields: " + ", ".join(missing))
-    workspace_mode = record.payload.get("workspace_mode", "isolated")
-    if workspace_mode not in {"isolated", "current_branch"}:
-        raise ValueError("workspace_mode must be isolated or current_branch")
+    workspace_mode = record.payload.get("workspace_mode", "worktree")
+    if workspace_mode not in {"checkout", "worktree", "isolated", "current_branch"}:
+        raise ValueError("workspace_mode must be checkout or worktree")
     mode = record.payload.get("mode", "auto")
     if mode not in {"auto", "fast", "full", "goal"}:
         raise ValueError("mode must be auto, fast, full, or goal")
@@ -199,6 +205,30 @@ class WorkflowWorkerPool:
         self.handler = handler
         self.worker_prefix = worker_prefix
         self.shutdown_requested = shutdown_requested
+        self._sdk_sessions: dict[str, ManagedCodexSdkSession] = {}
+
+    def sdk_session(self, worker_id: str, payload: dict[str, str]) -> ManagedCodexSdkSession | None:
+        provider = payload.get("runtime_provider", "")
+        if provider != "codex-sdk":
+            return None
+        if importlib.util.find_spec("openai_codex") is None:
+            return None
+        session = self._sdk_sessions.get(worker_id)
+        if session is None:
+            session = ManagedCodexSdkSession(
+                worker_id=worker_id,
+                harness_root=ROOT,
+                state_root=self.queue.path.parent / "sdk-sessions",
+                busy_stale_seconds=float(load_recovery_policy().runtime_limits.idle_timeout_seconds),
+            )
+            self._sdk_sessions[worker_id] = session
+        session.ensure()
+        return session
+
+    def close(self) -> None:
+        for session in self._sdk_sessions.values():
+            session.close()
+        self._sdk_sessions.clear()
 
     def run_workflow(self, record: TaskRecord, worker_id: str) -> WorkerOutcome:
         payload = safe_payload(record)
@@ -249,7 +279,7 @@ class WorkflowWorkerPool:
             command.extend(["--runtime-provider", payload["runtime_provider"]])
         if payload.get("runtime_command"):
             command.extend(["--runtime-command", payload["runtime_command"]])
-        if payload.get("workspace_mode") == "current_branch":
+        if payload.get("workspace_mode") in {"checkout", "current_branch"}:
             command.append("--current-branch")
         workflow_path = run_dir / "workflow.json"
         if workflow_path.exists():
@@ -271,6 +301,9 @@ class WorkflowWorkerPool:
             elif status == "completed":
                 return WorkerOutcome(status="completed", run_id=run_id)
         limits = load_recovery_policy().runtime_limits
+        sdk_session = self.sdk_session(worker_id, payload)
+        workflow_environment = TelemetryRuntime.inject_environment(dict(os.environ))
+        workflow_environment.pop("AGENT_CODEX_SDK_SESSION_SOCKET", None)
         next_heartbeat_at = 0.0
         next_cancel_check_at = 0.0
         cancellation_seen = False
@@ -283,6 +316,10 @@ class WorkflowWorkerPool:
             self.queue.worker_heartbeat(worker_id, current_task_id=record.id)
             if not self.queue.heartbeat(record.id, worker_id, self.lease_seconds):
                 raise WorkerLeaseLost("worker lease was lost")
+            if sdk_session is not None and not sdk_session.heartbeat():
+                sdk_session.ensure()
+                if not sdk_session.heartbeat():
+                    raise SdkSessionUnavailable("managed Codex SDK session heartbeat was lost")
             next_heartbeat_at = now + self.heartbeat_seconds
 
         def cancellation_requested() -> bool:
@@ -301,12 +338,17 @@ class WorkflowWorkerPool:
                 cwd=ROOT,
                 stdout_path=run_dir / "raw-events" / "workflow.stdout.log",
                 stderr_path=run_dir / "raw-events" / "workflow.stderr.log",
-                env=TelemetryRuntime.inject_environment(dict(os.environ)),
+                env=(
+                    sdk_session.environment(workflow_environment)
+                    if sdk_session is not None
+                    else workflow_environment
+                ),
                 timeout_seconds=limits.workflow_timeout_seconds,
                 idle_timeout_seconds=limits.idle_timeout_seconds,
                 shutdown_grace_seconds=limits.shutdown_grace_seconds,
                 max_output_bytes=limits.max_output_bytes,
                 artifact_paths=(run_dir / "artifacts",),
+                progress_paths=(run_dir / "progress.json", run_dir / "raw-events" / "sdk-events.jsonl"),
                 max_artifact_bytes=limits.max_artifact_bytes,
                 max_open_files=limits.max_open_files,
                 poll_seconds=min(0.25, float(self.heartbeat_seconds)),
@@ -688,7 +730,10 @@ def main() -> int:
         lease_seconds=args.lease_seconds,
         heartbeat_seconds=args.heartbeat_seconds,
     )
-    records = pool.run_wave() if args.once else pool.drain()
+    try:
+        records = pool.run_wave() if args.once else pool.drain()
+    finally:
+        pool.close()
     print(json.dumps([record.__dict__ for record in records], indent=2, ensure_ascii=False))
     return 0 if all(record.status in {"completed", "blocked"} for record in records) else 1
 

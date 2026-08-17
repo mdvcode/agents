@@ -13,6 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from approval_lifecycle import approve_run, prepare_resume  # noqa: E402
 from runtimes.codex_cli import CodexCliRuntime  # noqa: E402
+from runtimes.codex_sdk import CodexSdkRuntime  # noqa: E402
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "agent_role_runner.py"
@@ -393,7 +394,7 @@ def test_agent_role_runner_preflights_configured_runtime_before_roles(tmp_path: 
             "warnings": [],
         }
 
-    monkeypatch.setattr(CodexCliRuntime, "preflight", fake_preflight)
+    monkeypatch.setattr(CodexSdkRuntime, "preflight", fake_preflight)
 
     state = agent_role_runner.run_roles(
         run_id="run-1",
@@ -407,7 +408,7 @@ def test_agent_role_runner_preflights_configured_runtime_before_roles(tmp_path: 
     assert len(calls) == 1
     assert calls[0].parent.name == ".agent-worktrees"
     assert state["blockers"] == ["Codex CLI is not available or not authenticated."]
-    assert state["runtime"]["provider"] == "codex-cli"
+    assert state["runtime"]["provider"] == "codex-sdk"
 
 
 def test_current_branch_mode_uses_source_checkout_and_revalidates_branch(
@@ -441,7 +442,10 @@ def test_current_branch_mode_uses_source_checkout_and_revalidates_branch(
     assert base == "main"
     assert not (tmp_path / ".agent-worktrees").exists()
     recorded = json.loads((runs / "run-current" / "worktree.json").read_text(encoding="utf-8"))
-    assert recorded["workspace_mode"] == "current_branch"
+    assert recorded["workspace_mode"] == "checkout"
+    assert recorded["checkout_path"] == str(tmp_path.resolve())
+    assert recorded["task_branch"] == "feature/current"
+    assert recorded["branch_owner_run_id"] == "run-current"
     assert recorded["worktree"] == str(tmp_path.resolve())
 
     subprocess.run(["git", "switch", "main"], cwd=tmp_path, check=True, capture_output=True)

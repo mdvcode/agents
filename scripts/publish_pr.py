@@ -595,26 +595,26 @@ class Publisher:
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             publication.errors.append(f"cannot resolve authoritative task worktree: {exc}")
             return target_repo
-        raw_worktree = workflow.get("worktree")
+        raw_worktree = workflow.get("checkout_path", workflow.get("worktree"))
         if not isinstance(raw_worktree, str) or not raw_worktree:
-            publication.errors.append("workflow.json does not record the task worktree")
+            publication.errors.append("workflow.json does not record checkout_path")
             return target_repo
         worktree = Path(raw_worktree).resolve()
         if worktree != target_repo.resolve():
             publication.errors.append(
-                "publication repository must be the original task worktree from workflow.json"
+                "publication repository must match checkout_path from workflow.json"
             )
             return target_repo
         if not worktree.is_dir():
-            publication.errors.append("authoritative task worktree does not exist")
+            publication.errors.append("authoritative checkout_path does not exist")
             return target_repo
-        workflow_branch = workflow.get("branch")
+        workflow_branch = workflow.get("task_branch", workflow.get("branch"))
         actual_branch = self.current_branch(worktree)
         if not isinstance(workflow_branch, str) or not workflow_branch:
             publication.errors.append("workflow.json does not record the task branch")
         elif actual_branch != workflow_branch or publication.branch != workflow_branch:
             publication.errors.append(
-                f"task worktree branch mismatch: workflow={workflow_branch!r}, "
+                f"task checkout branch mismatch: workflow={workflow_branch!r}, "
                 f"actual={actual_branch!r}, publication={publication.branch!r}"
             )
         publication.worktree = str(worktree)
@@ -1341,7 +1341,8 @@ class Publisher:
                 workflow = read_json(workflow_path)
             except (OSError, ValueError, json.JSONDecodeError):
                 workflow = {}
-            if str(workflow.get("worktree", "")) and Path(str(workflow["worktree"])).resolve() == worktree.resolve():
+            workflow_checkout = workflow.get("checkout_path", workflow.get("worktree", ""))
+            if str(workflow_checkout) and Path(str(workflow_checkout)).resolve() == worktree.resolve():
                 return
         if not worktree.exists():
             return

@@ -16,6 +16,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from ai_harness import cli
+from ai_harness.build import harness_build_fingerprint
 from ai_harness.project import load_project_config, safe_branch
 from agent_role_runner import resolve_registry_record
 from repository_registry import load_local_project_record
@@ -80,7 +81,7 @@ def test_agent_init_creates_local_config_and_preserves_existing_agents_file(
     assert result["created"] == {"project_config": True, "agents_md": False}
     assert config.project_id == "my-project"
     assert config.profile == "nextjs_web"
-    assert config.runtime_provider == "codex-cli"
+    assert config.runtime_provider == "codex-sdk"
     assert Path(result["local_trust"]).is_file()
     assert (repository / "AGENTS.md").read_text(encoding="utf-8") == existing_agents
 
@@ -243,7 +244,7 @@ def test_agent_task_is_high_level_idempotent_queue_intake(
     assert first["queue_task_id"] == second["queue_task_id"]
     assert first["task_id"] == "fix-login"
     assert first["branch"] == "feat/fix-login"
-    assert first["workspace_mode"] == "current_branch"
+    assert first["workspace_mode"] == "checkout"
     assert first["worker"] == {"status": "starting", "pid": 4321}
     assert subprocess.run(
         ["git", "branch", "--show-current"], cwd=repository, check=True, capture_output=True, text=True
@@ -284,7 +285,7 @@ def test_agent_task_accepts_custom_prefix_and_auto_starts_worker(
     result = json.loads(capsys.readouterr().out)
 
     assert result["branch"] == "release/2026/release-notes"
-    assert result["workspace_mode"] == "current_branch"
+    assert result["workspace_mode"] == "checkout"
     assert result["worker"] == {"status": "starting", "pid": 9876}
     assert worker_calls == [("start", 3)]
     assert subprocess.run(
@@ -360,7 +361,7 @@ def test_agent_task_worktree_is_explicit_opt_in_and_keeps_checkout(
     ) == 0
     result = json.loads(capsys.readouterr().out)
 
-    assert result["workspace_mode"] == "isolated"
+    assert result["workspace_mode"] == "worktree"
     assert subprocess.run(
         ["git", "branch", "--show-current"], cwd=repository, check=True, capture_output=True, text=True
     ).stdout.strip() == original_branch
@@ -642,6 +643,9 @@ def test_agent_status_is_project_scoped_and_read_only(
         "status": "not_started",
         "log": str(state_root / ".agent-queue" / "worker-service.log"),
         "last_error": {},
+        "build_fingerprint": "",
+        "current_build_fingerprint": harness_build_fingerprint(state_root),
+        "stale_build": False,
     }
 
 
@@ -1064,14 +1068,17 @@ def test_agent_task_current_branch_queues_existing_clean_checkout_without_renami
     result = json.loads(capsys.readouterr().out)
 
     assert result["branch"] == "custom/kc-413"
-    assert result["workspace_mode"] == "current_branch"
+    assert result["workspace_mode"] == "checkout"
     assert subprocess.run(
         ["git", "branch", "--show-current"], cwd=repository, check=True, capture_output=True, text=True
     ).stdout.strip() == "custom/kc-413"
     assert not (state_root / ".agent-worktrees").exists()
     with sqlite3.connect(state_root / ".agent-queue" / "tasks.db") as connection:
         payload = json.loads(connection.execute("SELECT payload_json FROM tasks").fetchone()[0])
-    assert payload["workspace_mode"] == "current_branch"
+    assert payload["workspace_mode"] == "checkout"
+    assert payload["checkout_path"] == str(repository.resolve())
+    assert payload["task_branch"] == "custom/kc-413"
+    assert payload["branch_owner_run_id"] == result["run_id"] == payload["run_id"]
     assert payload["branch"] == "custom/kc-413"
 
 
@@ -1462,7 +1469,7 @@ def test_generated_project_config_matches_public_schema(tmp_path: Path, capsys: 
     assert validate_contract(document, schema, "project_config") == []
     assert document["version"] == 1
     assert document["project"]["repository"] == "."
-    assert document["runtime"] == {"provider": "codex-cli"}
+    assert document["runtime"] == {"provider": "codex-sdk"}
 
 
 def test_python_module_exposes_agent_version() -> None:
@@ -1475,7 +1482,7 @@ def test_python_module_exposes_agent_version() -> None:
     )
 
     assert completed.returncode == 0
-    assert completed.stdout.strip() == "agent 0.1.0"
+    assert completed.stdout.strip() == "agent 0.2.0"
 
 
 @pytest.mark.parametrize(

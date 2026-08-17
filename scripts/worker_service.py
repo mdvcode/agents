@@ -22,6 +22,7 @@ from task_queue import DEFAULT_DB, TaskQueue
 from worker_pool import WorkflowWorkerPool
 from ai_harness.recovery.models import sanitized_message
 from ai_harness.recovery.policy import load_recovery_policy
+from ai_harness.build import harness_build_fingerprint
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +78,7 @@ class WorkerService:
         self.heartbeat_seconds = heartbeat_seconds
         self.poll_seconds = poll_seconds
         self.state_path = state_path
+        self.build_fingerprint = harness_build_fingerprint(ROOT)
         self.stop_event = threading.Event()
         self.total_restart_count = max(0, restart_count)
         self.consecutive_failure_count = 0
@@ -128,6 +130,7 @@ class WorkerService:
                 ),
                 "heartbeat_at": datetime.now(timezone.utc).isoformat(),
                 "db": str(self.queue.path),
+                "build_fingerprint": self.build_fingerprint,
             },
         )
 
@@ -186,6 +189,9 @@ class WorkerService:
                 if not records:
                     self.stop_event.wait(self.poll_seconds)
         finally:
+            close_pool = getattr(self.pool, "close", None)
+            if callable(close_pool):
+                close_pool()
             for worker_id in self.worker_ids:
                 self.queue.stop_worker(worker_id)
             self.write_service_state("stopped")

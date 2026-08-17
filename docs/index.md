@@ -43,7 +43,7 @@ This repository is the local operating base for agents working across supported 
 ## Validation
 - `make check`: validate artifacts and diff hygiene.
 - `make validate-artifacts`: validate required structured artifacts.
-- `make runtime-preflight`: preflight the production provider through the Runtime abstraction (`codex-cli` in Step 2).
+- `make runtime-preflight`: preflight the official Python Codex SDK and ChatGPT subscription through the Runtime abstraction.
 - `make security`: lightweight repository-local scan for obvious secrets, private keys, private paths, and protected staged files.
 - `make agent-status`: print git status and current verdict.
 - `make queue-worker`: process queued workflows with three leased workers.
@@ -70,10 +70,10 @@ This repository is the local operating base for agents working across supported 
 - `agent status`: show compact project queue/run state.
 - `agent watch`: follow task transitions until completion or a required user action.
 - `agent answer <run-id> "Answer"`: provide requested information and resume the same scoped run.
-- `agent doctor [--full]`: validate packaging, project config, Codex CLI, and optionally runtime authentication.
+- `agent doctor [--full]`: validate packaging/build freshness, project config, Codex availability, worker freshness, and optionally SDK subscription authentication.
 
 ## Runtime State
-- `.agent-runtime.yaml`: the single production runtime selection; Step 2 permits only local-subscription `codex-cli`, requires no API, and disables Model Router.
+- `.agent-runtime.yaml`: the production runtime selection; official `codex-sdk` is primary, `codex-cli` is a compatibility fallback, provider API use is forbidden, and Model Router is disabled.
 - `scripts/runtimes/`: provider-neutral contract, registry, generic structured subprocess boundary, and provider adapters.
 - All model-backed execution must pass through `Runtime.execute(...)`. Additional adapters belong to Step 3; Model Router belongs to Step 4.
 - `.agent-runs/<run-id>/workflow.json`: authoritative workflow state.

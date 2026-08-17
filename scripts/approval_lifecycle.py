@@ -140,16 +140,29 @@ def checkpoint_role(workflow: dict[str, Any]) -> str:
 
 
 def checkpoint_fingerprint(workflow: dict[str, Any], role: str, reason: str) -> str:
-    payload = {
+    payload: dict[str, Any] = {
         "run_id": workflow.get("run_id", ""),
         "input_fingerprint": workflow.get("input_fingerprint", ""),
         "role": role,
         "reason": reason,
-        "worktree": workflow.get("worktree", ""),
-        "branch": workflow.get("branch", ""),
         "role_count": workflow.get("role_count", 0),
         "tokens_used": workflow.get("tokens_used", 0),
     }
+    if "checkout_path" in workflow or "task_branch" in workflow:
+        payload.update(
+            {
+                "checkout_path": workflow.get("checkout_path", workflow.get("worktree", "")),
+                "task_branch": workflow.get("task_branch", workflow.get("branch", "")),
+                "branch_owner_run_id": workflow.get("branch_owner_run_id", workflow.get("run_id", "")),
+            }
+        )
+    else:
+        payload.update(
+            {
+                "worktree": workflow.get("worktree", ""),
+                "branch": workflow.get("branch", ""),
+            }
+        )
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
@@ -439,8 +452,18 @@ def resume_run(run_dir: Path, *, queue: TaskQueue) -> tuple[dict[str, Any], Task
                 "goal": str(workflow.get("goal", workflow.get("task_id", "task"))),
                 "project": str(workflow.get("project", "agent_workspace")),
                 "repository": str(workflow.get("repository", "")),
-                "branch": str(workflow.get("branch", "")),
+                "branch": str(workflow.get("task_branch", workflow.get("branch", ""))),
                 "base_branch": str(workflow.get("base_branch", "main")),
+                "workspace_mode": str(workflow.get("workspace_mode", "worktree")),
+                "checkout_path": str(workflow.get("checkout_path", workflow.get("worktree", ""))),
+                "task_branch": str(workflow.get("task_branch", workflow.get("branch", ""))),
+                "base_sha": str(workflow.get("base_sha", "")),
+                "branch_owner_run_id": str(workflow.get("branch_owner_run_id", run_dir.name)),
+                "runtime_provider": str(
+                    workflow.get("runtime", {}).get("provider", "codex-sdk")
+                    if isinstance(workflow.get("runtime"), dict)
+                    else "codex-sdk"
+                ),
                 "run_id": run_dir.name,
                 "source": "approval",
                 "event_id": str(approval["approval_id"]),

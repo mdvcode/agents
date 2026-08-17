@@ -606,4 +606,4 @@ def test_publication_rejects_a_worktree_unrelated_to_workflow_state(tmp_path: Pa
 
     publisher.authoritative_task_worktree(unrelated, publication)
 
-    assert any("original task worktree" in error for error in publication.errors)
+    assert any("match checkout_path" in error for error in publication.errors)

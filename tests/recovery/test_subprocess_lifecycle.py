@@ -24,6 +24,7 @@ def run_process(
     cancel_requested: Callable[[], bool] | None = None,
     shutdown_requested: Callable[[], bool] | None = None,
     input_text: str | None = None,
+    progress_paths: tuple[Path, ...] = (),
 ) -> ManagedProcessResult:
     kwargs: dict[str, object] = {}
     if open_file_counter is not None:
@@ -38,6 +39,7 @@ def run_process(
         shutdown_grace_seconds=0.2,
         max_output_bytes=max_output_bytes,
         artifact_paths=artifact_paths,
+        progress_paths=progress_paths,
         max_artifact_bytes=max_artifact_bytes,
         max_open_files=max_open_files,
         poll_seconds=0.01,
@@ -100,6 +102,24 @@ def test_timeout_terminates_the_managed_process(tmp_path: Path) -> None:
     assert result.timed_out is True
     assert result.returncode == 124
     assert result.duration_seconds < 2
+
+
+def test_progress_file_activity_prevents_false_idle_timeout(tmp_path: Path) -> None:
+    progress = tmp_path / "progress.json"
+    result = run_process(
+        tmp_path,
+        (
+            "import time; from pathlib import Path; "
+            f"path=Path({str(progress)!r}); "
+            "[(path.write_text(str(index)), time.sleep(0.05)) for index in range(8)]"
+        ),
+        timeout=2,
+        idle_timeout=0.15,
+        progress_paths=(progress,),
+    )
+
+    assert result.returncode == 0
+    assert result.idle_timed_out is False
 
 
 def test_large_stdin_cannot_block_timeout_monitoring(tmp_path: Path) -> None:

@@ -29,7 +29,7 @@ Project-local configuration is trusted only for explicit local task execution af
 
 ## 2026-08-06 task-start refinement
 
-`agent task` is now the normal autonomous start path. It starts the persistent worker service when needed and, by default, creates or selects a dedicated task branch in the current clean checkout. Isolated worktrees are available only through the explicit `--worktree` option for parallel execution. An already prepared branch remains available through `--current-branch`.
+`agent task` is now the normal autonomous start path. It starts the persistent worker service when needed and, by default, creates a fresh dedicated task branch in the current clean checkout. Isolated worktrees are available only through the explicit `--worktree` option for parallel execution. An already prepared branch remains available through `--current-branch`.
 
 Project-local generated branch prefixes are validated as Git-safe values instead of being restricted to a small hard-coded list. Central publication policy remains independent: accepting a local task prefix does not grant push, PR, merge, deployment, or protected-path authority.
 
@@ -43,7 +43,7 @@ Explicit consent is recorded outside the repository in the current user's privat
 
 As of 2026-08-06, ordinary users enter this packaging layer through `./install.sh` and refresh it through `agent update`; pipx remains the isolated implementation mechanism rather than a required operating interface. The detailed safety contract is recorded in `2026-08-06-ordinary-user-install-update.md`.
 
-Runtime abstraction is unchanged: `agent task` creates a Task; workers execute model-backed roles through `Runtime.execute(...)`; Codex CLI remains the only Step 2 provider.
+Runtime abstraction is unchanged: `agent task` creates a Task and workers execute model-backed roles through `Runtime.execute(...)`. Production provider selection is superseded by `2026-08-15-python-codex-sdk-runtime.md`.
 
 ## Consequences
 

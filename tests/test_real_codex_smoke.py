@@ -17,8 +17,8 @@ from runtimes import create_runtime
 
 
 @pytest.mark.skipif(
-    os.environ.get("AGENT_REAL_CODEX_SMOKE") != "1" or not os.environ.get("AGENT_CODEX_CLI_COMMAND"),
-    reason="optional real Codex smoke requires AGENT_REAL_CODEX_SMOKE=1 and AGENT_CODEX_CLI_COMMAND",
+    os.environ.get("AGENT_REAL_CODEX_SMOKE") != "1",
+    reason="optional real Codex SDK smoke requires AGENT_REAL_CODEX_SMOKE=1",
 )
 def test_real_codex_runtime_smoke(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
@@ -95,7 +95,7 @@ def test_real_codex_runtime_smoke(tmp_path: Path) -> None:
     )
 
     assert result["status"] == "completed", result
-    assert runtime.descriptor.provider == "codex-cli"
+    assert runtime.descriptor.provider == "codex-sdk"
     assert runtime.descriptor.transport == "local_subscription"
     assert runtime.descriptor.api_required is False
     assert (artifacts_dir / "plan.md").exists()

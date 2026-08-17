@@ -146,6 +146,12 @@ def test_resume_enqueues_same_run_and_checkpoint(tmp_path: Path) -> None:
             "project": "agent_workspace",
             "repository": str(tmp_path),
             "base_branch": "main",
+            "workspace_mode": "checkout",
+            "checkout_path": str(tmp_path),
+            "task_branch": "feat/task",
+            "base_sha": "abc123",
+            "branch_owner_run_id": "run-approval",
+            "runtime": {"provider": "codex-sdk"},
         }
     )
     write_json(workflow_path, workflow)
@@ -175,6 +181,12 @@ def test_resume_enqueues_same_run_and_checkpoint(tmp_path: Path) -> None:
     assert record.run_id == "run-approval"
     assert record.payload["run_id"] == "run-approval"
     assert record.payload["repository"] == str(tmp_path)
+    assert record.payload["workspace_mode"] == "checkout"
+    assert record.payload["checkout_path"] == str(tmp_path)
+    assert record.payload["task_branch"] == "feat/task"
+    assert record.payload["base_sha"] == "abc123"
+    assert record.payload["branch_owner_run_id"] == "run-approval"
+    assert record.payload["runtime_provider"] == "codex-sdk"
     assert record.status == "queued"
     superseded = queue.get(predecessor.id)
     assert superseded is not None and superseded.status == "completed"

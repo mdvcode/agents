@@ -191,7 +191,7 @@ A task is not done until:
 ## Persistent repository rules
 - Treat any migration, auth, permission, session, CSRF, production settings, secret-management, webhook, payment, billing, or irreversible side-effect change as elevated risk.
 - Keep local agent memory private; do not copy private issue journals into public PR text unless explicitly approved and sanitized.
-- Route every model-backed role through the provider-neutral `Runtime` contract. In Step 2 only local-subscription `codex-cli` is a production runtime; direct provider SDK/CLI calls from Harness code and Model Router behavior are forbidden.
+- Route every model-backed role through the provider-neutral `Runtime` contract. The production provider is the official Python `codex-sdk` using ChatGPT subscription authentication; `codex-cli` is an explicit compatibility fallback. Provider SDK/CLI calls belong only inside runtime adapters, and Model Router behavior remains forbidden.
 - Treat `.agent/project.yaml` as local execution identity only. It must never grant publication, merge, deployment, credential, network, protected-path, or provider-routing authority.
 
 ## Mobilistics preflight

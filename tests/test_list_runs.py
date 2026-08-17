@@ -64,6 +64,28 @@ def test_status_and_stalled_filters(tmp_path: Path) -> None:
     assert [entry.identifier for entry in running] == ["stalled-run"]
 
 
+def test_sdk_event_progress_is_authoritative_for_stuck_detection(tmp_path: Path) -> None:
+    runs = tmp_path / ".agent-runs"
+    run = runs / "active-sdk"
+    workflow = run / "workflow.json"
+    write_json(workflow, {"execution_status": "running"})
+    old = time.time() - 600
+    os.utime(workflow, (old, old))
+    write_json(
+        run / "progress.json",
+        {"last_sdk_event": "item/started", "active_tool": "pytest -q"},
+    )
+
+    entries = collect(
+        runs_dir=runs,
+        db_path=tmp_path / "missing.db",
+        stalled=True,
+        stale_seconds=60,
+    )
+
+    assert entries == []
+
+
 def test_security_and_draft_evidence_exceptions_are_summarized(tmp_path: Path) -> None:
     runs = tmp_path / ".agent-runs"
     run = runs / "draft"
