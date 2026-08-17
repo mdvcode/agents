@@ -25,7 +25,14 @@ DEFAULT_DB = ROOT / ".agent-queue" / "tasks.db"
 ACTIVE_STATUSES = {"claimed", "leased", "running"}
 RECOVERABLE_STATUSES = {"queued", "retry_wait", "repairing", "resuming"}
 FINAL_STATUSES = {"completed", "blocked", "dead_letter", "failed", "cancelled"}
-ALL_STATUSES = {*RECOVERABLE_STATUSES, *ACTIVE_STATUSES, "awaiting_approval", *FINAL_STATUSES}
+WAITING_STATUSES = {"waiting_children"}
+ALL_STATUSES = {
+    *RECOVERABLE_STATUSES,
+    *ACTIVE_STATUSES,
+    *WAITING_STATUSES,
+    "awaiting_approval",
+    *FINAL_STATUSES,
+}
 SQLITE_BUSY_BACKOFF_SECONDS = (0.05, 0.1, 0.25)
 
 TASKS_TABLE_SQL = """
@@ -35,7 +42,7 @@ CREATE TABLE {table} (
     payload_json TEXT NOT NULL,
     status TEXT NOT NULL CHECK(status IN (
         'queued','claimed','leased','running','retry_wait','repairing','resuming',
-        'awaiting_approval','completed','blocked','dead_letter','failed','cancelled'
+        'awaiting_approval','waiting_children','completed','blocked','dead_letter','failed','cancelled'
     )),
     priority INTEGER NOT NULL DEFAULT 0,
     run_id TEXT NOT NULL DEFAULT '',
@@ -192,7 +199,7 @@ class TaskQueue:
             "last_failure_id",
             "cancellation_requested_at",
         }
-        if "retry_wait" in sql and recovery_columns <= columns:
+        if "retry_wait" in sql and "waiting_children" in sql and recovery_columns <= columns:
             if "lease_owner" not in columns:
                 connection.execute("ALTER TABLE tasks ADD COLUMN lease_owner TEXT NOT NULL DEFAULT ''")
                 connection.execute("UPDATE tasks SET lease_owner=worker_id WHERE worker_id!=''")
@@ -203,18 +210,28 @@ class TaskQueue:
         try:
             connection.execute("ALTER TABLE tasks RENAME TO tasks_legacy")
             connection.execute(TASKS_TABLE_SQL.format(table="tasks"))
+            target_columns = [
+                "id", "task_key", "payload_json", "status", "priority", "run_id",
+                "worker_id", "lease_owner", "lease_expires_at", "heartbeat_at", "attempts",
+                "max_retries", "available_at", "created_at", "updated_at", "last_error",
+                "requires_human", "exception_reason", "failure_kind", "recovery_action",
+                "next_attempt_at", "resume_checkpoint", "recovery_attempts", "last_failure_id",
+                "cancellation_requested_at",
+            ]
+            defaults = {
+                "priority": "0", "run_id": "''", "worker_id": "''",
+                "lease_owner": "worker_id", "lease_expires_at": "0", "heartbeat_at": "0",
+                "attempts": "0", "max_retries": "2", "available_at": "0",
+                "created_at": "0", "updated_at": "0", "last_error": "''",
+                "requires_human": "0", "exception_reason": "''", "failure_kind": "''",
+                "recovery_action": "''", "next_attempt_at": "0", "resume_checkpoint": "''",
+                "recovery_attempts": "0", "last_failure_id": "''",
+                "cancellation_requested_at": "0",
+            }
+            selected = [column if column in columns else defaults[column] for column in target_columns]
             connection.execute(
-                """
-                INSERT INTO tasks(
-                    id,task_key,payload_json,status,priority,run_id,worker_id,lease_owner,lease_expires_at,
-                    heartbeat_at,attempts,max_retries,available_at,created_at,updated_at,last_error,
-                    requires_human,exception_reason
-                )
-                SELECT id,task_key,payload_json,status,priority,run_id,worker_id,worker_id,lease_expires_at,
-                    heartbeat_at,attempts,max_retries,available_at,created_at,updated_at,last_error,
-                    requires_human,exception_reason
-                FROM tasks_legacy
-                """
+                f"INSERT INTO tasks({','.join(target_columns)}) "
+                f"SELECT {','.join(selected)} FROM tasks_legacy"
             )
             connection.execute("DROP TABLE tasks_legacy")
             connection.commit()
@@ -484,6 +501,15 @@ class TaskQueue:
                             json_extract(candidate.payload_json, '$.repository')
                     )
                   )
+                  AND (
+                    COALESCE(CAST(json_extract(candidate.payload_json, '$.repository_max_parallel_tasks') AS INTEGER), 0) = 0
+                    OR (
+                      SELECT COUNT(*) FROM tasks AS active
+                      WHERE active.status IN ('claimed','leased','running')
+                        AND json_extract(active.payload_json, '$.repository') =
+                            json_extract(candidate.payload_json, '$.repository')
+                    ) < CAST(json_extract(candidate.payload_json, '$.repository_max_parallel_tasks') AS INTEGER)
+                  )
                 ORDER BY candidate.priority DESC, candidate.id ASC LIMIT 1
                 """,
                 (now,),
@@ -557,7 +583,10 @@ class TaskQueue:
         exception_reason: str = "",
         terminal_failure: bool = False,
     ) -> TaskRecord:
-        if status not in {"completed", "blocked", "awaiting_approval", "dead_letter", "failed", "cancelled"}:
+        if status not in {
+            "completed", "blocked", "awaiting_approval", "waiting_children",
+            "dead_letter", "failed", "cancelled",
+        }:
             raise ValueError(f"unsupported finish status: {status}")
         now = time.time()
         with self.connect() as connection:
@@ -598,6 +627,60 @@ class TaskQueue:
             finished = connection.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             connection.commit()
             return self.record(finished)
+
+    def transition_waiting_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        reason: str = "",
+    ) -> TaskRecord:
+        """Atomically release one parent after its blocking children reach a join point."""
+
+        if status not in {"resuming", "blocked"}:
+            raise ValueError("waiting parent may transition only to resuming or blocked")
+        now = time.time()
+        with self.connect() as connection:
+            self._begin_immediate(connection)
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE run_id=? ORDER BY id DESC LIMIT 1",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                raise ValueError(f"queue task for run {run_id!r} was not found")
+            if str(row["status"]) != "waiting_children":
+                connection.commit()
+                return self.record(row)
+            human = status == "blocked"
+            connection.execute(
+                """
+                UPDATE tasks SET status=?,available_at=?,next_attempt_at=?,updated_at=?,
+                    requires_human=?,exception_reason=?,recovery_action=? WHERE id=?
+                """,
+                (
+                    status,
+                    now,
+                    now,
+                    now,
+                    int(human),
+                    reason if human else "",
+                    "" if human else "resume",
+                    int(row["id"]),
+                ),
+            )
+            self.event(
+                connection,
+                int(row["id"]),
+                status,
+                details={"reason": reason, "children_joined": not human},
+                now=now,
+            )
+            updated = connection.execute(
+                "SELECT * FROM tasks WHERE id=?", (int(row["id"]),)
+            ).fetchone()
+            connection.commit()
+            return self.record(updated)
 
     def requeue(
         self,
@@ -844,6 +927,14 @@ class TaskQueue:
     def get(self, task_id: int) -> TaskRecord | None:
         with self.connect() as connection:
             row = connection.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            return self.record(row) if row is not None else None
+
+    def find_run(self, run_id: str) -> TaskRecord | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE run_id=? ORDER BY id DESC LIMIT 1",
+                (run_id,),
+            ).fetchone()
             return self.record(row) if row is not None else None
 
     def list(self, *, status: str = "", requires_human: bool = False) -> list[TaskRecord]:

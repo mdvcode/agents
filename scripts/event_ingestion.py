@@ -80,10 +80,38 @@ def normalize_event(
     try:
         priority = int(payload.get("priority", 0) or 0)
         max_retries = int(payload.get("max_retries", 2) or 0)
+        repository_max_parallel_tasks = int(
+            payload.get("repository_max_parallel_tasks", 0) or 0
+        )
+        batch_index = int(payload.get("batch_index", 0) or 0)
+        graph_depth = int(payload.get("graph_depth", 0) or 0)
     except (TypeError, ValueError) as exc:
-        raise EventError("event priority and max_retries must be integers") from exc
+        raise EventError("event numeric scheduling fields must be integers") from exc
     if priority < -100 or priority > 100 or max_retries < 0 or max_retries > 10:
         raise EventError("event priority or max_retries is outside allowed bounds")
+    if repository_max_parallel_tasks < 0 or repository_max_parallel_tasks > 32:
+        raise EventError("event repository_max_parallel_tasks must be between 0 and 32")
+    if batch_index < 0 or graph_depth < 0 or graph_depth > 2:
+        raise EventError("event batch_index or graph_depth is outside allowed bounds")
+    relation = text(payload.get("relation"), "root")
+    if relation not in {"root", "repair", "investigation", "test", "implementation"}:
+        raise EventError("event relation is invalid")
+    dependency_mode = text(payload.get("dependency_mode"), "none")
+    if dependency_mode not in {"none", "blocking", "non_blocking"}:
+        raise EventError("event dependency_mode is invalid")
+    allowed_paths = payload.get("allowed_paths", [])
+    allowed_child_repositories = payload.get(
+        "allowed_child_repositories", [str(repository)]
+    )
+    child_budget = payload.get("child_budget", {})
+    if not isinstance(allowed_paths, list) or not all(isinstance(item, str) for item in allowed_paths):
+        raise EventError("event allowed_paths must be a list of strings")
+    if not isinstance(allowed_child_repositories, list) or not all(
+        isinstance(item, str) for item in allowed_child_repositories
+    ):
+        raise EventError("event allowed_child_repositories must be a list of strings")
+    if not isinstance(child_budget, dict):
+        raise EventError("event child_budget must be an object")
     event_id = event_identity(source, external_id, task_id)
     return {
         "event_id": event_id,
@@ -106,6 +134,19 @@ def normalize_event(
         "run_id": run_id,
         "priority": priority,
         "max_retries": max_retries,
+        "repository_max_parallel_tasks": repository_max_parallel_tasks,
+        "batch_id": text(payload.get("batch_id")),
+        "batch_index": batch_index,
+        "root_run_id": text(payload.get("root_run_id"), run_id),
+        "parent_run_id": text(payload.get("parent_run_id")),
+        "relation": relation,
+        "dependency_mode": dependency_mode,
+        "spawn_reason": text(payload.get("spawn_reason"))[:1000],
+        "allowed_paths": allowed_paths[:50],
+        "allowed_child_repositories": allowed_child_repositories[:20],
+        "graph_depth": graph_depth,
+        "child_budget": child_budget,
+        "spawn_fingerprint": text(payload.get("spawn_fingerprint")),
         "external_id": external_id,
         "received_at": datetime.now(timezone.utc).isoformat(),
         "metadata": {
@@ -137,7 +178,9 @@ def enqueue_envelope(queue: TaskQueue, envelope: dict[str, Any]) -> TaskRecord:
         for key in (
             "task_id", "goal", "project", "repository", "branch", "base_branch", "workspace_mode",
             "checkout_path", "task_branch", "base_sha", "branch_owner_run_id", "mode", "runtime_provider",
-            "run_id", "source", "event_id"
+            "run_id", "source", "event_id", "repository_max_parallel_tasks", "batch_id", "batch_index",
+            "root_run_id", "parent_run_id", "relation", "dependency_mode", "spawn_reason", "allowed_paths",
+            "allowed_child_repositories", "graph_depth", "child_budget", "spawn_fingerprint"
         )
     }
     return queue.enqueue(

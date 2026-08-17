@@ -96,6 +96,39 @@ Prompt length and punctuation never become a branch-name failure: generated name
 
 `--current-branch` uses an already checked-out clean non-default branch without creating or renaming it. `--worktree` is the explicit opt-in for isolated parallel task execution. The worker revalidates current-checkout branches immediately before execution. Status, retry, resume, and abort preserve the same authoritative run and workspace.
 
+## Submit a task batch
+
+Use one manifest when several repositories or independent branches should be scheduled together:
+
+```yaml
+version: 1
+repositories:
+  backend:
+    path: /projects/backend
+    max_parallel_tasks: 3
+  frontend:
+    path: /projects/frontend
+    max_parallel_tasks: 2
+tasks:
+  - repo: backend
+    goal: Fix report export
+  - repo: backend
+    goal: Add report filters
+    parallel: true
+  - repo: frontend
+    goal: Fix the navigation menu
+```
+
+```sh
+agent batch --file tasks.yaml
+agent batch --file tasks.yaml --dry-run --json
+cat tasks.yaml | agent batch --file -
+```
+
+The dashboard accepts the same YAML, and the loopback API accepts either a `manifest` string or a `repositories` plus `tasks` object at `POST /tasks/batch`. In visual intake, `parallel: true` automatically selects an isolated worktree. The ordinary CLI keeps `--worktree` explicit. A repository limit is enforced atomically when workers claim tasks, so several workers cannot oversubscribe one project or its shared test resources.
+
+Worktrees reuse private shared pip, uv, npm, and Bun download caches. Project-specific Turbo, build, virtualenv, and container-layer cache roots are also stable across task worktrees; a task still owns a separate checkout and branch.
+
 Single-checkout mode treats submission of a new task as replacement of an older human-paused, blocked, dead-lettered, or failed task. The old queue item is cancelled, but its Git branch and run files are preserved; the new task is then prepared and queued normally. Active or merely queued work is never replaced automatically. Advanced users may pass `--keep-paused` to retain the previous pause and refuse the new task instead.
 
 Use `--dry-run --json` to inspect the envelope without switching branches, starting workers, or changing queue state. `agent start` remains available for proactively starting the service, but it is no longer required before `agent task`.
@@ -110,6 +143,10 @@ agent status --json
 ```
 
 Status is read-only, project-scoped, and compact. It shows queue, run, and worker-service states without role transcripts, source contents, credentials, or raw events. Worker startup is an intentional side effect of `agent task`; read-only commands never start it.
+
+The dashboard provides one cross-repository queue with `Queued`, `Running`, `Testing`, `Needs input`, `PR ready`, and `Failed` lifecycle views. Repository, task branch, and worker filters can be combined. When active branches in one repository currently touch the same paths, both tasks receive a probable-conflict marker and a deterministic publish-first/rebase-second recommendation.
+
+During implementation, a role may propose a bounded independent child task. The deterministic router—not the model—decides whether it is allowed. A writing child receives its own worktree, branch, SDK thread, token/time budget, and `allowed_paths`; the parent records `root_run_id` and `parent_run_id`. Blocking failures stay in the normal sequential repair loop. Independent children may run in the background, after which the parent alone joins their patch, resumes its original SDK thread, runs the combined verification, and owns publication. Fan-out is limited to three children and graph depth to two levels.
 
 When execution cannot continue autonomously, status and watch print an `ATTENTION REQUIRED` block with the exact question or cause, current role, and next command. If information is missing, answer it without creating a new run:
 

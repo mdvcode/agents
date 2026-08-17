@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
 import sys
 from dataclasses import asdict
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -28,6 +30,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ai_harness.observability.dashboard import DASHBOARD_HTML
+from ai_harness.task_batch import BatchManifestError, parse_batch_manifest
 
 RUNS_DIR = ROOT / ".agent-runs"
 MAX_BODY_BYTES = 1_048_576
@@ -141,6 +144,72 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             raise APIError(HTTPStatus.BAD_REQUEST, "project folder does not exist")
         return repository
 
+    def submit_batch(self, payload: dict[str, Any]) -> dict[str, Any]:
+        manifest: Any = payload.get("manifest")
+        if manifest is None:
+            manifest = {
+                "version": payload.get("version", 1),
+                "repositories": payload.get("repositories", {}),
+                "tasks": payload.get("tasks"),
+            }
+        try:
+            tasks = parse_batch_manifest(manifest, base_dir=self.default_repository)
+        except BatchManifestError as exc:
+            raise APIError(HTTPStatus.BAD_REQUEST, str(exc)) from exc
+        identity = json.dumps(
+            [
+                {
+                    **task,
+                    "repository": str(task["repository"]),
+                }
+                for task in tasks
+            ],
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        fingerprint = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
+        batch_id = datetime.now(timezone.utc).strftime(
+            f"%Y%m%dT%H%M%S.%fZ-batch-{fingerprint}"
+        )
+        allowed_repositories = sorted({str(task["repository"]) for task in tasks})
+        accepted: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for task in tasks:
+            arguments = ["task", str(task["goal"]), "--mode", str(task["mode"])]
+            if task["task_id"]:
+                arguments.extend(["--task-id", str(task["task_id"])])
+            if task["parallel"]:
+                arguments.append("--worktree")
+            if task["priority"]:
+                arguments.extend(["--priority", str(task["priority"])])
+            if task["max_retries"] != 2:
+                arguments.extend(["--max-retries", str(task["max_retries"])])
+            if task["max_parallel_tasks"]:
+                arguments.extend(
+                    ["--max-parallel-tasks", str(task["max_parallel_tasks"])]
+                )
+            arguments.extend(
+                ["--batch-id", batch_id, "--batch-index", str(task["batch_index"])]
+            )
+            for repository in allowed_repositories:
+                arguments.extend(["--allowed-child-repository", repository])
+            try:
+                accepted.append(self.agent_command(Path(task["repository"]), arguments))
+            except APIError as exc:
+                errors.append(
+                    {
+                        "index": task["batch_index"],
+                        "repository": str(task["repository"]),
+                        "error": str(exc),
+                    }
+                )
+        return {
+            "status": "accepted" if not errors else ("partial" if accepted else "error"),
+            "batch_id": batch_id,
+            "accepted": accepted,
+            "errors": errors,
+        }
+
     def do_GET(self) -> None:
         try:
             path = urlparse(self.path).path
@@ -183,12 +252,21 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             if path != "/webhooks/github/actions":
                 self.authorize()
             raw, payload = self.body()
+            if path in {"/ui/tasks/batch", "/tasks/batch"}:
+                result = self.submit_batch(payload)
+                status = HTTPStatus.ACCEPTED if result["accepted"] else HTTPStatus.BAD_REQUEST
+                self.send_json(status, result)
+                return
             if path == "/ui/tasks":
                 repository = self.request_repository(payload)
                 goal = str(payload.get("goal", "")).strip()
                 if not goal:
                     raise APIError(HTTPStatus.BAD_REQUEST, "describe the task before starting it")
-                workspace_mode = str(payload.get("workspace_mode", payload.get("mode", "new_branch")))
+                workspace_mode = (
+                    "worktree"
+                    if payload.get("parallel") is True
+                    else str(payload.get("workspace_mode", payload.get("mode", "new_branch")))
+                )
                 if workspace_mode not in {"new_branch", "current_branch", "worktree"}:
                     raise APIError(HTTPStatus.BAD_REQUEST, "unknown workspace mode")
                 execution_mode = str(payload.get("execution_mode", "auto"))
@@ -202,6 +280,21 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                     arguments.append("--current-branch")
                 elif workspace_mode == "worktree":
                     arguments.append("--worktree")
+                max_parallel = payload.get("max_parallel_tasks", 0)
+                if max_parallel:
+                    try:
+                        selected_limit = int(max_parallel)
+                    except (TypeError, ValueError) as exc:
+                        raise APIError(
+                            HTTPStatus.BAD_REQUEST,
+                            "max_parallel_tasks must be an integer",
+                        ) from exc
+                    if not 1 <= selected_limit <= 32:
+                        raise APIError(
+                            HTTPStatus.BAD_REQUEST,
+                            "max_parallel_tasks must be between 1 and 32",
+                        )
+                    arguments.extend(["--max-parallel-tasks", str(selected_limit)])
                 result = self.agent_command(repository, arguments)
                 self.send_json(HTTPStatus.ACCEPTED, result)
                 return

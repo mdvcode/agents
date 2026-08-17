@@ -14,7 +14,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from opentelemetry.trace import Status, StatusCode
 
@@ -30,6 +30,8 @@ from ai_harness.processes import run_managed_process
 from ai_harness.recovery import RecoveryCoordinator, classify_failure, load_recovery_policy
 from ai_harness.recovery.models import persist_failure, sanitized_message
 from ai_harness.sdk_session import ManagedCodexSdkSession, SdkSessionUnavailable
+from ai_harness.workspace_cache import cache_environment
+from task_graph import finalize_child_run, reconcile_waiting_parent
 
 RUNS_DIR = ROOT / ".agent-runs"
 
@@ -107,7 +109,7 @@ def persist_workflow_cancellation(workflow_path: Path, *, run_id: str = "") -> N
         os.close(directory_fd)
 
 
-def safe_payload(record: TaskRecord) -> dict[str, str]:
+def safe_payload(record: TaskRecord) -> dict[str, Any]:
     allowed = {
         "task_id",
         "project",
@@ -127,6 +129,19 @@ def safe_payload(record: TaskRecord) -> dict[str, str]:
         "goal",
         "source",
         "event_id",
+        "repository_max_parallel_tasks",
+        "batch_id",
+        "batch_index",
+        "root_run_id",
+        "parent_run_id",
+        "relation",
+        "dependency_mode",
+        "spawn_reason",
+        "allowed_paths",
+        "allowed_child_repositories",
+        "graph_depth",
+        "child_budget",
+        "spawn_fingerprint",
     }
     unknown = sorted(set(record.payload) - allowed)
     if unknown:
@@ -145,7 +160,7 @@ def safe_payload(record: TaskRecord) -> dict[str, str]:
         record.payload.get("adapter_command") or record.payload.get("runtime_command")
     ) and os.environ.get("AGENT_HARNESS_TEST_MODE") != "1":
         raise ValueError("runtime command overrides are restricted to harness test mode")
-    return {key: str(value) for key, value in record.payload.items()}
+    return dict(record.payload)
 
 
 def workflow_attention_reason(workflow: dict[str, object], fallback: str) -> str:
@@ -190,6 +205,7 @@ class WorkflowWorkerPool:
         handler: TaskHandler | None = None,
         worker_prefix: str = "worker",
         shutdown_requested: ShutdownRequested | None = None,
+        follow_dynamic_tasks: bool = False,
     ) -> None:
         runtime_limits = load_recovery_policy().runtime_limits
         if workers < 1 or workers > 32:
@@ -205,9 +221,10 @@ class WorkflowWorkerPool:
         self.handler = handler
         self.worker_prefix = worker_prefix
         self.shutdown_requested = shutdown_requested
+        self.follow_dynamic_tasks = follow_dynamic_tasks
         self._sdk_sessions: dict[str, ManagedCodexSdkSession] = {}
 
-    def sdk_session(self, worker_id: str, payload: dict[str, str]) -> ManagedCodexSdkSession | None:
+    def sdk_session(self, worker_id: str, payload: dict[str, Any]) -> ManagedCodexSdkSession | None:
         provider = payload.get("runtime_provider", "")
         if provider != "codex-sdk":
             return None
@@ -304,6 +321,23 @@ class WorkflowWorkerPool:
         sdk_session = self.sdk_session(worker_id, payload)
         workflow_environment = TelemetryRuntime.inject_environment(dict(os.environ))
         workflow_environment.pop("AGENT_CODEX_SDK_SESSION_SOCKET", None)
+        workflow_environment.update(
+            cache_environment(
+                self.queue.path.parent / "caches",
+                Path(str(payload["repository"])),
+            )
+        )
+        graph_metadata = {
+            key: payload.get(key)
+            for key in (
+                "repository_max_parallel_tasks", "batch_id", "batch_index", "root_run_id",
+                "parent_run_id", "relation", "dependency_mode", "spawn_reason", "allowed_paths",
+                "allowed_child_repositories", "graph_depth", "child_budget", "spawn_fingerprint",
+            )
+        }
+        workflow_environment["AGENT_TASK_GRAPH_METADATA"] = json.dumps(
+            graph_metadata, ensure_ascii=False
+        )
         next_heartbeat_at = 0.0
         next_cancel_check_at = 0.0
         cancellation_seen = False
@@ -412,8 +446,20 @@ class WorkflowWorkerPool:
             except (OSError, json.JSONDecodeError):
                 workflow = {}
         execution_status = str(workflow.get("execution_status", ""))
-        if process.returncode == 0 and execution_status == "completed":
+        if execution_status == "completed":
+            if payload.get("parent_run_id"):
+                finalized, error = finalize_child_run(run_dir)
+                if not finalized:
+                    return WorkerOutcome(
+                        status="blocked",
+                        run_id=run_id,
+                        error=error,
+                        requires_human=False,
+                        exception_reason=error,
+                    )
             return WorkerOutcome(status="completed", run_id=run_id)
+        if execution_status == "waiting_children":
+            return WorkerOutcome(status="waiting_children", run_id=run_id)
         if execution_status in {"retry_wait", "repairing", "resuming"}:
             action = {
                 "retry_wait": "retry",
@@ -553,13 +599,13 @@ class WorkflowWorkerPool:
             "error": outcome.error,
         }
         if outcome.recovery_action == "retry":
-            return self.queue.schedule_retry(**common)
-        if outcome.recovery_action == "repair":
-            return self.queue.mark_repairing(**common)
-        if outcome.recovery_action == "resume":
-            return self.queue.mark_resuming(**common)
-        if outcome.recovery_action == "dead_letter" or outcome.status == "dead_letter":
-            return self.queue.move_to_dead_letter(
+            finished = self.queue.schedule_retry(**common)
+        elif outcome.recovery_action == "repair":
+            finished = self.queue.mark_repairing(**common)
+        elif outcome.recovery_action == "resume":
+            finished = self.queue.mark_resuming(**common)
+        elif outcome.recovery_action == "dead_letter" or outcome.status == "dead_letter":
+            finished = self.queue.move_to_dead_letter(
                 task_id=record.id,
                 worker_id=worker_id,
                 run_id=outcome.run_id,
@@ -567,17 +613,22 @@ class WorkflowWorkerPool:
                 failure_kind=outcome.failure_kind,
                 failure_id=outcome.failure_id,
             )
-        status = "awaiting_approval" if outcome.recovery_action == "approval" else outcome.status
-        return self.queue.finish(
-            task_id=record.id,
-            worker_id=worker_id,
-            status=status,
-            run_id=outcome.run_id,
-            error=outcome.error,
-            requires_human=outcome.requires_human,
-            exception_reason=outcome.exception_reason,
-            terminal_failure=outcome.recovery_action == "fail",
-        )
+        else:
+            status = "awaiting_approval" if outcome.recovery_action == "approval" else outcome.status
+            finished = self.queue.finish(
+                task_id=record.id,
+                worker_id=worker_id,
+                status=status,
+                run_id=outcome.run_id,
+                error=outcome.error,
+                requires_human=outcome.requires_human,
+                exception_reason=outcome.exception_reason,
+                terminal_failure=outcome.recovery_action == "fail",
+            )
+        parent_run_id = str(record.payload.get("parent_run_id", ""))
+        if parent_run_id:
+            reconcile_waiting_parent(queue=self.queue, parent_run_id=parent_run_id)
+        return finished
 
     def process_one(self, worker_number: int) -> TaskRecord | None:
         worker_id = f"{self.worker_prefix}-{worker_number}"
@@ -615,7 +666,7 @@ class WorkflowWorkerPool:
                         outcome = self._invoke_handler(record, worker_id)
                         span.set_attribute("task.outcome", outcome.status)
                         span.set_attribute("task.requires_human", outcome.requires_human)
-                        if outcome.status not in {"completed", "blocked", "awaiting_approval"}:
+                        if outcome.status not in {"completed", "blocked", "awaiting_approval", "waiting_children"}:
                             span.set_status(Status(StatusCode.ERROR))
                 except Exception:
                     pass
@@ -623,7 +674,7 @@ class WorkflowWorkerPool:
                 outcome = self._invoke_handler(record, worker_id)
             if telemetry is not None:
                 try:
-                    if outcome.status not in {"completed", "blocked", "awaiting_approval"}:
+                    if outcome.status not in {"completed", "blocked", "awaiting_approval", "waiting_children"}:
                         telemetry.failure_counter.add(1, {"operation": "worker.task", "outcome": outcome.status})
                     telemetry.task_counter.add(1, {"outcome": outcome.status})
                     telemetry.duration_histogram.record(max(0, time.monotonic() - started), {"operation": "worker.task"})
@@ -687,6 +738,8 @@ class WorkflowWorkerPool:
             safe_telemetry_shutdown(telemetry)
 
     def run_wave(self) -> list[TaskRecord]:
+        if self.follow_dynamic_tasks:
+            return self.run_dynamic_wave()
         with ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="agent-worker") as executor:
             futures: dict[Future[TaskRecord | None], int] = {
                 executor.submit(self.process_one, number): number for number in range(1, self.workers + 1)
@@ -702,6 +755,45 @@ class WorkflowWorkerPool:
                 if record is not None:
                     records.append(record)
         return records
+
+    def run_dynamic_slot(self, worker_number: int) -> list[TaskRecord]:
+        """Keep an idle slot available while another task may fan out children."""
+
+        records: list[TaskRecord] = []
+        while not (self.shutdown_requested and self.shutdown_requested()):
+            record = self.process_one(worker_number)
+            if record is not None:
+                records.append(record)
+                continue
+            tasks = self.queue.list()
+            has_live_work = any(
+                item.status
+                in {
+                    "queued", "retry_wait", "repairing", "resuming",
+                    "claimed", "leased", "running",
+                }
+                for item in tasks
+            )
+            if not has_live_work:
+                return records
+            safe_worker_heartbeat(self.queue, f"{self.worker_prefix}-{worker_number}", 0)
+            time.sleep(0.25)
+        return records
+
+    def run_dynamic_wave(self) -> list[TaskRecord]:
+        with ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="agent-worker") as executor:
+            futures = {
+                executor.submit(self.run_dynamic_slot, number): number
+                for number in range(1, self.workers + 1)
+            }
+            records: list[TaskRecord] = []
+            for future in as_completed(futures):
+                worker_number = futures[future]
+                try:
+                    records.extend(future.result())
+                except Exception as exc:
+                    self.record_pool_failure(worker_number, exc)
+            return records
 
     def drain(self) -> list[TaskRecord]:
         processed: list[TaskRecord] = []
@@ -735,7 +827,7 @@ def main() -> int:
     finally:
         pool.close()
     print(json.dumps([record.__dict__ for record in records], indent=2, ensure_ascii=False))
-    return 0 if all(record.status in {"completed", "blocked"} for record in records) else 1
+    return 0 if all(record.status in {"completed", "blocked", "waiting_children"} for record in records) else 1
 
 
 if __name__ == "__main__":

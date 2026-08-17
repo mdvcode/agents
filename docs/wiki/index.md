@@ -27,6 +27,7 @@ Unlike `artifacts/`, this directory is not cleared between tasks. Agents update 
 - `decisions/2026-08-06-ordinary-user-install-update.md`: downloaded-folder installation, safe product-level updates, and worker refresh without pipx knowledge.
 - `decisions/2026-08-15-python-codex-sdk-runtime.md`: official Python SDK over ChatGPT subscription, killable persistent execution, run-bound threads, fresh task branches, and worker build fingerprints.
 - `decisions/2026-08-17-deterministic-model-and-workflow-policy.md`: Sol/Terra/Luna execution profiles, changed-file/risk-driven role activation, deterministic gates, and semantic missing-requirement deduplication.
+- `decisions/2026-08-17-batch-and-child-orchestration.md`: batch intake, repository limits, shared worktree caches, branch overlap analysis, and bounded parent/child task joins.
 - `contradictions.md`: claims or practices that need reconciliation.
 
 ## Update Rules

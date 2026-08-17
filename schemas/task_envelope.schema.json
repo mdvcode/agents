@@ -3,19 +3,28 @@
     "event_id", "source", "event_type", "task_key", "task_id", "goal",
     "project", "repository", "branch", "base_branch", "workspace_mode", "checkout_path", "task_branch",
     "base_sha", "branch_owner_run_id", "mode", "runtime_provider", "run_id", "priority",
-    "max_retries", "external_id", "received_at", "metadata"
+    "max_retries", "repository_max_parallel_tasks", "batch_id", "batch_index",
+    "root_run_id", "parent_run_id", "relation", "dependency_mode", "spawn_reason",
+    "allowed_paths", "allowed_child_repositories", "graph_depth", "child_budget", "spawn_fingerprint",
+    "external_id", "received_at", "metadata"
   ],
   "types": {
     "event_id": "str", "source": "str", "event_type": "str", "task_key": "str",
     "task_id": "str", "goal": "str", "project": "str", "repository": "str",
     "branch": "str", "base_branch": "str", "workspace_mode": "str", "checkout_path": "str",
     "task_branch": "str", "base_sha": "str", "branch_owner_run_id": "str", "mode": "str", "runtime_provider": "str", "run_id": "str", "priority": "int",
-    "max_retries": "int", "external_id": "str", "received_at": "str", "metadata": "dict"
+    "max_retries": "int", "repository_max_parallel_tasks": "int", "batch_id": "str", "batch_index": "int",
+    "root_run_id": "str", "parent_run_id": "str", "relation": "str", "dependency_mode": "str",
+    "spawn_reason": "str", "allowed_paths": "list", "allowed_child_repositories": "list",
+    "graph_depth": "int", "child_budget": "dict", "spawn_fingerprint": "str",
+    "external_id": "str", "received_at": "str", "metadata": "dict"
   },
   "enums": {
     "source": ["cli", "github_issue", "webhook", "api", "ci"],
     "workspace_mode": ["checkout", "worktree"],
     "mode": ["auto", "fast", "full", "goal"],
-    "runtime_provider": ["codex-sdk", "codex-cli"]
+    "runtime_provider": ["codex-sdk", "codex-cli"],
+    "relation": ["root", "repair", "investigation", "test", "implementation"],
+    "dependency_mode": ["none", "blocking", "non_blocking"]
   }
 }

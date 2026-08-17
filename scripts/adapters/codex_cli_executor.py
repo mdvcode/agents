@@ -302,6 +302,35 @@ def standard_role_result_schema(output_contract: dict[str, Any]) -> dict[str, An
                 "required": ["id", "requirement", "options", "allow_custom"],
                 "additionalProperties": False,
             },
+            "child_tasks": {
+                "type": "array",
+                "maxItems": 3,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": {"type": "string"},
+                        "goal": {"type": "string"},
+                        "repository": {"type": "string"},
+                        "relation": {
+                            "type": "string",
+                            "enum": ["repair", "investigation", "test", "implementation"],
+                        },
+                        "dependency_mode": {
+                            "type": "string",
+                            "enum": ["blocking", "non_blocking"],
+                        },
+                        "spawn_reason": {"type": "string"},
+                        "allowed_paths": {"type": "array", "items": {"type": "string"}},
+                        "max_tokens": {"type": "integer"},
+                        "max_duration_seconds": {"type": "integer"},
+                    },
+                    "required": [
+                        "task_id", "goal", "repository", "relation", "dependency_mode",
+                        "spawn_reason", "allowed_paths", "max_tokens", "max_duration_seconds"
+                    ],
+                    "additionalProperties": False,
+                },
+            },
         },
         "required": [
             "status",

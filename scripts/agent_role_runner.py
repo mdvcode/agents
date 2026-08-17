@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -45,6 +46,12 @@ from run_state import (
     write_metrics,
 )
 from tool_preflight import role_tool_preflight
+from task_graph import (
+    TaskGraphError,
+    join_parent_children,
+    spawn_children,
+)
+from task_queue import DEFAULT_DB, TaskQueue
 from validate_artifacts import validate_required as validate_artifact_required
 from workflow_router import changed_areas as workflow_changed_areas
 from workflow_router import changed_files as workflow_changed_files
@@ -88,6 +95,42 @@ ROLE_CHAIN = [
 ]
 INTERNAL_ROLES = {"issue-intake", "context-compiler", "publication-prepare"}
 ADAPTER_ROLES = set(ROLE_CHAIN) - INTERNAL_ROLES - {"publication"}
+
+
+def task_graph_metadata() -> dict[str, Any]:
+    raw = os.environ.get("AGENT_TASK_GRAPH_METADATA", "")
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def child_result_context(state: dict[str, Any]) -> str:
+    children = state.get("children", [])
+    if not isinstance(children, list) or not children:
+        return ""
+    lines = ["# BACKGROUND CHILD RESULTS"]
+    for child in children[:3]:
+        if not isinstance(child, dict):
+            continue
+        lines.append(
+            "- "
+            + "; ".join(
+                (
+                    f"run={child.get('run_id', '')}",
+                    f"status={child.get('status', '')}",
+                    f"join={child.get('join_status', '')}",
+                    f"detail={str(child.get('join_detail', ''))[:500]}",
+                )
+            )
+        )
+    problems = state.get("child_join_problems", [])
+    if isinstance(problems, list):
+        lines.extend(f"- action required: {str(item)[:1000]}" for item in problems[:3])
+    return "\n".join(lines)
 PROMPT_FILES = {
     "context-compiler": "context-compiler.md",
     "planner": "planner.md",
@@ -1782,6 +1825,7 @@ def run_roles(
             "execution_status": "blocked",
             "blockers": ["mode must be auto, fast, full, or goal"],
         }
+    graph_metadata = task_graph_metadata()
     run_id = run_id or make_run_id(workflow)
     existing_workflow = RUNS / run_id / "workflow.json"
     existing: dict[str, Any] = {}
@@ -2009,9 +2053,34 @@ def run_roles(
             "base_branch_sha_after": "",
             "budgets": workflow_budgets(workflow, effective_mode),
             "loops": initial_loops(),
+            "root_run_id": str(graph_metadata.get("root_run_id") or run_id),
+            "parent_run_id": str(graph_metadata.get("parent_run_id", "")),
+            "relation": str(graph_metadata.get("relation", "root")),
+            "dependency_mode": str(graph_metadata.get("dependency_mode", "none")),
+            "spawn_reason": str(graph_metadata.get("spawn_reason", "")),
+            "allowed_paths": list(graph_metadata.get("allowed_paths", [])),
+            "allowed_child_repositories": list(
+                graph_metadata.get("allowed_child_repositories", [str(repository)])
+            ),
+            "graph_depth": int(graph_metadata.get("graph_depth", 0) or 0),
+            "child_budget": dict(graph_metadata.get("child_budget", {})),
+            "spawn_fingerprint": str(graph_metadata.get("spawn_fingerprint", "")),
+            "repository_max_parallel_tasks": int(
+                graph_metadata.get("repository_max_parallel_tasks", 0) or 0
+            ),
+            "batch_id": str(graph_metadata.get("batch_id", "")),
+            "batch_index": int(graph_metadata.get("batch_index", 0) or 0),
         }
         role = ROLE_CHAIN[0]
         append_trace(layout, {"event": "workflow_started", "workflow": workflow, "task_id": task_id})
+    child_budget = state.get("child_budget", {})
+    if state.get("parent_run_id") and isinstance(child_budget, dict):
+        budgets = state.get("budgets", {})
+        if isinstance(budgets, dict):
+            for field in ("max_tokens", "max_duration_seconds"):
+                value = child_budget.get(field)
+                if isinstance(value, int) and value > 0:
+                    budgets[field] = min(int(budgets.get(field, value) or value), value)
     write_json(layout.workflow, state)
     write_metrics(layout, state)
     if checkpoint_problem:
@@ -2122,6 +2191,12 @@ def run_roles(
         role_started = time.monotonic()
         state["current_role"] = role
         state["resume_role"] = role
+        background = child_result_context(state)
+        role_goal = (
+            f"{goal}\n\n{background}"
+            if background and role in {"implementation-agent", "ci-repair-agent"}
+            else goal
+        )
         write_json(layout.workflow, state)
         role_checkpoint(
             run_dir=run_dir,
@@ -2230,7 +2305,7 @@ def run_roles(
                 artifacts_dir=run_artifacts,
             )
         else:
-            capability_error = missing_image_capability(goal, run_artifacts) if role == "implementation-agent" else ""
+            capability_error = missing_image_capability(role_goal, run_artifacts) if role == "implementation-agent" else ""
             if capability_error:
                 result = awaiting_approval_result("Required implementation capability is unavailable.", [capability_error])
             else:
@@ -2238,7 +2313,7 @@ def run_roles(
                 manifest_path = create_context_manifest(
                     run_id=run_id,
                     role=role,
-                    goal=goal,
+                    goal=role_goal,
                     repository=worktree,
                     artifacts_dir=run_artifacts,
                     context_dir=context_dir,
@@ -2275,7 +2350,7 @@ def run_roles(
                         )
                         execution_settings = select_execution_profile(
                             role=role,
-                            goal=goal,
+                            goal=role_goal,
                             risk_class=risk_class,
                             changed_files=workflow_changed_files(state, run_artifacts),
                             changed_lines=changed_line_count(worktree),
@@ -2296,7 +2371,7 @@ def run_roles(
                         request = build_role_request(
                             run_id=run_id,
                             role=role,
-                            goal=goal,
+                            goal=role_goal,
                             repository=worktree,
                             artifacts_dir=run_artifacts,
                             context_manifest=manifest_path,
@@ -2581,6 +2656,80 @@ def run_roles(
                 layout, state, role=role, stage="routing", kind="internal_error",
                 error_type="InvalidRouteContract", message="; ".join(route_errors),
             )
+        spawned_children: list[dict[str, Any]] = []
+        child_proposals = result.get("child_tasks")
+        if result.get("status") == "completed" and child_proposals:
+            try:
+                spawned_children = spawn_children(
+                    queue=TaskQueue(DEFAULT_DB),
+                    state=state,
+                    role=role,
+                    proposals=child_proposals,
+                )
+            except (TaskGraphError, OSError, ValueError) as exc:
+                state["execution_status"] = "blocked"
+                set_attention(
+                    state,
+                    summary="A proposed background task violated the task-graph contract.",
+                    details=[str(exc)],
+                    role=role,
+                    action="fix_then_retry",
+                )
+                persist_control_failure(
+                    layout,
+                    state,
+                    role=role,
+                    stage="child_spawn",
+                    kind="policy_block",
+                    error_type="InvalidChildTaskProposal",
+                    message=str(exc),
+                )
+                write_json(layout.workflow, state)
+                write_metrics(layout, state)
+                return state
+        if state.get("parent_run_id") and route.get("next_role") in {
+            "publication-prepare",
+            "publication",
+        }:
+            route = {
+                "next_role": "",
+                "reason": "Child verification completed; only the root run may publish.",
+                "stop": True,
+                "publication_allowed": False,
+                "loop": None,
+                "warnings": [],
+            }
+        if route.get("next_role") == "publication-prepare" and state.get("children"):
+            state["wait_for_children"] = [
+                str(child.get("run_id", ""))
+                for child in state["children"]
+                if isinstance(child, dict) and child.get("join_status") != "joined"
+            ]
+            ready, join_problems = join_parent_children(
+                queue=TaskQueue(DEFAULT_DB),
+                state=state,
+                runs_dir=RUNS,
+            )
+            if join_problems:
+                route = {
+                    "next_role": "implementation-agent",
+                    "reason": "Background child results require parent integration repair.",
+                    "stop": False,
+                    "publication_allowed": False,
+                    "loop": None,
+                    "warnings": join_problems,
+                }
+            elif not ready:
+                state["resume_after_children"] = "publication-prepare"
+                state["execution_status"] = "waiting_children"
+                state["last_route"] = route
+                write_json(layout.workflow, state)
+                write_metrics(layout, state)
+                append_trace(
+                    layout,
+                    {"event": "workflow_waiting_for_children", "children": state["wait_for_children"]},
+                )
+                return state
         state["last_route"] = route
         write_json(layout.workflow, state)
         write_metrics(layout, state)
@@ -2599,6 +2748,22 @@ def run_roles(
                 "warnings": route.get("warnings", []),
             },
         )
+        blocking_children = [
+            str(child.get("run_id", ""))
+            for child in spawned_children
+            if child.get("dependency_mode") == "blocking"
+        ]
+        if blocking_children and not route["stop"]:
+            state["wait_for_children"] = blocking_children
+            state["resume_after_children"] = str(route["next_role"])
+            state["execution_status"] = "waiting_children"
+            write_json(layout.workflow, state)
+            write_metrics(layout, state)
+            append_trace(
+                layout,
+                {"event": "workflow_waiting_for_children", "children": blocking_children},
+            )
+            return state
         if route["stop"]:
             if route["next_role"] == "approval-gate":
                 state["execution_status"] = "awaiting_approval"
@@ -2766,7 +2931,7 @@ def main() -> int:
         runtime_command=args.runtime_command,
     )
     print(json.dumps(state, indent=2, ensure_ascii=False))
-    return 0 if state["execution_status"] == "completed" else 1
+    return 0 if state["execution_status"] in {"completed", "waiting_children"} else 1
 
 
 if __name__ == "__main__":

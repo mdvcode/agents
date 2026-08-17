@@ -19,6 +19,7 @@
     "blockers": "list",
     "warnings": "list",
     "tokens_used": "int",
-    "duration_ms": "int"
+    "duration_ms": "int",
+    "child_tasks": "list"
   }
 }
