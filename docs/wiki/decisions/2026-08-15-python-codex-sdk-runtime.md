@@ -6,7 +6,7 @@ Date: 2026-08-15
 
 The official `openai-codex` Python SDK is the primary production implementation behind the existing provider-neutral `Runtime` boundary. It connects to a local Codex app-server and reuses existing Codex authentication.
 
-Production configuration is intentionally fixed:
+The initial production configuration was intentionally fixed:
 
 - transport: `local_subscription`;
 - required account type: `chatgpt`;
@@ -15,6 +15,10 @@ Production configuration is intentionally fixed:
 - reasoning effort: `high`;
 - service tier: `fast`;
 - Model Router: disabled.
+
+The fixed model portion of this decision is superseded by
+[`2026-08-17-deterministic-model-and-workflow-policy.md`](2026-08-17-deterministic-model-and-workflow-policy.md).
+The provider, authentication, persistent app-server, and run-bound thread decisions remain active.
 
 An API-key account is rejected before a role turn. The Harness never reads, writes, copies, or logs credential material. The `codex-cli` adapter remains an explicit compatibility fallback, not a second model router.
 
@@ -37,7 +41,7 @@ New task and workflow state uses one Git identity contract: `workspace_mode` (`c
 ## Consequences
 
 - Subscription and API billing modes cannot be confused silently.
-- Sol/high/Fast prioritizes capability and latency; Fast consumes subscription credits faster than standard service.
+- Model selection is now governed by the deterministic execution-profile decision; Fast remains the configured service tier.
 - SDK structured output and token usage replace CLI JSONL parsing on the primary path.
 - Repeated role turns avoid app-server startup and preserve task context instead of repeatedly asking for it.
 - An alive worker PID without a healthy SDK session or recent SDK/tool progress is not considered sufficient liveness evidence.

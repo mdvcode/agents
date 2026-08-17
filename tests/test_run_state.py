@@ -78,6 +78,12 @@ def test_metrics_persist_role_token_usage(tmp_path: Path) -> None:
             "roles": [
                 {
                     "role": "planner",
+                    "execution_profile": {
+                        "execution_profile": "balanced",
+                        "model": "gpt-5.6-terra",
+                        "reasoning_effort": "medium",
+                        "escalation_level": 0,
+                    },
                     "result": {
                         "status": "completed",
                         "tokens_used": 12,
@@ -92,6 +98,8 @@ def test_metrics_persist_role_token_usage(tmp_path: Path) -> None:
     metrics = json.loads(layout.metrics.read_text(encoding="utf-8"))
     assert metrics["tokens_used"] == 12
     assert metrics["roles"][0]["input_tokens"] == 8
+    assert metrics["roles"][0]["execution_profile"] == "balanced"
+    assert metrics["roles"][0]["model"] == "gpt-5.6-terra"
 
 
 def test_completed_input_is_deduplicated(tmp_path: Path) -> None:

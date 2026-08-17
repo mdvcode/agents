@@ -15,8 +15,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-import yaml
-
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 for candidate in (SCRIPT_DIR, SCRIPT_DIR.parent, SCRIPT_DIR.parents[1]):
@@ -42,6 +40,11 @@ from codex_cli_executor import (  # noqa: E402
     write_raw_stream,
 )
 from runtime_contracts import blocked_result  # noqa: E402
+from ai_harness.model_policy import (  # noqa: E402
+    ModelPolicyError,
+    load_execution_profiles,
+    validate_request_profile,
+)
 
 
 ROOT = SCRIPT_DIR.parents[1]
@@ -212,32 +215,20 @@ class ProgressWriter:
             "token_budget": int(self.request.get("token_budget", 0) or 0),
             "stop_reason": stop_reason,
             "thread_id": self.thread_id,
+            "execution_profile": str(
+                self.request.get("execution_profile", "balanced")
+            ),
+            "model": str(self.request.get("model", "")),
+            "reasoning_effort": str(
+                self.request.get("reasoning_effort", "")
+            ),
         }
         atomic_write_json(self.path, payload)
         return payload
 
 
-def sdk_settings() -> dict[str, str]:
-    try:
-        document = yaml.safe_load(
-            (ROOT / ".agent-runtime.yaml").read_text(encoding="utf-8")
-        )
-    except (OSError, yaml.YAMLError):
-        document = {}
-    runtime = document.get("runtime", {}) if isinstance(document, dict) else {}
-    if not isinstance(runtime, dict):
-        runtime = {}
-    return {
-        "model": os.environ.get(
-            "AGENT_CODEX_MODEL", str(runtime.get("model", "gpt-5.6-sol"))
-        ),
-        "reasoning_effort": os.environ.get(
-            "AGENT_CODEX_REASONING_EFFORT", str(runtime.get("reasoning_effort", "high"))
-        ),
-        "service_tier": os.environ.get(
-            "AGENT_CODEX_SERVICE_TIER", str(runtime.get("service_tier", "fast"))
-        ),
-    }
+def sdk_settings(request: dict[str, Any]) -> dict[str, str]:
+    return validate_request_profile(request)
 
 
 def sdk_sandbox(filesystem_access: str) -> Any:
@@ -361,7 +352,16 @@ def run_sdk(
     repository = Path(str(request["repository"])).resolve()
     filesystem_access = str(request.get("filesystem_access", "read_only"))
     schema = standard_role_result_schema(output_contract)
-    settings = sdk_settings()
+    try:
+        settings = sdk_settings(request)
+    except ModelPolicyError as exc:
+        return failure_result(
+            "Codex SDK execution profile is invalid.",
+            [str(exc)],
+            kind="policy_block",
+            error_type="InvalidExecutionProfile",
+        )
+    request = {**request, **settings}
     environment = {
         "AGENT_ROLE": str(request["role"]),
         "AGENT_ROLE_ALLOWED_TOOLS": json.dumps(request.get("allowed_tools", [])),
@@ -480,9 +480,20 @@ def run_sdk(
         result = parse_role_result(response, output_contract, duration_ms, "Codex SDK")
         errors = validate_candidate(request, result)
         original_output = response
+        repair_thread = None
         for repair_attempt in range(1, MAX_OUTPUT_REPAIR_ATTEMPTS + 1):
             if not errors:
                 break
+            economy_settings = load_execution_profiles()["economy"]
+            if repair_thread is None:
+                repair_thread = codex.thread_resume(
+                    thread_id,
+                    approval_mode=ApprovalMode.deny_all,
+                    cwd=str(repository),
+                    model=economy_settings["model"],
+                    sandbox=sdk_sandbox("read_only"),
+                    service_tier=economy_settings["service_tier"],
+                )
             repair_prompt = "\n".join(
                 [
                     "Repair this structured output without doing task work.",
@@ -495,9 +506,9 @@ def run_sdk(
                 ]
             )
             repaired_turn = run_turn_streaming(
-                sdk_thread,
+                repair_thread,
                 repair_prompt,
-                settings=settings,
+                settings=economy_settings,
                 schema=schema,
                 sandbox=sdk_sandbox("read_only"),
                 progress=progress,
@@ -567,6 +578,13 @@ def run_sdk(
             error_type="ReadOnlyViolation",
         )
     result["thread_id"] = thread_id
+    result["execution_profile"] = str(
+        request.get("execution_profile", settings.get("execution_profile", "balanced"))
+    )
+    result["model"] = settings["model"]
+    result["reasoning_effort"] = settings["reasoning_effort"]
+    result["profile_reason"] = str(request.get("profile_reason", ""))
+    result["escalation_level"] = int(request.get("escalation_level", 0) or 0)
     for name, value in usage.items():
         result[name] = value
     billable_tokens = (

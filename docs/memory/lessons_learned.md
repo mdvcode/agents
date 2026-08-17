@@ -128,9 +128,9 @@
   Agent: Codex
   Failure: A paused role could ask the same question again after the user had answered it, creating an unlimited answer/resume cycle with no implementation progress; technical failures could also be presented as answerable questions.
   Root cause: Retry suppression stopped one active workflow process but question identity was not preserved across the answer/resume boundary, and answerability was inferred from broad non-completed statuses.
-  Prevention rule: Fingerprint every answerable question across its full run lifecycle, stop a repeated answered fingerprint as an explicit technical blocker, and accept informational answers only for an explicit `awaiting_approval` role question.
+  Prevention rule: Fingerprint every answerable question, normalize it to a semantic missing-requirement identity, store requested and closed requirements across the full run lifecycle, allow only one user-visible request per requirement, stop exact or semantic repeats as an explicit technical blocker, and accept informational answers only for an explicit `awaiting_approval` role question.
   Example bad pattern: classify `blocked`, `failed`, and `awaiting_approval` alike, then reopen a new answer gate whenever the resumed role repeats its summary.
-  Example good pattern: carry a stable question id and structured choices, record the fingerprint with the answer, resume the same checkpoint once, and surface any repeated fingerprint as `repeated_question` without creating another approval request.
+  Example good pattern: carry a stable question id, semantic requirement, and structured choices; record the closed requirement with the answer; resume the same checkpoint and SDK thread once; and surface any exact or reworded repeat as `repeated_requirement` without creating another approval request.
   Scope: agent control-plane workflow, runtime role contract, CLI, and dashboard UX
 
 - Date: 2026-08-11

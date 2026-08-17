@@ -41,7 +41,7 @@ Harness role request -> provider-neutral `Runtime.execute(...)` -> bounded Pytho
 
 The worker heartbeat checks the sidecar lifecycle. SDK notifications and tool activity update `progress.json`; process idle detection watches that file and `sdk-events.jsonl`, so a quiet stdout does not look stuck while the SDK is progressing. Sidecar age/request budgets trigger recycle, and a replacement process resumes the persisted thread id.
 
-The official `codex-sdk` is the production provider, `codex-cli` is a compatibility fallback, and Model Router is disabled. Model, reasoning effort, and service tier are fixed in runtime configuration rather than dynamically routed.
+The official `codex-sdk` is the production provider, `codex-cli` is a compatibility fallback, and Model Router is disabled. Runtime configuration defines exact Sol/high, Terra/medium, and Luna/low profiles with the Fast service tier; local deterministic policy selects one profile from role, risk, change impact, repair iteration, and actual failure state.
 
 ## Deterministic Gate Flow
 

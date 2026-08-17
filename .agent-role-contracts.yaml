@@ -68,6 +68,8 @@ roles:
   quality-runner:
     prompt_path: .agents/prompts/quality-runner.md
     output_contract: schemas/roles/quality-runner.schema.json
+    execution_kind: harness_stage
+    llm_invocation: false
     expected_artifacts:
       - quality.json
     artifact_schemas:
@@ -75,6 +77,8 @@ roles:
   security-agent:
     prompt_path: .agents/prompts/security-agent.md
     output_contract: schemas/roles/security-agent.schema.json
+    execution_kind: harness_stage
+    llm_invocation: false
     expected_artifacts:
       - security.json
     artifact_schemas:
@@ -117,6 +121,8 @@ roles:
   orchestrator:
     prompt_path: .agents/prompts/orchestrator.md
     output_contract: schemas/roles/orchestrator.schema.json
+    execution_kind: harness_stage
+    llm_invocation: false
     expected_artifacts:
       - verdict.json
     artifact_schemas:

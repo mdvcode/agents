@@ -107,6 +107,66 @@ def test_question_options_are_bounded_and_recommended_option_is_first() -> None:
     assert question["options"][0]["recommended"] is True
 
 
+def test_semantically_equivalent_missing_requirement_is_stopped() -> None:
+    state: dict[str, object] = {}
+    first_question = {
+        "id": "database_environment",
+        "requirement": "database environment",
+        "options": [
+            {"label": "Local", "value": "local", "recommended": True},
+            {"label": "Staging", "value": "staging", "recommended": False},
+        ],
+    }
+    second_question = {
+        "id": "db_target",
+        "requirement": "DB environment",
+        "options": [
+            {"label": "Local", "value": "local", "recommended": True},
+            {"label": "Staging", "value": "staging", "recommended": False},
+        ],
+    }
+
+    assert agent_role_runner.set_attention(
+        state,
+        summary="Which database environment should be used?",
+        details=[],
+        role="planner",
+        action="answer",
+        question=first_question,
+        stop_if_previously_answered=True,
+    ) is False
+    assert agent_role_runner.set_attention(
+        state,
+        summary="Select the DB target for this run.",
+        details=[],
+        role="planner",
+        action="answer",
+        question=second_question,
+        stop_if_previously_answered=True,
+    ) is True
+
+    assert state["attention"]["action"] == "fix_then_retry"  # type: ignore[index]
+    assert state["attention"]["repeated_requirement"] is True  # type: ignore[index]
+    assert len(state["missing_requirement_requests"]) == 1  # type: ignore[arg-type]
+
+
+def test_answer_continuation_is_not_classified_as_prior_role_failure() -> None:
+    state = {
+        "roles": [
+            {
+                "role": "planner",
+                "result": {"status": "awaiting_approval"},
+            }
+        ]
+    }
+
+    assert agent_role_runner.prior_role_failed(state, "planner") is False
+    state["roles"].append(
+        {"role": "planner", "result": {"status": "failed", "_failure": {}}}
+    )
+    assert agent_role_runner.prior_role_failed(state, "planner") is True
+
+
 def test_technical_failures_are_not_classified_as_answerable_questions() -> None:
     assert agent_role_runner.role_attention_action({"status": "blocked"}) == "approve"
     assert agent_role_runner.role_attention_action({"status": "failed"}) == "approve"
@@ -114,6 +174,9 @@ def test_technical_failures_are_not_classified_as_answerable_questions() -> None
 
 
 def fake_adapter_script(path: Path) -> str:
+    (path.parent / "Makefile").write_text(
+        "check:\n\t@true\nsecurity:\n\t@true\n", encoding="utf-8"
+    )
     path.write_text(
         """
 from pathlib import Path
@@ -327,7 +390,7 @@ def test_missing_distinct_image_capability_fails_before_runtime(tmp_path: Path) 
     assert "no image-generation capability" in reason
 
 
-def test_fast_workflow_uses_only_implementation_and_reviewer_models(
+def test_fast_workflow_uses_only_implementation_model_for_non_code_change(
     tmp_path: Path,
     monkeypatch: object,
 ) -> None:
@@ -345,7 +408,7 @@ def test_fast_workflow_uses_only_implementation_and_reviewer_models(
     )
 
     model_roles = [item["role"] for item in state["roles"] if item["llm_invoked"]]
-    assert model_roles == ["implementation-agent", "reviewer"]
+    assert model_roles == ["implementation-agent"]
     assert not {"planner", "risk-classifier", "test-generator"} & {
         item["role"] for item in state["roles"]
     }
@@ -488,13 +551,12 @@ def test_agent_role_runner_invokes_adapter_for_core_roles(tmp_path: Path, monkey
     )
 
     assert state["execution_status"] == "awaiting_approval"
-    assert [item["role"] for item in state["roles"]][:10] == [
+    assert [item["role"] for item in state["roles"]][:9] == [
         "issue-intake",
         "context-compiler",
         "planner",
         "risk-classifier",
         "implementation-agent",
-        "test-generator",
         "quality-runner",
         "security-agent",
         "reviewer",

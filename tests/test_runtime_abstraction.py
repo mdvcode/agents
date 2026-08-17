@@ -81,9 +81,12 @@ def test_registry_enforces_step2_transport_and_router_boundary(
             "transport": "local_subscription",
             "api_required": False,
             "model_router": False,
-            "model": "gpt-5.6-sol",
-            "reasoning_effort": "high",
-            "service_tier": "fast",
+            "default_execution_profile": "balanced",
+            "execution_profiles": {
+                "complex": {"model": "gpt-5.6-sol", "reasoning_effort": "high", "service_tier": "fast"},
+                "balanced": {"model": "gpt-5.6-terra", "reasoning_effort": "medium", "service_tier": "fast"},
+                "economy": {"model": "gpt-5.6-luna", "reasoning_effort": "low", "service_tier": "fast"},
+            },
             "require_account_type": "chatgpt",
         },
     }

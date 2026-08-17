@@ -535,7 +535,10 @@ def test_publication_blocks_when_a_required_gate_is_missing(tmp_path: Path) -> N
     )
     write_json(
         run_dir / "workflow.json",
-        {"roles": [{"role": "planner", "result": {"status": "completed"}}]},
+        {
+            "changed_files": ["src/app.py"],
+            "roles": [{"role": "planner", "result": {"status": "completed"}}],
+        },
     )
     (publisher.artifacts / "plan.md").write_text("# Plan\n", encoding="utf-8")
     write_json(publisher.artifacts / "project_profile.json", {"project_profile": "agent_workspace"})

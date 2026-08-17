@@ -133,6 +133,8 @@ def test_role_prompt_includes_interaction_policy_and_recorded_user_answer(tmp_pa
     assert "question" in schema["properties"]
     assert "question" in schema["required"]
     assert schema["properties"]["question"]["type"] == ["object", "null"]
+    assert schema["properties"]["question"]["properties"]["requirement"] == {"type": "string"}
+    assert "requirement" in schema["properties"]["question"]["required"]
     assert schema["properties"]["question"]["properties"]["options"]["type"] == "array"
     assert schema["properties"]["question"]["properties"]["options"]["minItems"] == 2
     assert schema["properties"]["question"]["properties"]["options"]["maxItems"] == 3

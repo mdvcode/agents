@@ -28,6 +28,12 @@
     "expected_artifacts": "list",
     "allowed_tools": "list",
     "filesystem_access": "str",
+    "execution_profile": "str",
+    "model": "str",
+    "reasoning_effort": "str",
+    "service_tier": "str",
+    "profile_reason": "str",
+    "escalation_level": "int",
     "token_budget": "int",
     "timeout_seconds": "int"
   }

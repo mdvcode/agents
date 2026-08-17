@@ -181,6 +181,9 @@ def write_metrics(layout: RunLayout, state: dict[str, Any]) -> None:
         result = checkpoint.get("result", {})
         if not isinstance(result, dict):
             result = {}
+        profile = checkpoint.get("execution_profile", {})
+        if not isinstance(profile, dict):
+            profile = {}
         roles.append(
             {
                 "role": str(checkpoint.get("role", "")),
@@ -191,6 +194,16 @@ def write_metrics(layout: RunLayout, state: dict[str, Any]) -> None:
                 "cached_input_tokens": int(result.get("cached_input_tokens", 0) or 0),
                 "output_tokens": int(result.get("output_tokens", 0) or 0),
                 "reasoning_output_tokens": int(result.get("reasoning_output_tokens", 0) or 0),
+                "execution_profile": str(
+                    result.get("execution_profile", profile.get("execution_profile", ""))
+                ),
+                "model": str(result.get("model", profile.get("model", ""))),
+                "reasoning_effort": str(
+                    result.get("reasoning_effort", profile.get("reasoning_effort", ""))
+                ),
+                "escalation_level": int(
+                    result.get("escalation_level", profile.get("escalation_level", 0)) or 0
+                ),
             }
         )
     write_json(

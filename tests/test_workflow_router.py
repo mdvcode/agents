@@ -249,6 +249,24 @@ def test_fast_large_diff_escalates_to_full_without_reimplementing(tmp_path: Path
     assert risk_route["next_role"] == "test-generator"
 
 
+def test_fast_non_code_escalation_skips_test_generator(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    artifact(
+        artifacts_dir / "implementation.json",
+        {"changed_files": ["docs/guide.md"], "risk_changed": True},
+    )
+    state = completed_state(effective_mode="fast", roles=[], completed_roles=[])
+
+    result = route(tmp_path, state, "implementation-agent")
+
+    assert result["next_role"] == "planner"
+    state["roles"] = [
+        {"role": "implementation-agent", "result": {"status": "completed"}}
+    ]
+    risk_route = route(tmp_path, state, "risk-classifier")
+    assert risk_route["next_role"] == "quality-runner"
+
+
 def test_environmental_verifier_failure_does_not_repeat_implementation(tmp_path: Path) -> None:
     artifacts_dir = setup_artifacts(tmp_path)
     artifact(
@@ -443,10 +461,18 @@ def test_non_ui_changes_skip_frontend_qa(tmp_path: Path) -> None:
     assert result["next_role"] == "reviewer"
 
 
-def test_code_changes_require_architecture_and_semantic_checks(tmp_path: Path) -> None:
+def test_small_low_risk_code_change_skips_optional_deep_checks(tmp_path: Path) -> None:
     artifacts_dir = setup_artifacts(tmp_path)
     artifact(artifacts_dir / "risk.json", {"risk_class": "low", "changed_files": ["src/service.py"]})
     state = completed_state(changed_files=["src/service.py"])
+    result = route(tmp_path, state, "security-agent")
+    assert result["next_role"] == "reviewer"
+
+
+def test_structural_medium_risk_code_change_enables_deep_checks(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    artifact(artifacts_dir / "risk.json", {"risk_class": "medium", "changed_files": ["src/schema.py"]})
+    state = completed_state(changed_files=["src/schema.py"])
     architecture = route(tmp_path, state, "security-agent")
     assert architecture["next_role"] == "architecture-consistency-agent"
     semantic = route(tmp_path, state, "architecture-consistency-agent")
@@ -941,7 +967,7 @@ def test_resumed_role_ignores_historical_approval_and_superseded_blockers(tmp_pa
 
     result = route(tmp_path, state, "implementation-agent")
 
-    assert result["next_role"] == "test-generator"
+    assert result["next_role"] == "quality-runner"
     assert result["stop"] is False
 
 
@@ -974,5 +1000,5 @@ def test_successful_verifier_artifact_supersedes_historical_role_blockers(tmp_pa
 
     result = route(tmp_path, state, "implementation-agent")
 
-    assert result["next_role"] == "test-generator"
+    assert result["next_role"] == "quality-runner"
     assert result["stop"] is False

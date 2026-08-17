@@ -1,5 +1,5 @@
 {
-  "required": ["provider", "executor_command", "transport", "api_required", "model_router"],
+  "required": ["provider", "executor_command", "transport", "api_required", "model_router", "default_execution_profile", "execution_profiles"],
   "enums": {
     "provider": ["codex-sdk", "codex-cli"],
     "transport": ["local_subscription"]
@@ -9,6 +9,8 @@
     "executor_command": "str",
     "transport": "str",
     "api_required": "bool",
-    "model_router": "bool"
+    "model_router": "bool",
+    "default_execution_profile": "str",
+    "execution_profiles": "dict"
   }
 }

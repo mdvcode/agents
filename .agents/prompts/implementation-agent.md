@@ -100,8 +100,9 @@ At completion, return `implementation.json` with:
 
 ## Verification handoff
 Do not claim the task is complete. After implementation, hand off to:
-1. Test Generator Agent, if tests are incomplete
-2. Quality Runner Agent
-3. Security Agent
-4. Reviewer Agent
-5. Orchestrator Agent
+1. Test Generator Agent when code changed and test work is required
+2. deterministic Quality Runner
+3. deterministic Security Agent
+4. optional impact-specific verifiers selected from changed files and risk
+5. Reviewer Agent, model-backed only for code, UI, risk-bearing, or large changes
+6. deterministic Orchestrator Agent

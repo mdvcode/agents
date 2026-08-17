@@ -1,0 +1,190 @@
+"""Deterministic model-profile selection inside one configured runtime provider."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from .paths import harness_home
+
+RUNTIME_CONFIG = harness_home() / ".agent-runtime.yaml"
+PROFILE_NAMES = {"complex", "balanced", "economy"}
+COMPLEX_AREAS = {
+    "architecture",
+    "auth",
+    "billing",
+    "database",
+    "deployment",
+    "migrations",
+    "payments",
+    "permissions",
+    "production",
+    "public_api",
+    "security",
+}
+COMPLEX_HINTS = (
+    "architecture",
+    "authentication",
+    "authorization",
+    "billing",
+    "database schema",
+    "migration",
+    "payment",
+    "permission",
+    "production",
+    "public api",
+    "refactor",
+    "security",
+    "архитектур",
+    "авторизац",
+    "аутентификац",
+    "безопасност",
+    "миграц",
+    "оплат",
+    "продакш",
+    "рефактор",
+)
+MECHANICAL_HINTS = (
+    "classify",
+    "format",
+    "formatting",
+    "lint fix",
+    "rename",
+    "sort imports",
+    "typo",
+    "классифиц",
+    "опечат",
+    "переимен",
+    "форматир",
+)
+ECONOMY_ROLES = {"risk-classifier", "report-agent"}
+INHERENTLY_COMPLEX_ROLES = {
+    "architecture-consistency-agent",
+    "semantic-conflict-agent",
+}
+
+
+class ModelPolicyError(ValueError):
+    """Raised when deterministic execution-profile configuration is invalid."""
+
+
+def load_execution_profiles(path: Path = RUNTIME_CONFIG) -> dict[str, dict[str, str]]:
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise ModelPolicyError(f"cannot load runtime execution profiles: {exc}") from exc
+    runtime = document.get("runtime", {}) if isinstance(document, dict) else {}
+    profiles = runtime.get("execution_profiles", {}) if isinstance(runtime, dict) else {}
+    if not isinstance(profiles, dict) or set(profiles) != PROFILE_NAMES:
+        raise ModelPolicyError(
+            "runtime execution_profiles must define complex, balanced, and economy"
+        )
+    normalized: dict[str, dict[str, str]] = {}
+    for name in sorted(PROFILE_NAMES):
+        value = profiles.get(name)
+        if not isinstance(value, dict):
+            raise ModelPolicyError(f"execution profile {name!r} must be an object")
+        profile = {
+            "model": str(value.get("model", "")),
+            "reasoning_effort": str(value.get("reasoning_effort", "")),
+            "service_tier": str(value.get("service_tier", "")),
+        }
+        if not all(profile.values()):
+            raise ModelPolicyError(f"execution profile {name!r} is incomplete")
+        normalized[name] = profile
+    return normalized
+
+
+def _normalized_areas(changed_areas: set[str] | list[str]) -> set[str]:
+    return {
+        re.sub(r"[^a-z0-9_]+", "_", str(value).casefold()).strip("_")
+        for value in changed_areas
+        if str(value).strip()
+    }
+
+
+def select_execution_profile(
+    *,
+    role: str,
+    goal: str,
+    risk_class: str,
+    changed_files: list[str],
+    changed_lines: int,
+    changed_areas: set[str] | list[str],
+    repair_iteration: int = 0,
+    prior_failure: bool = False,
+    profiles: dict[str, dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """Select an auditable profile without changing provider or discovering models."""
+
+    configured = profiles or load_execution_profiles()
+    normalized_goal = goal.casefold()
+    areas = _normalized_areas(changed_areas)
+    large_change = len(changed_files) > 5 or changed_lines > 200
+    complex_scope = (
+        risk_class == "high"
+        or large_change
+        or bool(areas & COMPLEX_AREAS)
+        or any(hint in normalized_goal for hint in COMPLEX_HINTS)
+    )
+    mechanical = any(hint in normalized_goal for hint in MECHANICAL_HINTS)
+
+    profile_name = "balanced"
+    reason = "ordinary local model-backed work uses the balanced profile"
+    escalation_level = 0
+    if repair_iteration >= 2 or prior_failure:
+        profile_name = "complex"
+        reason = "a prior model-backed attempt failed; escalate once to the complex profile"
+        escalation_level = 1
+    elif role in {"implementation-agent", "ci-repair-agent"} and repair_iteration == 1 and not complex_scope:
+        profile_name = "economy"
+        reason = "the first bounded repair is narrow and uses the economy profile"
+    elif role in {"implementation-agent", "ci-repair-agent"} and complex_scope:
+        profile_name = "complex"
+        reason = "implementation scope is complex, large, sensitive, or high risk"
+    elif role == "implementation-agent" and mechanical and len(changed_files) <= 2:
+        profile_name = "economy"
+        reason = "mechanical local implementation uses the economy profile"
+    elif role == "reviewer" and (risk_class in {"medium", "high"} or large_change):
+        profile_name = "complex"
+        reason = "review is risk-bearing or large and requires the complex profile"
+    elif role in INHERENTLY_COMPLEX_ROLES:
+        profile_name = "complex"
+        reason = "this optional verifier is activated only for complex impact"
+    elif role in ECONOMY_ROLES:
+        profile_name = "economy"
+        reason = "mechanical classification/reporting uses the economy profile"
+
+    selected = configured[profile_name]
+    return {
+        "execution_profile": profile_name,
+        "model": selected["model"],
+        "reasoning_effort": selected["reasoning_effort"],
+        "service_tier": selected["service_tier"],
+        "profile_reason": reason,
+        "escalation_level": escalation_level,
+    }
+
+
+def validate_request_profile(
+    request: dict[str, Any],
+    *,
+    profiles: dict[str, dict[str, str]] | None = None,
+) -> dict[str, str]:
+    """Reject request-side model overrides that are not an exact configured profile."""
+
+    configured = profiles or load_execution_profiles()
+    name = str(request.get("execution_profile", "balanced") or "balanced")
+    if name not in configured:
+        raise ModelPolicyError(f"unknown execution profile: {name!r}")
+    expected = configured[name]
+    for field in ("model", "reasoning_effort", "service_tier"):
+        requested = request.get(field)
+        if requested is not None and str(requested) != expected[field]:
+            raise ModelPolicyError(
+                f"execution profile {name!r} requires {field}={expected[field]!r}"
+            )
+    return {"execution_profile": name, **expected}

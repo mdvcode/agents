@@ -631,6 +631,7 @@ def workflow_attention(workflow: dict[str, Any]) -> dict[str, Any]:
             "action": str(raw.get("action", "")),
             "question": raw.get("question", {}) if isinstance(raw.get("question"), dict) else {},
             "repeated_question": raw.get("repeated_question") is True,
+            "repeated_requirement": raw.get("repeated_requirement") is True,
         }
     status = str(workflow.get("execution_status", ""))
     if status not in {"awaiting_approval", "blocked", "dead_letter", "failed"}:
@@ -642,6 +643,7 @@ def workflow_attention(workflow: dict[str, Any]) -> dict[str, Any]:
             "action": "",
             "question": {},
             "repeated_question": False,
+            "repeated_requirement": False,
         }
     values: list[str] = []
     blockers = workflow.get("blockers", [])
@@ -671,6 +673,7 @@ def workflow_attention(workflow: dict[str, Any]) -> dict[str, Any]:
         "action": "approve" if status == "awaiting_approval" else "fix_then_retry",
         "question": {},
         "repeated_question": False,
+        "repeated_requirement": False,
     }
 
 
@@ -757,6 +760,9 @@ def project_runs(runs_dir: Path, repository: Path) -> list[dict[str, Any]]:
                     else int(progress.get("token_budget", 0) or 0),
                     "stop_reason": str(progress.get("stop_reason", workflow.get("recovery_reason", ""))),
                     "thread_id": str(progress.get("thread_id", "")),
+                    "execution_profile": str(progress.get("execution_profile", "")),
+                    "model": str(progress.get("model", "")),
+                    "reasoning_effort": str(progress.get("reasoning_effort", "")),
                 },
             }
         )
@@ -875,6 +881,11 @@ def record_human_input(
     }
     if isinstance(attention, dict):
         entry["question_fingerprint"] = str(attention.get("fingerprint", ""))[:100]
+        requirement = attention.get("requirement", {})
+        if isinstance(requirement, dict):
+            entry["requirement_id"] = sanitized_message(
+                str(requirement.get("requirement_id", "")), limit=120
+            )
         question = attention.get("question", {})
         if isinstance(question, dict):
             entry["question_id"] = sanitized_message(str(question.get("id", "")), limit=80)
@@ -916,6 +927,28 @@ def resolve_answer_attention(run_dir: Path) -> None:
         }
     )
     workflow["attention_history"] = history[-50:]
+    requirement = attention.get("requirement", {})
+    if isinstance(requirement, dict) and requirement.get("requirement_id"):
+        closed = workflow.get("closed_requirements", [])
+        if not isinstance(closed, list):
+            closed = []
+        requirement_id = str(requirement["requirement_id"])
+        closed = [
+            item
+            for item in closed
+            if not isinstance(item, dict)
+            or str(item.get("requirement_id", "")) != requirement_id
+        ]
+        closed.append(
+            {
+                **requirement,
+                "role": str(attention.get("role", "")),
+                "fingerprint": str(attention.get("fingerprint", "")),
+                "closed_at": datetime.now(timezone.utc).isoformat(),
+                "resolution": "answer_recorded",
+            }
+        )
+        workflow["closed_requirements"] = closed[-50:]
     workflow.pop("attention", None)
     blockers = workflow.get("blockers", [])
     if isinstance(blockers, list):
@@ -1179,7 +1212,8 @@ def handle_status(args: argparse.Namespace) -> int:
                 f"  run {run['run_id']}: phase={progress.get('phase') or run['status']} "
                 f"event={progress.get('last_sdk_event') or '-'} tool={progress.get('active_tool') or '-'} "
                 f"idle={progress.get('seconds_since_progress', 0)}s "
-                f"budget={progress.get('tokens_used', 0)}/{progress.get('token_budget', 0)}"
+                f"budget={progress.get('tokens_used', 0)}/{progress.get('token_budget', 0)} "
+                f"profile={progress.get('execution_profile') or '-'}"
             )
             if progress.get("stop_reason"):
                 lines.append(f"    stop reason: {progress['stop_reason']}")
@@ -1282,6 +1316,7 @@ def handle_watch(args: argparse.Namespace) -> int:
                     f"  phase={progress.get('phase') or '-'} event={progress.get('last_sdk_event') or '-'} "
                     f"tool={progress.get('active_tool') or '-'} idle={progress.get('seconds_since_progress', 0)}s "
                     f"budget={progress.get('tokens_used', 0)}/{progress.get('token_budget', 0)} "
+                    f"profile={progress.get('execution_profile') or '-'} "
                     f"stop={progress.get('stop_reason') or '-'}"
                 )
             last_signature = signature

@@ -771,15 +771,31 @@ def validate_runtime_config_data(data: Any, label: str = ".agent-runtime.yaml") 
     if expected_adapter not in str(runtime.get("executor_command", "")):
         errors.append(f"{label}: {provider} executor command must use its matching adapter")
     if provider == "codex-sdk":
-        required_settings = {
-            "model": "gpt-5.6-sol",
-            "reasoning_effort": "high",
-            "service_tier": "fast",
-            "require_account_type": "chatgpt",
+        if runtime.get("require_account_type") != "chatgpt":
+            errors.append(f"{label}: codex-sdk require_account_type must be chatgpt")
+        if runtime.get("default_execution_profile") != "balanced":
+            errors.append(f"{label}: codex-sdk default_execution_profile must be balanced")
+        expected_profiles = {
+            "complex": {
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "high",
+                "service_tier": "fast",
+            },
+            "balanced": {
+                "model": "gpt-5.6-terra",
+                "reasoning_effort": "medium",
+                "service_tier": "fast",
+            },
+            "economy": {
+                "model": "gpt-5.6-luna",
+                "reasoning_effort": "low",
+                "service_tier": "fast",
+            },
         }
-        for field, expected in required_settings.items():
-            if runtime.get(field) != expected:
-                errors.append(f"{label}: codex-sdk {field} must be {expected}")
+        if runtime.get("execution_profiles") != expected_profiles:
+            errors.append(
+                f"{label}: codex-sdk execution_profiles must be Sol/high, Terra/medium, and Luna/low"
+            )
     return errors
 
 

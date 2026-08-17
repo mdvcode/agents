@@ -61,6 +61,9 @@ def test_low_medium_workflow_reaches_publication_with_same_run_context(
     tmp_path: Path,
     monkeypatch: object,
 ) -> None:
+    (tmp_path / "Makefile").write_text(
+        "check:\n\t@true\nsecurity:\n\t@true\n", encoding="utf-8"
+    )
     adapter = tmp_path / "continue_adapter.py"
     adapter.write_text(
         """
@@ -425,7 +428,10 @@ def test_production_codex_executor_smoke_planner_to_reviewer(
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
     (tmp_path / "README.md").write_text("base\n", encoding="utf-8")
     (tmp_path / ".gitignore").write_text(".agent-runs/\n.agent-worktrees/\n", encoding="utf-8")
-    subprocess.run(["git", "add", "README.md", ".gitignore"], cwd=tmp_path, check=True)
+    (tmp_path / "Makefile").write_text(
+        "check:\n\t@true\nsecurity:\n\t@true\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "add", "README.md", ".gitignore", "Makefile"], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True, capture_output=True)
     origin = tmp_path.parent / f"{tmp_path.name}-origin.git"
     subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True)
@@ -550,19 +556,21 @@ print(json.dumps({
         create_task_worktree=True,
     )
 
-    assert state["execution_status"] == "dead_letter"
-    assert state["failure_kind"] == "invalid_output"
+    assert state["execution_status"] == "awaiting_approval"
+    assert state["failure_kind"] == "human_input_required"
     assert state["runtime"]["provider"] == "codex-cli"
     assert state["runtime"]["api_required"] is False
-    assert [item["role"] for item in state["roles"]][:8] == [
+    assert [item["role"] for item in state["roles"]][:10] == [
         "issue-intake",
         "context-compiler",
         "planner",
         "risk-classifier",
         "implementation-agent",
-        "test-generator",
         "quality-runner",
         "security-agent",
+        "reviewer",
+        "orchestrator",
+        "publication-prepare",
     ]
     assert (Path(state["worktree"]) / "impl.txt").read_text(encoding="utf-8") == "implemented\n"
     assert not (tmp_path / "impl.txt").exists()

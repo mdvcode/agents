@@ -11,6 +11,7 @@ import shlex
 import subprocess
 import sys
 import time
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ if str(HARNESS_ROOT) not in sys.path:
     sys.path.insert(0, str(HARNESS_ROOT))
 
 from approval_lifecycle import ApprovalError, request_approval
+from ai_harness.model_policy import select_execution_profile
 from context_compiler import create_context_manifest, role_capability, role_contract
 from repository_registry import RepositoryRecord, find_by_remote, load_local_project_record
 from runtime_contracts import contract_section, load_json, validate_contract
@@ -44,7 +46,9 @@ from run_state import (
 )
 from tool_preflight import role_tool_preflight
 from validate_artifacts import validate_required as validate_artifact_required
-from workflow_router import decide_next_role, load_yaml
+from workflow_router import changed_areas as workflow_changed_areas
+from workflow_router import changed_files as workflow_changed_files
+from workflow_router import decide_next_role, load_yaml, reviewer_requires_llm
 from worktree_manager import create_worktree, inspect_current_checkout, slug, use_current_checkout
 from ai_harness.recovery import RecoveryCoordinator, classify_failure, load_recovery_policy
 from ai_harness.recovery.checkpoints import (
@@ -110,6 +114,56 @@ FULL_HINTS = (
     "авторизац", "разрешен", "миграц", "оплат", "секрет", "продакш", "деплой", "схем",
     "зависимост", "архитектур", "рефактор",
 )
+QUESTION_STOP_WORDS = {
+    "a",
+    "an",
+    "be",
+    "choose",
+    "do",
+    "for",
+    "is",
+    "need",
+    "please",
+    "required",
+    "select",
+    "should",
+    "the",
+    "to",
+    "use",
+    "used",
+    "what",
+    "which",
+    "would",
+    "выбрать",
+    "для",
+    "использовать",
+    "какой",
+    "нужен",
+    "нужно",
+    "следует",
+}
+QUESTION_TOKEN_ALIASES = {
+    "database": "database",
+    "db": "database",
+    "choice": "option",
+    "destination": "target",
+    "directory": "path",
+    "environment": "env",
+    "export": "output",
+    "folder": "path",
+    "location": "path",
+    "preference": "option",
+    "result": "output",
+    "variant": "option",
+    "вариант": "option",
+    "бд": "database",
+    "выбор": "option",
+    "каталог": "path",
+    "окружение": "env",
+    "папка": "path",
+    "путь": "path",
+    "результат": "output",
+}
 
 
 def select_execution_mode(requested: str, goal: str) -> str:
@@ -392,6 +446,7 @@ def set_attention(
     if not normalized:
         normalized = [summary]
     normalized_question = normalize_question(question)
+    requirement = semantic_requirement(summary, normalized_question)
     fingerprint = attention_fingerprint(
         role=role,
         summary=summary,
@@ -401,10 +456,22 @@ def set_attention(
         fingerprint,
         attention_fingerprint(role=role, summary=summary),
     }
-    if stop_if_previously_answered and question_was_answered(state, candidate_fingerprints):
+    matched_requirement = (
+        matching_requirement(state, requirement) if stop_if_previously_answered else None
+    )
+    if stop_if_previously_answered and (
+        matched_requirement is not None
+        or question_was_answered(state, candidate_fingerprints)
+    ):
+        matched_id = str(
+            matched_requirement.get("requirement_id", requirement["requirement_id"])
+            if isinstance(matched_requirement, dict)
+            else requirement["requirement_id"]
+        )
         repeated_details = [
             f"Repeated question: {summary}",
-            "The prior answer is already recorded; inspect the role prompt or task context before retrying.",
+            f"Matched missing requirement: {matched_id}",
+            "This requirement was already requested or closed; inspect the run-bound answer, SDK thread, and role context before retrying.",
         ]
         state["attention"] = {
             "required": True,
@@ -414,6 +481,8 @@ def set_attention(
             "action": "fix_then_retry",
             "fingerprint": fingerprint,
             "repeated_question": True,
+            "repeated_requirement": True,
+            "requirement": requirement,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         state["blockers"] = repeated_details
@@ -429,6 +498,21 @@ def set_attention(
     }
     if normalized_question:
         attention["question"] = normalized_question
+    if stop_if_previously_answered:
+        attention["requirement"] = requirement
+        requests = state.get("missing_requirement_requests", [])
+        if not isinstance(requests, list):
+            requests = []
+        requests.append(
+            {
+                **requirement,
+                "role": role,
+                "fingerprint": fingerprint,
+                "summary": summary,
+                "requested_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        state["missing_requirement_requests"] = requests[-50:]
     state["attention"] = attention
     state["blockers"] = normalized
     return False
@@ -473,9 +557,73 @@ def normalize_question(value: Any) -> dict[str, Any]:
         option["recommended"] = index == 0
     return {
         "id": question_id,
+        "requirement": str(value.get("requirement", "")).strip()[:200],
         "options": options,
         "allow_custom": bool(value.get("allow_custom", True)),
     }
+
+
+def semantic_tokens(value: str) -> list[str]:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    raw_tokens = re.findall(r"[a-zа-яё0-9]+", normalized)
+    tokens = {
+        QUESTION_TOKEN_ALIASES.get(token, token)
+        for token in raw_tokens
+        if len(token) > 1 and token not in QUESTION_STOP_WORDS
+    }
+    return sorted(tokens)
+
+
+def semantic_requirement(summary: str, question: dict[str, Any]) -> dict[str, Any]:
+    explicit = str(question.get("requirement", "")).strip()
+    question_id = str(question.get("id", "")).replace("_", " ")
+    signatures = [
+        semantic_tokens(value)
+        for value in (explicit, question_id, summary)
+        if value.strip()
+    ]
+    signatures = [signature for signature in signatures if signature]
+    primary = signatures[0] if signatures else ["unspecified"]
+    requirement_id = "_".join(primary)[:120]
+    aliases = sorted({" ".join(signature) for signature in signatures})
+    return {
+        "requirement_id": requirement_id,
+        "semantic_aliases": aliases,
+        "source_question_id": str(question.get("id", "")),
+    }
+
+
+def requirement_similarity(left: dict[str, Any], right: dict[str, Any]) -> float:
+    left_aliases = left.get("semantic_aliases", [])
+    right_aliases = right.get("semantic_aliases", [])
+    if not isinstance(left_aliases, list) or not isinstance(right_aliases, list):
+        return 0.0
+    best = 0.0
+    for left_alias in left_aliases:
+        left_tokens = set(str(left_alias).split())
+        for right_alias in right_aliases:
+            right_tokens = set(str(right_alias).split())
+            union = left_tokens | right_tokens
+            if union:
+                best = max(best, len(left_tokens & right_tokens) / len(union))
+    return best
+
+
+def matching_requirement(
+    state: dict[str, Any], requirement: dict[str, Any]
+) -> dict[str, Any] | None:
+    for field in ("closed_requirements", "missing_requirement_requests"):
+        entries = state.get(field, [])
+        if not isinstance(entries, list):
+            continue
+        for entry in reversed(entries):
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("requirement_id") == requirement.get("requirement_id"):
+                return entry
+            if requirement_similarity(entry, requirement) >= 0.6:
+                return entry
+    return None
 
 
 def attention_fingerprint(*, role: str, summary: str, question_id: str = "") -> str:
@@ -714,6 +862,50 @@ def changed_paths(repo: Path) -> list[str]:
     if untracked.returncode == 0:
         paths.update(line.strip() for line in untracked.stdout.splitlines() if line.strip())
     return sorted(paths)
+
+
+def changed_line_count(repo: Path) -> int:
+    result = subprocess.run(
+        ["git", "diff", "--numstat", "HEAD"],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return 0
+    total = 0
+    for line in result.stdout.splitlines():
+        columns = line.split("\t", 2)
+        if len(columns) >= 2 and columns[0].isdigit() and columns[1].isdigit():
+            total += int(columns[0]) + int(columns[1])
+    return total
+
+
+def active_repair_iteration(state: dict[str, Any], role: str) -> int:
+    if role not in {"implementation-agent", "ci-repair-agent"}:
+        return 0
+    route = state.get("last_route", {})
+    loop = route.get("loop", {}) if isinstance(route, dict) else {}
+    if not isinstance(loop, dict):
+        return 0
+    value = loop.get("iteration", 0)
+    return int(value) if isinstance(value, (int, float)) else 0
+
+
+def prior_role_failed(state: dict[str, Any], role: str) -> bool:
+    """Return true only for a failed attempt, not a user-answer continuation."""
+
+    for entry in reversed(state.get("roles", [])):
+        if not isinstance(entry, dict) or entry.get("role") != role:
+            continue
+        result = entry.get("result", {})
+        if not isinstance(result, dict):
+            return False
+        return result.get("status") in {"failed", "blocked"} or isinstance(
+            result.get("_failure"), dict
+        )
+    return False
 
 
 def validate_role_artifacts(
@@ -973,6 +1165,7 @@ def build_role_request(
     token_budget: int,
     timeout_seconds: int,
     project_profile: str,
+    execution_settings: dict[str, Any],
 ) -> dict[str, Any]:
     contract = role_contract(role)
     return {
@@ -988,6 +1181,12 @@ def build_role_request(
         "expected_artifacts": list(contract.get("expected_artifacts", [])),
         "allowed_tools": role_tools(role),
         "filesystem_access": role_filesystem_access(role),
+        "execution_profile": str(execution_settings["execution_profile"]),
+        "model": str(execution_settings["model"]),
+        "reasoning_effort": str(execution_settings["reasoning_effort"]),
+        "service_tier": str(execution_settings["service_tier"]),
+        "profile_reason": str(execution_settings["profile_reason"]),
+        "escalation_level": int(execution_settings["escalation_level"]),
         "token_budget": token_budget,
         "timeout_seconds": timeout_seconds,
     }
@@ -1139,7 +1338,7 @@ def run_bounded_commands(commands: list[str], repository: Path, timeout_seconds:
     return outcomes
 
 
-def run_fast_quality(
+def run_deterministic_quality(
     *, goal: str, project_profile: str, repository: Path, artifacts_dir: Path, timeout_seconds: int
 ) -> dict[str, Any]:
     commands = profile_required_commands(project_profile, "quality_commands")
@@ -1158,20 +1357,20 @@ def run_fast_quality(
             "commands_attempted": commands,
             "focused_tests_passed": not failed,
             "repository_checks_passed": not failed and not unavailable,
-            "coverage": "not measured in fast mode",
+            "coverage": "not separately measured by the deterministic quality stage",
             "warnings": warnings,
         },
     )
-    result = artifact_result("Fast deterministic quality checks completed.", ["quality.json"], "continue")
+    result = artifact_result("Deterministic quality checks completed.", ["quality.json"], "continue")
     result["warnings"] = warnings
     if unavailable and not failed:
         result["status"] = "awaiting_approval"
-        result["summary"] = "Required fast quality checks were unavailable."
+        result["summary"] = "Required deterministic quality checks were unavailable."
         result["blockers"] = warnings
     return result
 
 
-def run_fast_security(
+def run_deterministic_security(
     *, project_profile: str, repository: Path, artifacts_dir: Path, timeout_seconds: int
 ) -> dict[str, Any]:
     commands = profile_required_commands(project_profile, "security_commands")
@@ -1194,22 +1393,80 @@ def run_fast_security(
             "highest_severity": "medium" if failed else "none",
             "project_profile": project_profile,
             "findings": [],
-            "blocker_ids": [f"fast-security-{index + 1}" for index, _item in enumerate(failed)],
+            "blocker_ids": [f"security-command-{index + 1}" for index, _item in enumerate(failed)],
             "secret_findings": [],
             "commands_attempted": commands,
             "warnings": warnings,
         },
     )
-    result = artifact_result("Fast deterministic security checks completed.", ["security.json"], "continue")
+    result = artifact_result("Deterministic security checks completed.", ["security.json"], "continue")
     result["warnings"] = warnings
     if unavailable and not failed:
         result["status"] = "awaiting_approval"
-        result["summary"] = "Required fast security checks were unavailable."
+        result["summary"] = "Required deterministic security checks were unavailable."
         result["blockers"] = blockers
     return result
 
 
-def run_fast_orchestrator(
+def run_deterministic_review(
+    *, project_profile: str, repository: Path, artifacts_dir: Path
+) -> dict[str, Any]:
+    quality = load_json(artifacts_dir / "quality.json")
+    security = load_json(artifacts_dir / "security.json")
+    paths = changed_paths(repository)
+    blockers = [
+        *(
+            [str(item) for item in quality.get("warnings", [])]
+            if quality.get("overall_status") == "fail"
+            else []
+        ),
+        *[str(item) for item in security.get("blockers", [])],
+    ]
+    works = (
+        quality.get("overall_status") == "pass"
+        and security.get("verdict") == "works"
+        and not blockers
+    )
+    write_json(
+        artifacts_dir / "review.json",
+        {
+            "verdict": "works" if works else "broken",
+            "expected": [
+                "Required deterministic quality and security gates pass.",
+                "The changed-file set remains bounded and reviewable.",
+            ],
+            "observed": [
+                f"quality={quality.get('overall_status', 'missing')}",
+                f"security={security.get('verdict', 'missing')}",
+                f"changed_files={len(paths)}",
+            ],
+            "evidence": ["quality.json", "security.json", *paths],
+            "blockers": blockers,
+            "repair_required": not works,
+            "status": "pass" if works else "block",
+            "project_profile": project_profile,
+            "findings": [],
+            "blocker_ids": [
+                f"deterministic-review-{index + 1}"
+                for index, _item in enumerate(blockers)
+            ],
+            "policy_violations": [],
+            "known_lesson_conflicts": [],
+            "warnings": [],
+        },
+    )
+    result = artifact_result(
+        "Deterministic review aggregation completed.", ["review.json"], "continue"
+    )
+    if not works:
+        result["status"] = "blocked"
+        result["blockers"] = blockers or [
+            "deterministic review inputs did not pass"
+        ]
+    return result
+
+
+def run_deterministic_orchestrator(
     *, goal: str, project_profile: str, repository: Path, artifacts_dir: Path
 ) -> dict[str, Any]:
     risk = load_json(artifacts_dir / "risk.json")
@@ -1244,7 +1501,7 @@ def run_fast_orchestrator(
         *[str(item) for item in security.get("warnings", [])],
     ]
     if visual_required and not visual_provided:
-        warnings.append("Fast mode did not collect visual evidence; publication must remain draft.")
+        warnings.append("Visual evidence was not collected; publication must remain draft.")
     write_json(
         artifacts_dir / "verdict.json",
         {
@@ -1262,12 +1519,12 @@ def run_fast_orchestrator(
             "visual_evidence": {"required": visual_required, "provided": visual_provided, "items": []},
             "approval_required_before_publish": decision == "await_approval",
             "approval_required_before_merge": True,
-            "reasoning_summary": ["Deterministic fast-mode aggregation of risk, quality, security, and review."],
+            "reasoning_summary": ["Deterministic aggregation of risk, quality, security, and review."],
             "next_actions": ["Prepare publication inputs."] if decision == "publish_pr" else [],
             "lessons_updated": False,
         },
     )
-    return artifact_result("Fast deterministic workflow verdict recorded.", ["verdict.json"], "continue")
+    return artifact_result("Deterministic workflow verdict recorded.", ["verdict.json"], "continue")
 
 
 def run_publication(
@@ -1890,6 +2147,7 @@ def run_roles(
         max_roles = int(state.get("budgets", {}).get("max_roles", 40))
         effective_mode = str(state.get("effective_mode", effective_mode))
         used_cached_result = False
+        execution_settings: dict[str, Any] = {}
         if resume_cached_result is not None:
             result = resume_cached_result
             resume_cached_result = None
@@ -1943,23 +2201,29 @@ def run_roles(
                 dry_run=dry_run,
                 timeout_seconds=timeout_seconds,
             )
-        elif effective_mode == "fast" and role == "quality-runner":
-            result = run_fast_quality(
+        elif role == "quality-runner":
+            result = run_deterministic_quality(
                 goal=goal,
                 project_profile=project_profile,
                 repository=worktree,
                 artifacts_dir=run_artifacts,
                 timeout_seconds=timeout_seconds,
             )
-        elif effective_mode == "fast" and role == "security-agent":
-            result = run_fast_security(
+        elif role == "security-agent":
+            result = run_deterministic_security(
                 project_profile=project_profile,
                 repository=worktree,
                 artifacts_dir=run_artifacts,
                 timeout_seconds=timeout_seconds,
             )
-        elif effective_mode == "fast" and role == "orchestrator":
-            result = run_fast_orchestrator(
+        elif role == "reviewer" and not reviewer_requires_llm(state, run_artifacts):
+            result = run_deterministic_review(
+                project_profile=project_profile,
+                repository=worktree,
+                artifacts_dir=run_artifacts,
+            )
+        elif role == "orchestrator":
+            result = run_deterministic_orchestrator(
                 goal=goal,
                 project_profile=project_profile,
                 repository=worktree,
@@ -2002,6 +2266,33 @@ def run_roles(
                     if preflight_result is not None:
                         result = preflight_result
                     else:
+                        risk_path = run_artifacts / "risk.json"
+                        risk_artifact = load_json(risk_path) if risk_path.is_file() else {}
+                        risk_class = str(
+                            risk_artifact.get("risk_class", state.get("risk_class", "low"))
+                            if isinstance(risk_artifact, dict)
+                            else state.get("risk_class", "low")
+                        )
+                        execution_settings = select_execution_profile(
+                            role=role,
+                            goal=goal,
+                            risk_class=risk_class,
+                            changed_files=workflow_changed_files(state, run_artifacts),
+                            changed_lines=changed_line_count(worktree),
+                            changed_areas=workflow_changed_areas(state, run_artifacts),
+                            repair_iteration=active_repair_iteration(state, role),
+                            prior_failure=prior_role_failed(state, role),
+                        )
+                        state["current_execution_profile"] = execution_settings
+                        write_json(layout.workflow, state)
+                        append_trace(
+                            layout,
+                            {
+                                "event": "runtime.profile_selected",
+                                "role": role,
+                                **execution_settings,
+                            },
+                        )
                         request = build_role_request(
                             run_id=run_id,
                             role=role,
@@ -2012,6 +2303,7 @@ def run_roles(
                             token_budget=token_budget,
                             timeout_seconds=min(timeout_seconds, 180) if effective_mode == "fast" else timeout_seconds,
                             project_profile=project_profile,
+                            execution_settings=execution_settings,
                         )
                         write_json(requests_dir / f"{role}.json", request)
                         result = execute_runtime_observed(
@@ -2135,13 +2427,13 @@ def run_roles(
             "time": datetime.now(timezone.utc).isoformat(),
             "role": role,
             "execution_kind": str(role_contract(role).get("execution_kind", "llm_role")),
-            "llm_invoked": role in ADAPTER_ROLES and not used_cached_result and not (
-                effective_mode == "fast" and role in {"quality-runner", "security-agent", "orchestrator"}
-            ),
+            "llm_invoked": bool(execution_settings) and not used_cached_result,
             "prompt_file": PROMPT_FILES.get(role, ""),
             "prompt": role_prompt(role),
             "result": result,
         }
+        if execution_settings:
+            checkpoint["execution_profile"] = execution_settings
         state["roles"].append(checkpoint)
         if result.get("status") == "completed":
             completed_roles.append(role)
@@ -2192,7 +2484,7 @@ def run_roles(
                     state["execution_status"] = "blocked"
                     persist_control_failure(
                         layout, state, role=role, stage="role", kind="internal_error",
-                        error_type="RepeatedQuestion", message=str(state["attention"]["summary"]),
+                        error_type="RepeatedMissingRequirement", message=str(state["attention"]["summary"]),
                     )
                     append_trace(
                         layout,
@@ -2336,13 +2628,13 @@ def run_roles(
                     record_failure(
                         layout,
                         stage="routing",
-                        code="REPEATED_QUESTION",
+                        code="REPEATED_REQUIREMENT",
                         message=str(state["attention"]["summary"]),
                         details=list(state["attention"]["details"]),
                     )
                     persist_control_failure(
                         layout, state, role=role, stage="routing", kind="internal_error",
-                        error_type="RepeatedQuestion", message=str(state["attention"]["summary"]),
+                        error_type="RepeatedMissingRequirement", message=str(state["attention"]["summary"]),
                     )
                     append_trace(layout, {"event": "repeated_question_stopped", "role": role})
                 else:
