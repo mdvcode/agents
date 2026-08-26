@@ -1,0 +1,55 @@
+{
+  "required": [
+    "workflow_version",
+    "task_id",
+    "mode",
+    "analysis",
+    "nodes",
+    "edges",
+    "parallel_groups",
+    "required_roles",
+    "skipped_roles",
+    "deterministic_checks",
+    "model_profiles",
+    "context_budgets",
+    "budgets",
+    "estimated_max_model_calls",
+    "reasoning",
+    "policy_version",
+    "compiler_version",
+    "created_at"
+  ],
+  "types": {
+    "workflow_version": "int",
+    "task_id": "str",
+    "mode": "str",
+    "analysis": "dict",
+    "nodes": "list",
+    "edges": "list",
+    "parallel_groups": "list",
+    "required_roles": "list",
+    "skipped_roles": "list",
+    "deterministic_checks": "list",
+    "model_profiles": "dict",
+    "context_budgets": "dict",
+    "budgets": "dict",
+    "estimated_max_model_calls": "int",
+    "reasoning": "dict",
+    "policy_version": "str",
+    "compiler_version": "str",
+    "created_at": "str"
+  },
+  "enums": {
+    "mode": ["adaptive", "adaptive_safe_fallback", "fast", "full"]
+  },
+  "object_required": {
+    "budgets": [
+      "max_model_calls",
+      "max_uncached_input_tokens",
+      "max_output_tokens",
+      "max_duration_seconds",
+      "max_repair_attempts",
+      "max_model_escalations"
+    ]
+  }
+}

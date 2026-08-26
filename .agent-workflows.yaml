@@ -8,6 +8,11 @@ workflows:
       max_duration_seconds: 3600
       max_tokens: 1500000
     mode_budgets:
+      adaptive:
+        max_roles: 24
+        max_repair_iterations: 6
+        max_duration_seconds: 1800
+        max_tokens: 600000
       fast:
         max_roles: 12
         max_repair_iterations: 1

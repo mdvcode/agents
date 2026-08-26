@@ -71,8 +71,8 @@ def normalize_event(
     if workspace_mode not in {"checkout", "worktree"}:
         raise EventError("event workspace_mode must be checkout or worktree")
     mode = text(payload.get("mode"), "auto")
-    if mode not in {"auto", "fast", "full", "goal"}:
-        raise EventError("event mode must be auto, fast, full, or goal")
+    if mode not in {"auto", "adaptive", "fast", "full", "goal"}:
+        raise EventError("event mode must be auto, adaptive, fast, full, or goal")
     runtime_provider = text(payload.get("runtime_provider"), "codex-sdk")
     if runtime_provider not in {"codex-sdk", "codex-cli"}:
         raise EventError("event runtime_provider must be codex-sdk or codex-cli")

@@ -94,7 +94,7 @@ def test_execution_mode_survives_normalization_and_queueing(tmp_path: Path) -> N
 
 
 def test_event_rejects_unknown_execution_mode(tmp_path: Path) -> None:
-    with pytest.raises(EventError, match="mode must be auto, fast, full, or goal"):
+    with pytest.raises(EventError, match="mode must be auto, adaptive, fast, full, or goal"):
         normalize_event(
             source="api",
             payload={"external_id": "bad-mode", "mode": "turbo"},

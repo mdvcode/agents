@@ -227,13 +227,29 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         assert '<option value="goal">' in dashboard
         assert "Долгая цель — до 4 часов" in dashboard
         assert 'id="workspaceMode"' in dashboard
+        assert 'id="workspaceModeNote"' in dashboard
         assert 'id="parallelTask"' in dashboard
+        assert '<option value="adaptive">' in dashboard
+        assert 'id="batchRows"' in dashboard
+        assert 'id="addBatchTask"' in dashboard
+        assert 'id="batchConcurrency"' in dashboard
+        assert "batch-repository" in dashboard
+        assert "batch-goal" in dashboard
+        assert "batch-parallel" in dashboard
         assert 'id="batchManifest"' in dashboard
+        assert 'id="fillBatchExample"' in dashboard
+        assert 'id="clearBatch"' in dashboard
+        assert "Запустить несколько задач" in dashboard
+        assert "Расширенный режим: импорт YAML" in dashboard
+        assert "разбираться в Git не нужно" in dashboard
+        assert "max_parallel_tasks" in dashboard
         assert "Queued" in dashboard
         assert "PR ready" in dashboard
         assert 'id="repositoryFilter"' in dashboard
         assert 'id="branchFilter"' in dashboard
         assert 'id="workerFilter"' in dashboard
+        assert 'id="clearFilters"' in dashboard
+        assert "Быстрый старт" in dashboard
         assert "Другой ответ" in dashboard
         assert "question.options" in dashboard
         assert "answers:{}" in dashboard
@@ -454,25 +470,21 @@ def test_dashboard_batch_maps_parallel_to_worktree_and_repository_limit(
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{server.server_port}"
-    manifest = f"""
-version: 1
-repositories:
-  project:
-    path: {tmp_path}
-    max_parallel_tasks: 2
-tasks:
-  - repo: project
-    goal: First task
-  - repo: project
-    goal: Parallel task
-    parallel: true
-"""
     try:
         result = api_request(
             f"{base}/ui/tasks/batch",
             token,
             method="POST",
-            body={"manifest": manifest},
+            body={
+                "version": 1,
+                "repositories": {
+                    "project": {"path": str(tmp_path), "max_parallel_tasks": 2},
+                },
+                "tasks": [
+                    {"repo": "project", "goal": "First task"},
+                    {"repo": "project", "goal": "Parallel task", "parallel": True},
+                ],
+            },
         )
     finally:
         server.shutdown()

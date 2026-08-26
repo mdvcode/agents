@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "status": "not_evaluated",
+  "adaptive_default_allowed": false,
+  "evidence_kind": "",
+  "dataset_cases": 0,
+  "report_path": "",
+  "report_fingerprint": "",
+  "dataset_fingerprint": "",
+  "role_policy_fingerprint": "",
+  "compiler_version": "1",
+  "compiler_fingerprint": "",
+  "checks": {},
+  "blockers": [
+    "Authoritative paired full/adaptive acceptance has not passed."
+  ]
+}

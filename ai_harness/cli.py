@@ -2275,11 +2275,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     task_parser.add_argument(
         "--mode",
-        choices=("auto", "fast", "full", "goal"),
+        choices=("auto", "adaptive", "fast", "full", "goal"),
         default="auto",
         help=(
-            "select routing automatically, request the 15-minute fast path, run the full role chain "
-            "for up to 60 minutes, or explicitly run a checkpointed goal for up to 4 hours"
+            "select current automatic routing, opt into the auditable adaptive plan, request the "
+            "15-minute fast path, run the full role chain for up to 60 minutes, or explicitly run "
+            "a checkpointed goal for up to 4 hours"
         ),
     )
     task_parser.add_argument("--priority", type=int, choices=range(-100, 101), default=0)

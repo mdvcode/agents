@@ -300,8 +300,8 @@ def run_workflow(
     runtime_provider: str = "",
     runtime_command: str = "",
 ) -> int:
-    if mode not in {"auto", "fast", "full", "goal"}:
-        raise ValueError("mode must be auto, fast, full, or goal")
+    if mode not in {"auto", "adaptive", "fast", "full", "goal"}:
+        raise ValueError("mode must be auto, adaptive, fast, full, or goal")
     workflows = read_workflows()
     workflow = workflows.get("workflows", {}).get(workflow_name)
     if not isinstance(workflow, dict):
@@ -773,7 +773,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--branch", default="")
     parser.add_argument("--base-branch", default="main")
     parser.add_argument("--current-branch", action="store_true")
-    parser.add_argument("--mode", choices=("auto", "fast", "full", "goal"), default="auto")
+    parser.add_argument(
+        "--mode",
+        choices=("auto", "adaptive", "fast", "full", "goal"),
+        default="auto",
+    )
     parser.add_argument("--adapter-command", default="")
     parser.add_argument("--runtime-provider", default="")
     parser.add_argument("--runtime-command", default="")

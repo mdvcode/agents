@@ -1,17 +1,34 @@
 # AI Harness
 
-AI Harness is a policy-governed system for running software tasks in local Git repositories through one command-line interface: `agent`.
+AI Harness runs software tasks in local Git repositories through one command-line interface: `agent`. Users describe the required result; the Harness prepares the Git workspace, starts the task, runs implementation and verification, repairs recoverable failures, and returns a reviewable branch or pull request.
 
-It prepares task branches or worktrees, runs bounded implementation and verification workflows, preserves recovery checkpoints, and stops for human input when a decision cannot be made safely. Merge and deployment always remain human actions.
+It supports single tasks, parallel work in isolated Git worktrees, batches across several repositories, background recovery, and explicit human approval when a decision cannot be made safely. Merge and deployment always remain human actions.
+
+## How a task runs
+
+```mermaid
+flowchart LR
+    A["Task or batch"] --> B["Queue and Git workspace"]
+    B --> C["Codex implementation"]
+    C --> D["Tests and deterministic gates"]
+    D -->|"recoverable failure"| C
+    D -->|"independent subtask"| E["Isolated child run"]
+    E --> F["Parent joins result"]
+    F --> D
+    D -->|"passed"| G["Reviewable branch or PR"]
+    D -->|"decision required"| H["Human attention"]
+```
+
+One run keeps the same task identity, Git workspace, checkpoint, and Codex thread across implementation, repair, user answers, and verification. A blocking compiler or test failure stays in that run. Only genuinely independent work may become a bounded child run.
 
 ## Requirements
 
 - macOS or Linux
 - Git
 - Python 3.11 or newer
-- Codex CLI with an authenticated local subscription
+- A ChatGPT account with Codex access and local subscription authentication
 
-The installer creates an isolated application environment and does not require `sudo`.
+The installer creates an isolated application environment, installs the official Python Codex SDK and CLI compatibility runtime, and does not require `sudo`.
 
 ## Install
 
@@ -58,9 +75,98 @@ Or use the local browser dashboard:
 agent dashboard
 ```
 
+The dashboard does not require YAML: use **Launch several tasks** to add ordinary
+project-and-task rows. YAML remains available only under the advanced import section.
+
 `agent task` starts the background worker automatically when needed. The project checkout must be clean before a task can create or switch branches.
 
 `agent init` creates `.agent/project.yaml` and, when absent, `AGENTS.md`. If Git already ignores either file, keep it local and do not force-add it. Otherwise, commit the new file or add a repository-approved ignore rule before starting work.
+
+## Everyday usage
+
+### One task in one repository
+
+```sh
+cd /projects/backend
+agent task "Fix report export and add a regression test"
+agent watch
+```
+
+By default, the Harness creates a dedicated task branch in the current checkout. Only one unfinished task may own that checkout.
+
+### One parallel task in an isolated worktree
+
+```sh
+agent task --worktree --task-id report-filters \
+  "Add report filters without blocking the export task"
+```
+
+The worktree has its own branch and checkout but reuses shared pip, uv, npm, Bun, and repository build caches. CLI users opt in explicitly with `--worktree`; the dashboard's **Parallel task** option selects it automatically.
+
+### Several tasks in one batch
+
+Create `tasks.yaml`:
+
+```yaml
+version: 1
+repositories:
+  backend:
+    path: /projects/backend
+    max_parallel_tasks: 3
+  frontend:
+    path: /projects/frontend
+    max_parallel_tasks: 2
+tasks:
+  - repo: backend
+    goal: Fix report export
+  - repo: backend
+    goal: Add report filters
+    parallel: true
+  - repo: frontend
+    goal: Fix the navigation menu
+    parallel: true
+```
+
+Validate it without changing queue or Git state:
+
+```sh
+agent batch --file tasks.yaml --dry-run --json
+```
+
+Then enqueue the batch:
+
+```sh
+agent batch --file tasks.yaml
+agent dashboard
+```
+
+`parallel: true` gives that task an isolated worktree. `max_parallel_tasks` is enforced when workers claim tasks, so a busy repository or shared test database cannot consume more than its configured capacity. The dashboard displays all repositories together and can filter by lifecycle, repository, branch, or worker.
+
+The loopback API accepts the same data at `POST /tasks/batch`, either as a YAML `manifest` string or as `repositories` and `tasks` JSON fields. The dashboard is the simplest visual API client and preserves the existing loopback authentication boundary.
+
+### Background child tasks
+
+Users do not create child runs manually. During implementation, Codex may propose a genuinely independent subtask, but deterministic Harness code decides whether it is safe to start.
+
+A writing child receives:
+
+- its own worktree, branch, and Codex thread;
+- a strict token and duration budget;
+- an explicit `allowed_paths` scope;
+- a blocking or non-blocking dependency on its parent;
+- no permission to commit, push, publish, merge, or expand scope.
+
+The parent consumes each child result once, handles join conflicts, resumes its original Codex thread, and reruns the complete verification path over the combined diff. Fan-out is limited to three children and graph depth to two levels. Cross-repository work should be submitted explicitly as a batch instead of being invented by a child task.
+
+### Monitor and intervene
+
+```sh
+agent status
+agent watch --run-id <run-id>
+agent failures --run-id <run-id>
+```
+
+The status stream reports the current phase, latest SDK event, active tool, time since progress, token budget, and stop reason. The dashboard groups work as **Queued**, **Running**, **Testing**, **Needs input**, **PR ready**, and **Failed**. When active branches touch the same paths, it marks a probable conflict and recommends which branch should publish first and which should rebase and verify again.
 
 ## Task execution modes
 
@@ -172,6 +278,19 @@ agent task [--repo PATH] [--task-id ID] [--branch BRANCH]
 - `--keep-paused` prevents a new task from replacing an older paused task that owns the same checkout.
 - Reusing the same explicit `--task-id` returns the existing queue item instead of creating a duplicate.
 
+### Create a task batch
+
+```sh
+agent batch --file tasks.yaml [--dry-run] [--json]
+cat tasks.yaml | agent batch --file -
+```
+
+- A batch may contain up to 50 validated tasks.
+- Repository definitions may set `max_parallel_tasks` from 1 to 32.
+- `parallel: true` selects an isolated worktree for that item.
+- Each item still passes through ordinary project trust, branch, policy, and queue intake checks.
+- Invalid items are returned with per-item diagnostics; accepted items retain one shared batch id.
+
 ### Worker service
 
 ```sh
@@ -194,7 +313,7 @@ agent worker stop [--json]
 agent dashboard [--repo PATH] [--port PORT] [--no-open]
 ```
 
-The dashboard binds to loopback, opens in the default browser, and provides task launch, execution-mode (`auto`, `fast`, `full`, or explicit `goal`) and Git-workspace selection, status, structured answer choices with a custom-answer fallback, approval, retry, and abort controls. Answered questions are fingerprinted so the same question cannot silently reopen in a loop. `--no-open` starts the server without opening a browser. `Ctrl+C` stops the dashboard server but does not stop the worker service.
+The dashboard binds to loopback, opens in the default browser, and provides single-task launch plus a visual multi-task builder that does not require YAML. YAML import remains available as an advanced option. The dashboard also provides execution-mode (`auto`, `fast`, `full`, or explicit `goal`) and Git-workspace selection, lifecycle/repository/branch/worker filters, probable-conflict hints, status, structured answer choices with a custom-answer fallback, approval, retry, and abort controls. Answered questions are fingerprinted so the same question cannot silently reopen in a loop. `--no-open` starts the server without opening a browser. `Ctrl+C` stops the dashboard server but does not stop the worker service.
 
 ### Status and monitoring
 

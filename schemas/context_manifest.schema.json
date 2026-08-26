@@ -56,6 +56,11 @@
     "raw_outputs_dir": "str",
     "context_engine_version": "int",
     "context_package_path": "str",
-    "context_log_path": "str"
+    "context_log_path": "str",
+    "context_cache": "dict",
+    "context_layers": "dict",
+    "deduplication": "dict"
+    ,"artifact_snapshot": "dict"
+    ,"runtime_delta": "dict"
   }
 }

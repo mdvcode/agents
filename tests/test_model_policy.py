@@ -70,14 +70,15 @@ def test_mechanical_work_and_first_simple_repair_use_luna_low() -> None:
     assert repair["model"] == "gpt-5.6-luna"
 
 
-def test_only_failure_or_repeated_repair_escalates_to_sol() -> None:
+def test_failure_first_increases_reasoning_before_model_upgrade() -> None:
     continued_after_answer = select(prior_failure=False)
     failed_attempt = select(prior_failure=True)
     repeated_repair = select(repair_iteration=2)
 
     assert continued_after_answer["execution_profile"] == "balanced"
-    assert failed_attempt["execution_profile"] == "complex"
-    assert repeated_repair["execution_profile"] == "complex"
+    assert failed_attempt["execution_profile"] == "balanced"
+    assert failed_attempt["reasoning_effort"] == "high"
+    assert repeated_repair["execution_profile"] == "balanced"
     assert failed_attempt["escalation_level"] == 1
 
 
@@ -87,3 +88,94 @@ def test_request_cannot_override_configured_profile() -> None:
             {"execution_profile": "economy", "model": "gpt-5.6-sol"},
             profiles=PROFILES,
         )
+
+
+def test_failure_aware_escalation_does_not_upgrade_for_pytest_failure() -> None:
+    selected = select(
+        prior_failure=True,
+        failure_type="test_failure",
+        previous_profile="economy",
+        repair_iteration=1,
+    )
+
+    assert selected["execution_profile"] == "economy"
+    assert selected["escalation_level"] == 0
+
+
+def test_reasoning_failure_climbs_one_profile_at_a_time() -> None:
+    from_economy = select(
+        failure_type="reasoning_failure",
+        previous_profile="economy",
+    )
+    from_balanced = select(
+        failure_type="invalid_solution",
+        previous_profile="balanced",
+    )
+
+    assert from_economy["execution_profile"] == "economy"
+    assert from_economy["reasoning_effort"] == "medium"
+    assert from_balanced["execution_profile"] == "balanced"
+    assert from_balanced["reasoning_effort"] == "high"
+    assert from_economy["escalation_level"] == 1
+
+
+def test_reasoning_ladder_upgrades_model_then_stops_for_human() -> None:
+    upgraded = select(
+        failure_type="reasoning_failure",
+        previous_profile="economy",
+        previous_reasoning_effort="medium",
+    )
+    terminal = select(
+        failure_type="repeated_invalid_solution",
+        previous_profile="complex",
+        previous_reasoning_effort="xhigh",
+    )
+
+    assert upgraded["execution_profile"] == "balanced"
+    assert upgraded["reasoning_effort"] == "medium"
+    assert terminal["terminal_action"] == "human_or_dead_letter"
+
+
+def test_configured_profile_allows_only_its_reasoning_ladder() -> None:
+    selected = validate_request_profile(
+        {"execution_profile": "economy", "reasoning_effort": "medium"},
+        profiles=PROFILES,
+    )
+    assert selected["reasoning_effort"] == "medium"
+    with pytest.raises(ModelPolicyError, match="does not allow"):
+        validate_request_profile(
+            {"execution_profile": "economy", "reasoning_effort": "xhigh"},
+            profiles=PROFILES,
+        )
+
+
+def test_context_capability_and_budget_pressure_are_selection_inputs() -> None:
+    large_context = select(context_size=20_000)
+    deep_review = select(required_capability="deep_review")
+    constrained = select(budget_pressure=True)
+
+    assert large_context["execution_profile"] == "complex"
+    assert deep_review["execution_profile"] == "complex"
+    assert constrained["execution_profile"] == "economy"
+
+
+def test_repeated_deterministic_failure_still_does_not_escalate_model() -> None:
+    selected = select(
+        failure_type="test_failure",
+        previous_profile="economy",
+        repair_iteration=3,
+        repair_count=3,
+    )
+
+    assert selected["execution_profile"] == "economy"
+    assert selected["escalation_level"] == 0
+
+
+def test_adaptive_plan_profile_is_the_initial_model_choice() -> None:
+    selected = select(
+        planned_profile="economy",
+        task_complexity="trivial",
+    )
+
+    assert selected["execution_profile"] == "economy"
+    assert "immutable execution plan" in selected["profile_reason"]

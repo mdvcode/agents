@@ -1,6 +1,6 @@
 CODEX_CLI ?= $(shell if [ -x /Applications/ChatGPT.app/Contents/Resources/codex ]; then printf /Applications/ChatGPT.app/Contents/Resources/codex; elif [ -x "$$HOME/Applications/ChatGPT.app/Contents/Resources/codex" ]; then printf "$$HOME/Applications/ChatGPT.app/Contents/Resources/codex"; else command -v codex 2>/dev/null || printf codex; fi)
 
-.PHONY: check security validate-artifacts runtime-preflight codex-preflight codex-smoke runtime-chaos runtime-soak runtime-soak-verify step1-verify step2-verify eval-score eval-run eval-compare eval-leaderboard eval-regression queue-worker worker-service-start worker-service-restart worker-service-status worker-service-health worker-service-stop control-plane dashboard metrics approve-run resume-run reject-run list-exceptions publish-dry-run publish agent-status
+.PHONY: check security validate-artifacts runtime-preflight codex-preflight codex-smoke runtime-chaos runtime-soak runtime-soak-verify step1-verify step2-verify eval-score eval-run eval-compare eval-leaderboard eval-regression adaptive-eval-plans adaptive-eval-ab adaptive-eval-leaderboard adaptive-eval-gate queue-worker worker-service-start worker-service-restart worker-service-status worker-service-health worker-service-stop control-plane dashboard metrics approve-run resume-run reject-run list-exceptions publish-dry-run publish agent-status
 
 RUN_ID ?=
 STEP1_MANIFEST ?=
@@ -18,6 +18,8 @@ EVAL_OUTPUT ?=
 EVAL_EXPERIMENT ?= evals/experiments/production_e2_v1.json
 EVAL_CANDIDATE_REPORT ?=
 EVAL_GATE_OUTPUT ?=
+ADAPTIVE_MANIFEST ?=
+ADAPTIVE_REPORT ?= .agent-runs/adaptive-evaluation-report.json
 SOAK_MANIFEST ?=
 SOAK_REPORT ?=
 
@@ -97,6 +99,20 @@ eval-regression:
 	python3 scripts/eval_regression.py --manifest "$(EVAL_EXPERIMENT)" \
 		$(if $(EVAL_CANDIDATE_REPORT),--candidate "$(EVAL_CANDIDATE_REPORT)",) \
 		$(if $(EVAL_GATE_OUTPUT),--output "$(EVAL_GATE_OUTPUT)",)
+
+adaptive-eval-plans:
+	python3 scripts/adaptive_evaluation.py plans --report "$(ADAPTIVE_REPORT)"
+
+adaptive-eval-ab:
+	@test -n "$(ADAPTIVE_MANIFEST)" || (echo "ADAPTIVE_MANIFEST is required" >&2; exit 2)
+	python3 scripts/adaptive_evaluation.py ab --manifest "$(ADAPTIVE_MANIFEST)" --report "$(ADAPTIVE_REPORT)"
+
+adaptive-eval-leaderboard:
+	@test -n "$(EVAL_REPORTS)" || (echo "EVAL_REPORTS is required" >&2; exit 2)
+	python3 scripts/adaptive_evaluation.py leaderboard --reports $(EVAL_REPORTS) --report "$(ADAPTIVE_REPORT)"
+
+adaptive-eval-gate:
+	python3 scripts/adaptive_evaluation.py gate --report "$(ADAPTIVE_REPORT)"
 
 queue-worker:
 	python3 scripts/worker_pool.py --db "$(QUEUE_DB)" --workers 3

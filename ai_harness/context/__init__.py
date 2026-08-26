@@ -1,6 +1,8 @@
 """Context Intelligence Platform public API."""
 
 from .builder import ContextBudget, ContextBuilder, estimate_tokens
+from .cache import CachedContext, ContextCache, ContextCacheKey
+from .deduplication import canonicalize, chunk_fingerprint, deduplicate_documents
 from .engine import ContextEngine
 from .memory import MemoryManager, MemoryRecord
 from .models import (
@@ -21,6 +23,9 @@ __all__ = [
     "Context",
     "ContextBudget",
     "ContextBuilder",
+    "ContextCache",
+    "ContextCacheKey",
+    "CachedContext",
     "ContextEngine",
     "ContextExclusion",
     "ContextSelection",
@@ -37,4 +42,7 @@ __all__ = [
     "Retriever",
     "RuleBasedRetriever",
     "estimate_tokens",
+    "canonicalize",
+    "chunk_fingerprint",
+    "deduplicate_documents",
 ]

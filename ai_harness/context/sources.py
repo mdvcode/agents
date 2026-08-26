@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Protocol, Sequence
 
@@ -46,6 +47,37 @@ ROLE_SKILLS: dict[str, tuple[str, ...]] = {
     "eval-runner": ("structured-output-guard",),
     "report-agent": ("structured-output-guard",),
     "publication": ("git-workflow", "release-safety", "repo-policy"),
+}
+
+ROLE_ARTIFACTS: dict[str, set[str]] = {
+    "planner": {"issue.json", "project_profile.json"},
+    "risk-classifier": {"issue.json", "plan.md", "project_profile.json"},
+    "implementation-agent": {"issue.json", "plan.md", "risk.json", "project_profile.json"},
+    "test-generator": {"plan.md", "risk.json", "implementation.json", "project_profile.json"},
+    "quality-runner": {"implementation.json", "test_plan.json", "test_result.json", "project_profile.json"},
+    "security-agent": {"risk.json", "implementation.json", "security.json", "project_profile.json"},
+    "frontend-qa-agent": {"implementation.json", "project_profile.json"},
+    "architecture-consistency-agent": {"plan.md", "implementation.json", "project_profile.json"},
+    "semantic-conflict-agent": {"plan.md", "implementation.json", "project_profile.json"},
+    "reviewer": {
+        "risk.json",
+        "implementation.json",
+        "test_result.json",
+        "quality.json",
+        "security.json",
+        "frontend_qa.json",
+        "architecture_consistency.json",
+        "semantic_conflict.json",
+        "project_profile.json",
+    },
+    "orchestrator": {
+        "risk.json",
+        "quality.json",
+        "security.json",
+        "review.json",
+        "frontend_qa.json",
+        "project_profile.json",
+    },
 }
 
 
@@ -455,7 +487,10 @@ class ArtifactSource:
         documents: list[KnowledgeDocument] = []
         if not root.is_dir() or root.is_symlink():
             return ()
+        allowed = ROLE_ARTIFACTS.get(request.role)
         for path, resolved_root in _iter_bounded_files((root,), max_files=60):
+            if allowed is not None and path.name not in allowed:
+                continue
             document = _file_document(
                 source=self.name,
                 path=path,
@@ -463,10 +498,56 @@ class ArtifactSource:
                 knowledge_type=KnowledgeType.ARTIFACT,
                 document_type=DocumentType.ARTIFACT,
                 priority=88,
+                metadata={
+                    "layer": "role",
+                    "authoritative": "true",
+                    "created_at": datetime.fromtimestamp(
+                        path.stat().st_mtime,
+                        tz=timezone.utc,
+                    ).isoformat(),
+                },
             )
             if document is not None:
                 documents.append(document)
+        execution_plan = root.parent / "execution-plan.json"
+        plan_document = _file_document(
+            source=self.name,
+            path=execution_plan,
+            root=root.parent,
+            knowledge_type=KnowledgeType.ARTIFACT,
+            document_type=DocumentType.ARTIFACT,
+            priority=96,
+            title="Authoritative execution plan",
+            metadata={"layer": "base", "authoritative": "true"},
+        )
+        if plan_document is not None:
+            documents.append(plan_document)
         return tuple(documents)
+
+
+@dataclass(frozen=True)
+class RuntimeDeltaSource:
+    """Authoritative changes since the preceding role checkpoint."""
+
+    content: str
+    name: str = "runtime_delta"
+
+    def collect(self, request: KnowledgeRequest) -> tuple[KnowledgeDocument, ...]:
+        if not self.content.strip():
+            return ()
+        return (
+            KnowledgeDocument(
+                id=_document_id(self.name, "current", request.role),
+                title="Changes since previous role",
+                content=self.content,
+                source=self.name,
+                path="current",
+                knowledge_type=KnowledgeType.ARTIFACT,
+                document_type=DocumentType.ARTIFACT,
+                priority=99,
+                metadata={"layer": "delta", "authoritative": "true"},
+            ),
+        )
 
 
 @dataclass(frozen=True)

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -84,6 +85,69 @@ def artifact_references(artifacts_dir: Path) -> list[dict[str, str]]:
     return refs
 
 
+def artifact_snapshot(artifacts_dir: Path) -> dict[str, str]:
+    if not artifacts_dir.is_dir():
+        return {}
+    values: dict[str, str] = {}
+    for path in sorted(artifacts_dir.iterdir()):
+        if path.is_file() and not path.is_symlink():
+            try:
+                values[path.name] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError:
+                continue
+    return values
+
+
+def incremental_runtime_delta(
+    *,
+    role: str,
+    artifacts_dir: Path,
+    context_dir: Path,
+    previous_roles: Sequence[str],
+) -> tuple[dict[str, Any], dict[str, str]]:
+    current = artifact_snapshot(artifacts_dir)
+    previous_manifest: dict[str, Any] = {}
+    previous_role = ""
+    for candidate in reversed(previous_roles):
+        path = context_dir / f"{candidate}.json"
+        value = load_yaml_mapping(path) if path.is_file() else {}
+        if value:
+            previous_manifest = value
+            previous_role = candidate
+            break
+    previous = previous_manifest.get("artifact_snapshot", {})
+    if not isinstance(previous, dict):
+        previous = {}
+    changed = sorted(
+        name
+        for name in set(previous) | set(current)
+        if previous.get(name) != current.get(name)
+    )
+    errors_path = artifacts_dir.parent / "errors.jsonl"
+    error_lines = []
+    if errors_path.is_file():
+        try:
+            error_lines = [line for line in errors_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        except OSError:
+            error_lines = []
+    previous_error_count = int(previous_manifest.get("runtime_delta", {}).get("error_count", 0) or 0) if isinstance(previous_manifest.get("runtime_delta"), dict) else 0
+    workflow_path = artifacts_dir.parent / "workflow.json"
+    workflow = load_yaml_mapping(workflow_path) if workflow_path.is_file() else {}
+    delta = {
+        "from_role": previous_role,
+        "to_role": role,
+        "changed_artifacts": changed,
+        "new_failures": error_lines[previous_error_count:],
+        "decisions": {
+            key: workflow.get(key)
+            for key in ("last_route", "budget_action", "attention", "failure_kind")
+            if workflow.get(key) not in (None, "", {}, [])
+        },
+        "error_count": len(error_lines),
+    }
+    return delta, current
+
+
 def role_skill_names(role: str, project_profile: str) -> list[str]:
     names = list(ROLE_SKILLS.get(role, ()))
     if project_profile == "nextjs_web" and role in {"implementation-agent", "ci-repair-agent"}:
@@ -128,6 +192,20 @@ def create_context_manifest(
     artifacts = list(expected_artifacts) or list(contract.get("expected_artifacts", []))
     retrieval_query = " ".join(part for part in (goal.strip(), role.replace("-", " ")) if part)
     context_log_path = context_dir / "logs" / f"{role}.jsonl"
+    runtime_delta, current_artifact_snapshot = incremental_runtime_delta(
+        role=role,
+        artifacts_dir=artifacts_dir,
+        context_dir=context_dir,
+        previous_roles=previous_roles,
+    )
+    runtime_delta_text = json.dumps(runtime_delta, indent=2, ensure_ascii=False, sort_keys=True)
+    cache_query_salt = hashlib.sha256(
+        json.dumps(
+            {"artifacts": current_artifact_snapshot, "delta": runtime_delta},
+            sort_keys=True,
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
     engine = ContextEngine.default(
         control_root=MEMORY_CONTROL_ROOT,
         project=project,
@@ -136,6 +214,8 @@ def create_context_manifest(
         context_log_path=context_log_path,
         repository=repository,
         token_budget=token_budget,
+        runtime_delta=runtime_delta_text,
+        cache_query_salt=cache_query_salt,
     )
     context = engine.build(goal, repository, role, runtime)
     package_path = context_dir / "packages" / f"{role}.md"
@@ -153,6 +233,28 @@ def create_context_manifest(
     context_files = [
         {"path": str(package_path.resolve()), "kind": "context_package"},
     ]
+    base_sources = {"policies", "project_profile"}
+    changed_artifacts = set(runtime_delta["changed_artifacts"])
+    context_layers = {
+        "base": [
+            item
+            for item in selected_context
+            if item.get("source") in base_sources or item.get("path") == "execution-plan.json"
+        ],
+        "role": [
+            item
+            for item in selected_context
+            if item.get("source") != "runtime_delta"
+            and not (item.get("source") == "run_artifacts" and item.get("path") in changed_artifacts)
+            and item.get("source") not in base_sources
+        ],
+        "delta": [
+            item
+            for item in selected_context
+            if item.get("source") == "runtime_delta"
+            or (item.get("source") == "run_artifacts" and item.get("path") in changed_artifacts)
+        ],
+    }
     manifest = {
         "run_id": run_id,
         "role": role,
@@ -188,6 +290,11 @@ def create_context_manifest(
             }
         },
         "context_engine_version": 1,
+        "context_cache": dict(context.log.get("cache", {})),
+        "context_layers": context_layers,
+        "artifact_snapshot": current_artifact_snapshot,
+        "runtime_delta": runtime_delta,
+        "deduplication": dict(context.log.get("deduplication", {})),
         "context_package_path": str(package_path.resolve()),
         "context_log_path": context.log_path,
         "context_files": context_files,

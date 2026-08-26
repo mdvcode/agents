@@ -4,15 +4,18 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,6 +33,9 @@ if str(HARNESS_ROOT) not in sys.path:
 
 from approval_lifecycle import ApprovalError, request_approval
 from ai_harness.model_policy import select_execution_profile
+from ai_harness.economics import BudgetAction, BudgetController, BudgetUsage
+from ai_harness.planning import RolePolicy, TaskAnalyzer, WorkflowCompiler
+from ai_harness.planning.workflow_compiler import COMPILER_VERSION
 from context_compiler import create_context_manifest, role_capability, role_contract
 from repository_registry import RepositoryRecord, find_by_remote, load_local_project_record
 from runtime_contracts import contract_section, load_json, validate_contract
@@ -150,13 +156,14 @@ PROMPT_FILES = {
 }
 DEFAULT_ALLOWED_TOOLS = ["filesystem_read", "repository_search"]
 KNOWN_PROJECT_PROFILES = {"agent_workspace", "django", "nextjs_web"}
-EXECUTION_MODES = {"auto", "fast", "full", "goal"}
+EXECUTION_MODES = {"auto", "adaptive", "fast", "full", "goal"}
 FULL_HINTS = (
     "auth", "permission", "migration", "billing", "payment", "secret", "production", "deploy",
     "database schema", "public api", "dependency", "package upgrade", "architecture", "refactor",
     "авторизац", "разрешен", "миграц", "оплат", "секрет", "продакш", "деплой", "схем",
     "зависимост", "архитектур", "рефактор",
 )
+ADAPTIVE_ACCEPTANCE = ROOT / "evals" / "adaptive_execution_acceptance.json"
 QUESTION_STOP_WORDS = {
     "a",
     "an",
@@ -214,14 +221,244 @@ def select_execution_mode(requested: str, goal: str) -> str:
         return "goal"
     if requested == "full":
         return "full"
+    if requested == "adaptive":
+        return "adaptive"
     if requested == "fast":
         return "fast"
     normalized = goal.casefold()
     if normalized.strip() in {"", "task"}:
         return "full"
+    if adaptive_default_is_accepted():
+        return "adaptive"
     if any(token in normalized for token in FULL_HINTS):
         return "full"
     return "fast"
+
+
+def adaptive_default_is_accepted(path: Path = ADAPTIVE_ACCEPTANCE) -> bool:
+    try:
+        decision = load_json(path)
+        expected_policy = "sha256:" + hashlib.sha256((ROOT / ".agent-role-policy.yaml").read_bytes()).hexdigest()
+        expected_compiler = "sha256:" + hashlib.sha256(
+            (ROOT / "ai_harness" / "planning" / "workflow_compiler.py").read_bytes()
+        ).hexdigest()
+        dataset_path = ROOT / "evals" / "datasets" / "adaptive_execution" / "golden_tasks_v1.json"
+        expected_dataset = "sha256:" + hashlib.sha256(dataset_path.read_bytes()).hexdigest()
+        report_path = Path(str(decision.get("report_path", "")))
+        report_path.resolve().relative_to(RUNS.resolve())
+        expected_report = (
+            "sha256:" + hashlib.sha256(report_path.read_bytes()).hexdigest()
+            if report_path.is_file()
+            else ""
+        )
+        report = load_json(report_path) if report_path.is_file() else {}
+    except (OSError, json.JSONDecodeError, ValueError):
+        return False
+    return bool(
+        isinstance(decision, dict)
+        and decision.get("status") == "pass"
+        and decision.get("adaptive_default_allowed") is True
+        and decision.get("evidence_kind") == "paired_authoritative_runs"
+        and int(decision.get("dataset_cases", 0) or 0) >= 50
+        and decision.get("role_policy_fingerprint") == expected_policy
+        and decision.get("dataset_fingerprint") == expected_dataset
+        and decision.get("report_fingerprint") == expected_report
+        and str(decision.get("compiler_version", "")) == COMPILER_VERSION
+        and decision.get("compiler_fingerprint") == expected_compiler
+        and isinstance(report, dict)
+        and report.get("status") == "pass"
+        and report.get("adaptive_default_allowed") is True
+        and report.get("evidence_kind") == "paired_authoritative_runs"
+    )
+
+
+def accepted_adaptive_eval_success_rate(path: Path = ADAPTIVE_ACCEPTANCE) -> float | None:
+    if not adaptive_default_is_accepted(path):
+        return None
+    try:
+        decision = load_json(path)
+        report_path = Path(str(decision.get("report_path", "")))
+        report = load_json(report_path)
+        value = report.get("metrics", {}).get("adaptive_success_rate")
+        return float(value) if isinstance(value, (int, float)) else None
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def requested_paths_from_goal(goal: str) -> list[str]:
+    """Extract only explicit repository-like paths; analysis is conservative otherwise."""
+
+    candidates = re.findall(
+        r"(?<![\w.-])(?:[\w.-]+/)+[\w.@+-]+(?:\.[A-Za-z0-9_-]+)?",
+        goal,
+    )
+    return sorted({value.strip("`'\".,:;()[]{}") for value in candidates if value.strip()})
+
+
+def available_deterministic_tools(repository: Path, project_profile: str) -> list[str]:
+    """Return capabilities that can actually run in this checkout."""
+
+    capabilities = {"diff_size"} if shutil.which("git") else set()
+    capabilities.add("changed_symbols")
+    capabilities.add("secret_scan")
+    if (
+        project_profile in {"agent_workspace", "django"} and shutil.which("pip-audit")
+    ) or (
+        project_profile == "nextjs_web" and (shutil.which("npm") or shutil.which("bun"))
+    ):
+        capabilities.add("dependency_audit")
+    if shutil.which("pytest") or (repository / "tests").is_dir():
+        capabilities.add("tests")
+    if shutil.which("ruff"):
+        capabilities.update(("format", "lint"))
+    if shutil.which("mypy") or shutil.which("pyright"):
+        capabilities.add("types")
+    if project_profile == "nextjs_web":
+        if shutil.which("bun") or shutil.which("npm"):
+            capabilities.update(("format", "lint", "types", "tests"))
+    if project_profile == "django" and (repository / "manage.py").is_file():
+        capabilities.update(("tests", "django_deploy_check"))
+    return sorted(capabilities)
+
+
+def historical_failure_signals(repository: Path, project_profile: str, *, limit: int = 20) -> list[str]:
+    """Read bounded, repository-matching failure facts from prior authoritative runs."""
+
+    signals: list[str] = []
+    for workflow_path in sorted(RUNS.glob("*/workflow.json"), reverse=True)[:100]:
+        try:
+            value = load_json(workflow_path)
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(value, dict):
+            continue
+        try:
+            same_repository = Path(str(value.get("repository", ""))).resolve() == repository.resolve()
+        except (OSError, RuntimeError):
+            same_repository = False
+        if not same_repository or str(value.get("project_profile", "")) != project_profile:
+            continue
+        failure_kind = str(value.get("failure_kind", "")).strip()
+        if failure_kind:
+            signals.append(f"workflow:{failure_kind}")
+        for checkpoint in reversed(value.get("roles", [])):
+            if not isinstance(checkpoint, dict):
+                continue
+            result = checkpoint.get("result", {})
+            if isinstance(result, dict) and result.get("status") in {"failed", "blocked"}:
+                signals.append(f"role:{checkpoint.get('role', 'unknown')}:{result.get('status')}")
+                break
+        if len(signals) >= limit:
+            break
+    return list(dict.fromkeys(signals))[:limit]
+
+
+def compile_adaptive_execution_plan(
+    *,
+    task_id: str,
+    goal: str,
+    project_profile: str,
+    requested_paths: list[str],
+    repository: Path | None = None,
+    historical_failures: list[str] | None = None,
+) -> dict[str, Any]:
+    checkout = (repository or ROOT).resolve()
+    analysis = TaskAnalyzer().analyze(
+        goal,
+        repository_profile=project_profile,
+        project_type=project_profile,
+        requested_paths=requested_paths,
+        deterministic_tools=available_deterministic_tools(checkout, project_profile),
+        historical_failures=(
+            historical_failures
+            if historical_failures is not None
+            else historical_failure_signals(checkout, project_profile)
+        ),
+    )
+    policy = RolePolicy.load(ROOT / ".agent-role-policy.yaml")
+    return WorkflowCompiler(policy).compile(
+        analysis,
+        task_id=task_id,
+        mode="adaptive",
+        project_profile=project_profile,
+    ).as_dict()
+
+
+def adaptive_parallel_companions(
+    state: dict[str, Any],
+    *,
+    role: str,
+    completed_roles: list[str],
+) -> tuple[str, ...]:
+    """Select only supported deterministic read-only peers from the current DAG frontier."""
+
+    if state.get("effective_mode") != "adaptive":
+        return ()
+    plan_path = Path(str(state.get("execution_plan_path", "")))
+    plan = load_json(plan_path) if plan_path.is_file() else {}
+    if not isinstance(plan, dict):
+        return ()
+    nodes = {
+        str(node.get("id", "")): node
+        for node in plan.get("nodes", [])
+        if isinstance(node, dict)
+    }
+    completed = set(completed_roles)
+    for raw_group in plan.get("parallel_groups", []):
+        if not isinstance(raw_group, list) or role not in raw_group:
+            continue
+        companions: list[str] = []
+        for node_id in raw_group:
+            node = nodes.get(str(node_id), {})
+            candidate = str(node.get("role", node_id))
+            dependencies = {
+                str(value)
+                for value in node.get("dependencies", [])
+                if isinstance(value, str)
+            }
+            if (
+                candidate != role
+                and candidate not in completed
+                and node.get("execution_kind") == "harness_stage"
+                and node.get("read_only") is True
+                and dependencies <= completed
+            ):
+                companions.append(candidate)
+        return tuple(companions)
+    return ()
+
+
+def adaptive_node(state: dict[str, Any], role: str) -> dict[str, Any]:
+    if state.get("effective_mode") != "adaptive":
+        return {}
+    plan_path = Path(str(state.get("execution_plan_path", "")))
+    plan = load_json(plan_path) if plan_path.is_file() else {}
+    if not isinstance(plan, dict):
+        return {}
+    return next(
+        (
+            dict(node)
+            for node in plan.get("nodes", [])
+            if isinstance(node, dict) and str(node.get("role", node.get("id", ""))) == role
+        ),
+        {},
+    )
+
+
+def planned_execution_kind(state: dict[str, Any], role: str) -> str:
+    return str(adaptive_node(state, role).get("execution_kind", role_contract(role).get("execution_kind", "llm_role")))
+
+
+def security_required_checks(state: dict[str, Any]) -> set[str]:
+    node_checks = adaptive_node(state, "security-agent").get("deterministic_checks", [])
+    checks = {str(value) for value in node_checks if isinstance(value, str)}
+    analysis = state.get("task_analysis", {})
+    if isinstance(analysis, dict):
+        if analysis.get("task_class") == "dependency":
+            checks.add("dependency_audit")
+        if analysis.get("requires_security_review") is True:
+            checks.add("secret_scan")
+    return checks
 
 
 def make_run_id(workflow: str) -> str:
@@ -951,6 +1188,38 @@ def prior_role_failed(state: dict[str, Any], role: str) -> bool:
     return False
 
 
+def previous_execution_profile(state: dict[str, Any], role: str) -> str:
+    for entry in reversed(state.get("roles", [])):
+        if not isinstance(entry, dict) or entry.get("role") != role:
+            continue
+        profile = entry.get("execution_profile", {})
+        if isinstance(profile, dict):
+            return str(profile.get("execution_profile", ""))
+    return ""
+
+
+def previous_reasoning_effort(state: dict[str, Any], role: str) -> str:
+    for entry in reversed(state.get("roles", [])):
+        if not isinstance(entry, dict) or entry.get("role") != role:
+            continue
+        profile = entry.get("execution_profile", {})
+        if isinstance(profile, dict):
+            return str(profile.get("reasoning_effort", ""))
+    return ""
+
+
+def model_failure_type(state: dict[str, Any]) -> str:
+    route = state.get("last_route", {})
+    loop = route.get("loop", {}) if isinstance(route, dict) else {}
+    loop_name = str(loop.get("name", "")) if isinstance(loop, dict) else ""
+    if loop_name in {"quality_repair", "ci_repair"}:
+        return "test_failure"
+    failure_kind = str(state.get("failure_kind", ""))
+    if failure_kind == "invalid_output":
+        return "invalid_output"
+    return failure_kind
+
+
 def validate_role_artifacts(
     *,
     role: str,
@@ -1386,6 +1655,36 @@ def run_deterministic_quality(
 ) -> dict[str, Any]:
     commands = profile_required_commands(project_profile, "quality_commands")
     checks = run_bounded_commands(commands, repository, min(timeout_seconds, 180))
+    changed = changed_paths(repository)
+    symbol_names: list[str] = []
+    for relative in changed[:100]:
+        path = repository / relative
+        if path.suffix == ".py" and path.is_file():
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, SyntaxError):
+                continue
+            symbol_names.extend(
+                f"{relative}:{node.name}"
+                for node in ast.walk(tree)
+                if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+            )
+    checks.extend(
+        (
+            {
+                "command": "git diff --numstat",
+                "status": "pass",
+                "returncode": 0,
+                "output": json.dumps({"changed_files": len(changed), "changed_lines": changed_line_count(repository)}),
+            },
+            {
+                "command": "AST changed-symbol inventory",
+                "status": "pass",
+                "returncode": 0,
+                "output": json.dumps(symbol_names[:500], ensure_ascii=False),
+            },
+        )
+    )
     failed = [item for item in checks if item["status"] == "fail"]
     unavailable = [item for item in checks if item["status"] == "unavailable"]
     overall = "fail" if failed else "warn" if unavailable else "pass"
@@ -1414,10 +1713,50 @@ def run_deterministic_quality(
 
 
 def run_deterministic_security(
-    *, project_profile: str, repository: Path, artifacts_dir: Path, timeout_seconds: int
+    *,
+    project_profile: str,
+    repository: Path,
+    artifacts_dir: Path,
+    timeout_seconds: int,
+    required_checks: set[str] | None = None,
 ) -> dict[str, Any]:
     commands = profile_required_commands(project_profile, "security_commands")
+    required = required_checks or set()
+    if "secret_scan" in required:
+        scanner = ROOT / "scripts" / "security_scan.py"
+        commands.append(
+            " ".join(
+                (
+                    shlex.quote(sys.executable),
+                    shlex.quote(str(scanner)),
+                    "--repo",
+                    shlex.quote(str(repository)),
+                    "--profile",
+                    shlex.quote(project_profile),
+                    "--full-repo",
+                )
+            )
+        )
+    dependency_scanner_missing = False
+    if "dependency_audit" in required:
+        if project_profile in {"agent_workspace", "django"} and shutil.which("pip-audit"):
+            commands.append("pip-audit")
+        elif project_profile == "nextjs_web" and shutil.which("npm"):
+            commands.append("npm audit --audit-level=high")
+        elif project_profile == "nextjs_web" and shutil.which("bun"):
+            commands.append("bun audit")
+        else:
+            dependency_scanner_missing = True
     checks = run_bounded_commands(commands, repository, min(timeout_seconds, 180))
+    if dependency_scanner_missing:
+        checks.append(
+            {
+                "command": "dependency vulnerability scanner",
+                "status": "unavailable",
+                "returncode": 127,
+                "output": "dependency change requires pip-audit, npm audit, or bun audit",
+            }
+        )
     failed = [item for item in checks if item["status"] == "fail"]
     unavailable = [item for item in checks if item["status"] == "unavailable"]
     blockers = [f"{item['command']}: {item['output']}" for item in [*failed, *unavailable]]
@@ -1671,24 +2010,42 @@ def run_context_compiler(
     token_budget: int,
     execution_mode: str,
 ) -> dict[str, Any]:
-    if execution_mode == "fast":
+    if execution_mode in {"fast", "adaptive"}:
         ensure_project_profile_artifact(artifacts_dir, project_profile)
         profile = load_json(artifacts_dir / "project_profile.json")
+        execution_plan = (
+            load_json(context_dir.parent / "execution-plan.json")
+            if execution_mode == "adaptive"
+            else {}
+        )
+        analysis = execution_plan.get("analysis", {}) if isinstance(execution_plan, dict) else {}
+        risk_class = str(analysis.get("risk", "low")) if isinstance(analysis, dict) else "low"
+        indicators = list(analysis.get("indicators", [])) if isinstance(analysis, dict) else []
         write_json(
             artifacts_dir / "risk.json",
             {
-                "risk_class": "low",
-                "reasons": ["Provisional fast-mode classification; the actual diff is checked before verification."],
-                "changed_areas": [],
-                "high_risk_triggers": [],
+                "risk_class": risk_class if execution_mode == "adaptive" else "low",
+                "reasons": [
+                    (
+                        "Deterministic Task Analyzer classification; implementation diff and hard gates remain authoritative."
+                        if execution_mode == "adaptive"
+                        else "Provisional fast-mode classification; the actual diff is checked before verification."
+                    )
+                ],
+                "changed_areas": list(analysis.get("domains", [])) if isinstance(analysis, dict) else [],
+                "high_risk_triggers": [
+                    value
+                    for value in indicators
+                    if value in {"auth_change", "permissions_change", "secrets_change", "migration_change"}
+                ],
                 "protected_paths_touched": [],
                 "protected_actions_required": [],
                 "autonomy_allowed": {
                     "patch": True,
-                    "commit": True,
-                    "push": True,
-                    "open_pr": True,
-                    "update_pr": True,
+                    "commit": risk_class != "high",
+                    "push": risk_class != "high",
+                    "open_pr": risk_class != "high",
+                    "update_pr": risk_class != "high",
                     "auto_merge": False,
                     "deploy_staging": False,
                     "deploy_production": False,
@@ -1704,7 +2061,11 @@ def run_context_compiler(
                 project_profile,
                 "",
                 "# MODE",
-                "Guarded fast path. Inspect only files directly relevant to the request using targeted search.",
+                (
+                    "Adaptive deterministic plan. Execute only selected DAG nodes and retain every hard gate."
+                    if execution_mode == "adaptive"
+                    else "Guarded fast path. Inspect only files directly relevant to the request using targeted search."
+                ),
                 "",
                 "# FILES_TO_CHANGE",
                 "Determine the smallest relevant file set; stop if the task expands beyond a narrow local patch.",
@@ -1723,7 +2084,11 @@ def run_context_compiler(
         return {
             "status": "completed",
             "next_action": "implementation-agent",
-            "summary": "Fast context, provisional risk, and project profile were prepared deterministically.",
+            "summary": (
+                "Adaptive context, deterministic risk, and project profile were prepared."
+                if execution_mode == "adaptive"
+                else "Fast context, provisional risk, and project profile were prepared deterministically."
+            ),
             "artifacts_created": ["plan.md", "risk.json", "project_profile.json"],
             "blockers": [],
             "warnings": [],
@@ -1798,6 +2163,154 @@ def run_publication_prepare(
     )
 
 
+def run_adaptive_read_only_verifier(
+    *,
+    runtime: Any,
+    run_dir: Path,
+    state: dict[str, Any],
+    role: str,
+    goal: str,
+    project: str,
+    project_profile: str,
+    repository: Path,
+    artifacts_dir: Path,
+    context_dir: Path,
+    requests_dir: Path,
+    completed_roles: list[str],
+    token_budget: int,
+    timeout_seconds: int,
+    dry_run: bool,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Execute an independent read-only verifier from the current DAG frontier."""
+
+    kind = planned_execution_kind(state, role)
+    plan_path = Path(str(state.get("execution_plan_path", "")))
+    plan = load_json(plan_path) if plan_path.is_file() else {}
+    budget_pressure = False
+    if isinstance(plan, dict):
+        budget_decision = BudgetController.from_plan(plan).assess(
+            BudgetUsage.from_state(state),
+            mandatory_role=bool(adaptive_node(state, role).get("mandatory", False)),
+        )
+        if budget_decision.action == BudgetAction.REQUIRE_APPROVAL:
+            return awaiting_approval_result(
+                "Adaptive task budget is exhausted.",
+                ["Mandatory safety gates remain enabled; approval is required to continue."],
+            ), {"budget_action": budget_decision.as_dict()}
+        if budget_decision.action == BudgetAction.SKIP_OPTIONAL:
+            result = completed_result("Optional verifier skipped near the task budget ceiling.")
+            result["budget_skipped"] = True
+            return result, {"budget_action": budget_decision.as_dict()}
+        budget_pressure = budget_decision.action == BudgetAction.ECONOMY
+    if role == "quality-runner":
+        return run_deterministic_quality(
+            goal=goal,
+            project_profile=project_profile,
+            repository=repository,
+            artifacts_dir=artifacts_dir,
+            timeout_seconds=timeout_seconds,
+        ), {}
+    if role == "security-agent":
+        scanner_result = run_deterministic_security(
+            project_profile=project_profile,
+            repository=repository,
+            artifacts_dir=artifacts_dir,
+            timeout_seconds=timeout_seconds,
+            required_checks=security_required_checks(state),
+        )
+        if kind == "harness_stage" or scanner_result.get("status") != "completed":
+            return scanner_result, {}
+    contract = role_contract(role)
+    context_budgets = plan.get("context_budgets", {}) if isinstance(plan, dict) else {}
+    role_budget = int(context_budgets.get(role, token_budget) or token_budget) if isinstance(context_budgets, dict) else token_budget
+    manifest_path = create_context_manifest(
+        run_id=str(state.get("run_id", run_dir.name)),
+        role=role,
+        goal=goal,
+        repository=repository,
+        artifacts_dir=artifacts_dir,
+        context_dir=context_dir,
+        project=project,
+        project_profile=project_profile,
+        token_budget=role_budget,
+        allowed_tools=role_tools(role),
+        previous_roles=completed_roles,
+        filesystem_access=role_filesystem_access(role),
+        prompt_path=str(contract.get("prompt_path", "")),
+        output_contract=str(contract.get("output_contract", "")),
+        expected_artifacts=list(contract.get("expected_artifacts", [])),
+    )
+    errors = validate_manifest(manifest_path, role)
+    if errors:
+        return blocked_result("Context manifest failed schema validation.", errors), {}
+    preflight = preflight_role_execution(
+        role=role,
+        repository=repository,
+        artifacts_dir=artifacts_dir,
+        project_profile=project_profile,
+        dry_run=dry_run,
+    )
+    if preflight is not None:
+        return preflight, {}
+    manifest = load_json(manifest_path)
+    analysis = plan.get("analysis", {}) if isinstance(plan, dict) else {}
+    profiles = plan.get("model_profiles", {}) if isinstance(plan, dict) else {}
+    budgets = plan.get("budgets", {}) if isinstance(plan, dict) else {}
+    settings = select_execution_profile(
+        role=role,
+        goal=goal,
+        risk_class=str(analysis.get("risk", state.get("risk_class", "low"))) if isinstance(analysis, dict) else str(state.get("risk_class", "low")),
+        changed_files=workflow_changed_files(state, artifacts_dir),
+        changed_lines=changed_line_count(repository),
+        changed_areas=workflow_changed_areas(state, artifacts_dir),
+        repair_iteration=active_repair_iteration(state, role),
+        prior_failure=prior_role_failed(state, role),
+        previous_profile=previous_execution_profile(state, role),
+        previous_reasoning_effort=previous_reasoning_effort(state, role),
+        planned_profile=str(profiles.get(role, "")) if isinstance(profiles, dict) else "",
+        task_complexity=str(analysis.get("scope", "")) if isinstance(analysis, dict) else "",
+        failure_type=model_failure_type(state),
+        context_size=int(manifest.get("context_budget", {}).get("used_tokens", 0) or 0),
+        eval_success_rate=state.get("adaptive_eval_success_rate"),
+        required_capability=(
+            "architecture" if role == "architecture-consistency-agent"
+            else "deep_review" if role == "semantic-conflict-agent"
+            else "security_reasoning" if role == "security-agent"
+            else ""
+        ),
+        repair_count=active_repair_iteration(state, role),
+        budget_pressure=budget_pressure,
+        max_escalations=int(budgets.get("max_model_escalations", 2) or 2) if isinstance(budgets, dict) else 2,
+    )
+    if settings.get("terminal_action") == "human_or_dead_letter":
+        return awaiting_approval_result(
+            "Bounded model escalation is exhausted.",
+            ["Human review is required before retrying or dead-lettering this verifier."],
+        ), settings
+    request = build_role_request(
+        run_id=str(state.get("run_id", run_dir.name)),
+        role=role,
+        goal=goal,
+        repository=repository,
+        artifacts_dir=artifacts_dir,
+        context_manifest=manifest_path,
+        token_budget=role_budget,
+        timeout_seconds=timeout_seconds,
+        project_profile=project_profile,
+        execution_settings=settings,
+    )
+    write_json(requests_dir / f"{role}.json", request)
+    return execute_runtime_observed(
+        runtime,
+        run_dir=run_dir,
+        role=role,
+        context=manifest_path,
+        task=request,
+        worktree=repository,
+        artifacts=artifacts_dir,
+    ), settings
+
+
 def run_roles(
     workflow: str = "full_agent_workflow",
     run_id: str = "",
@@ -1823,7 +2336,7 @@ def run_roles(
         return {
             "run_id": run_id or "invalid-mode",
             "execution_status": "blocked",
-            "blockers": ["mode must be auto, fast, full, or goal"],
+            "blockers": ["mode must be auto, adaptive, fast, full, or goal"],
         }
     graph_metadata = task_graph_metadata()
     run_id = run_id or make_run_id(workflow)
@@ -1946,6 +2459,17 @@ def run_roles(
                 require_clean=False,
             )
             setup_errors.extend(str(item) for item in checkout.get("errors", []))
+        if effective_mode == "adaptive":
+            plan_path = Path(str(state.get("execution_plan_path", "")))
+            if not plan_path.is_file():
+                setup_errors.append("adaptive resume is missing its immutable execution plan")
+            else:
+                plan_value = load_json(plan_path)
+                observed_fingerprint = "sha256:" + hashlib.sha256(
+                    json.dumps(plan_value, sort_keys=True, ensure_ascii=True).encode("utf-8")
+                ).hexdigest()
+                if observed_fingerprint != state.get("execution_plan_fingerprint"):
+                    setup_errors.append("adaptive execution plan changed after run creation")
         role = str(state.pop("resume_role", ""))
         if not role:
             last_route = state.get("last_route", {})
@@ -2052,6 +2576,7 @@ def run_roles(
             "base_branch_sha_before": git_ref_sha(repository, effective_base),
             "base_branch_sha_after": "",
             "budgets": workflow_budgets(workflow, effective_mode),
+            "adaptive_eval_success_rate": accepted_adaptive_eval_success_rate(),
             "loops": initial_loops(),
             "root_run_id": str(graph_metadata.get("root_run_id") or run_id),
             "parent_run_id": str(graph_metadata.get("parent_run_id", "")),
@@ -2071,6 +2596,26 @@ def run_roles(
             "batch_id": str(graph_metadata.get("batch_id", "")),
             "batch_index": int(graph_metadata.get("batch_index", 0) or 0),
         }
+        if effective_mode == "adaptive":
+            requested_paths = [
+                str(value)
+                for value in graph_metadata.get("allowed_paths", [])
+                if isinstance(value, str) and value
+            ] or requested_paths_from_goal(goal)
+            execution_plan = compile_adaptive_execution_plan(
+                task_id=task_id,
+                goal=goal,
+                project_profile=project_profile,
+                requested_paths=requested_paths,
+                repository=repository,
+            )
+            execution_plan_path = layout.root / "execution-plan.json"
+            write_json(execution_plan_path, execution_plan)
+            state["execution_plan_path"] = str(execution_plan_path.resolve())
+            state["execution_plan_fingerprint"] = "sha256:" + hashlib.sha256(
+                json.dumps(execution_plan, sort_keys=True, ensure_ascii=True).encode("utf-8")
+            ).hexdigest()
+            state["task_analysis"] = dict(execution_plan.get("analysis", {}))
         role = ROLE_CHAIN[0]
         append_trace(layout, {"event": "workflow_started", "workflow": workflow, "task_id": task_id})
     child_budget = state.get("child_budget", {})
@@ -2223,7 +2768,80 @@ def run_roles(
         effective_mode = str(state.get("effective_mode", effective_mode))
         used_cached_result = False
         execution_settings: dict[str, Any] = {}
-        if resume_cached_result is not None:
+        parallel_role_results: dict[str, dict[str, Any]] = {}
+        parallel_role_settings: dict[str, dict[str, Any]] = {}
+        role_token_budget = token_budget
+        budget_skipped = False
+        security_llm_required = (
+            role == "security-agent"
+            and effective_mode == "adaptive"
+            and planned_execution_kind(state, role) == "llm_role"
+        )
+        security_preflight: dict[str, Any] | None = None
+        if security_llm_required and resume_cached_result is None:
+            security_preflight = run_deterministic_security(
+                project_profile=project_profile,
+                repository=worktree,
+                artifacts_dir=run_artifacts,
+                timeout_seconds=timeout_seconds,
+                required_checks=security_required_checks(state),
+            )
+        if effective_mode == "adaptive":
+            plan_path = Path(str(state.get("execution_plan_path", "")))
+            execution_plan = load_json(plan_path) if plan_path.is_file() else {}
+            context_budgets = (
+                execution_plan.get("context_budgets", {})
+                if isinstance(execution_plan, dict)
+                else {}
+            )
+            configured_role_budget = (
+                context_budgets.get(role) if isinstance(context_budgets, dict) else None
+            )
+            if isinstance(configured_role_budget, int) and configured_role_budget >= 256:
+                role_token_budget = configured_role_budget
+            if isinstance(execution_plan, dict):
+                state["elapsed_seconds"] = elapsed_before_resume + int(time.monotonic() - workflow_started)
+                approval_override = state.get("approval_override", {})
+                budget_override = (
+                    isinstance(approval_override, dict)
+                    and approval_override.get("gate") == role
+                    and isinstance(state.get("budget_action"), dict)
+                    and state["budget_action"].get("action") == BudgetAction.REQUIRE_APPROVAL.value
+                )
+                if budget_override:
+                    state.pop("approval_override", None)
+                    state["budget_action"] = {
+                        "action": BudgetAction.CONTINUE.value,
+                        "reason": "A scoped one-role budget override was consumed.",
+                        "pressure": 1.0,
+                        "exhausted_dimensions": [],
+                    }
+                else:
+                    budget_decision = BudgetController.from_plan(execution_plan).assess(
+                        BudgetUsage.from_state(state),
+                        mandatory_role=bool(adaptive_node(state, role).get("mandatory", False)),
+                    )
+                    state["budget_action"] = budget_decision.as_dict()
+                write_json(layout.workflow, state)
+        if (
+            effective_mode == "adaptive"
+            and state.get("budget_action", {}).get("action") == BudgetAction.REQUIRE_APPROVAL.value
+        ):
+            result = awaiting_approval_result(
+                "Adaptive task budget is exhausted.",
+                ["Mandatory safety gates remain enabled; approval is required to continue."],
+            )
+        elif (
+            effective_mode == "adaptive"
+            and state.get("budget_action", {}).get("action") == BudgetAction.SKIP_OPTIONAL.value
+            and not bool(adaptive_node(state, role).get("mandatory", False))
+        ):
+            budget_skipped = True
+            state.setdefault("budget_skipped_roles", []).append(role)
+            result = completed_result("Optional role skipped near the immutable task budget ceiling.")
+        elif security_preflight is not None and security_preflight.get("status") != "completed":
+            result = security_preflight
+        elif resume_cached_result is not None:
             result = resume_cached_result
             resume_cached_result = None
             used_cached_result = True
@@ -2277,19 +2895,64 @@ def run_roles(
                 timeout_seconds=timeout_seconds,
             )
         elif role == "quality-runner":
-            result = run_deterministic_quality(
-                goal=goal,
-                project_profile=project_profile,
-                repository=worktree,
-                artifacts_dir=run_artifacts,
-                timeout_seconds=timeout_seconds,
+            companions = adaptive_parallel_companions(
+                state,
+                role=role,
+                completed_roles=completed_roles,
             )
-        elif role == "security-agent":
+            if companions:
+                with ThreadPoolExecutor(max_workers=1 + len(companions), thread_name_prefix="adaptive-verifier") as executor:
+                    quality_future = executor.submit(
+                        run_deterministic_quality,
+                        goal=goal,
+                        project_profile=project_profile,
+                        repository=worktree,
+                        artifacts_dir=run_artifacts,
+                        timeout_seconds=timeout_seconds,
+                    )
+                    verifier_futures = {
+                        companion: executor.submit(
+                            run_adaptive_read_only_verifier,
+                            runtime=runtime,
+                            run_dir=run_dir,
+                            state=dict(state),
+                            role=companion,
+                            goal=goal,
+                            project=project,
+                            project_profile=project_profile,
+                            repository=worktree,
+                            artifacts_dir=run_artifacts,
+                            context_dir=context_dir,
+                            requests_dir=requests_dir,
+                            completed_roles=list(completed_roles),
+                            token_budget=token_budget,
+                            timeout_seconds=timeout_seconds,
+                            dry_run=dry_run,
+                        )
+                        for companion in companions
+                    }
+                    result = quality_future.result()
+                    for companion, future in verifier_futures.items():
+                        companion_result, companion_settings = future.result()
+                        parallel_role_results[companion] = companion_result
+                        parallel_role_settings[companion] = companion_settings
+                        if companion_result.get("budget_skipped") is True:
+                            state.setdefault("budget_skipped_roles", []).append(companion)
+            else:
+                result = run_deterministic_quality(
+                    goal=goal,
+                    project_profile=project_profile,
+                    repository=worktree,
+                    artifacts_dir=run_artifacts,
+                    timeout_seconds=timeout_seconds,
+                )
+        elif role == "security-agent" and not security_llm_required:
             result = run_deterministic_security(
                 project_profile=project_profile,
                 repository=worktree,
                 artifacts_dir=run_artifacts,
                 timeout_seconds=timeout_seconds,
+                required_checks=security_required_checks(state),
             )
         elif role == "reviewer" and not reviewer_requires_llm(state, run_artifacts):
             result = run_deterministic_review(
@@ -2319,7 +2982,7 @@ def run_roles(
                     context_dir=context_dir,
                     project=project,
                     project_profile=project_profile,
-                    token_budget=token_budget,
+                    token_budget=role_token_budget,
                     allowed_tools=role_tools(role),
                     previous_roles=completed_roles,
                     filesystem_access=role_filesystem_access(role),
@@ -2348,6 +3011,33 @@ def run_roles(
                             if isinstance(risk_artifact, dict)
                             else state.get("risk_class", "low")
                         )
+                        context_manifest_value = load_json(manifest_path)
+                        context_budget_value = (
+                            context_manifest_value.get("context_budget", {})
+                            if isinstance(context_manifest_value, dict)
+                            else {}
+                        )
+                        execution_plan_value = (
+                            load_json(Path(str(state.get("execution_plan_path", ""))))
+                            if effective_mode == "adaptive"
+                            and Path(str(state.get("execution_plan_path", ""))).is_file()
+                            else {}
+                        )
+                        planned_profiles = (
+                            execution_plan_value.get("model_profiles", {})
+                            if isinstance(execution_plan_value, dict)
+                            else {}
+                        )
+                        plan_analysis = (
+                            execution_plan_value.get("analysis", {})
+                            if isinstance(execution_plan_value, dict)
+                            else {}
+                        )
+                        plan_budgets = (
+                            execution_plan_value.get("budgets", {})
+                            if isinstance(execution_plan_value, dict)
+                            else {}
+                        )
                         execution_settings = select_execution_profile(
                             role=role,
                             goal=role_goal,
@@ -2357,6 +3047,38 @@ def run_roles(
                             changed_areas=workflow_changed_areas(state, run_artifacts),
                             repair_iteration=active_repair_iteration(state, role),
                             prior_failure=prior_role_failed(state, role),
+                            previous_profile=previous_execution_profile(state, role),
+                            previous_reasoning_effort=previous_reasoning_effort(state, role),
+                            planned_profile=(
+                                str(planned_profiles.get(role, ""))
+                                if isinstance(planned_profiles, dict)
+                                else ""
+                            ),
+                            task_complexity=(
+                                str(plan_analysis.get("scope", ""))
+                                if isinstance(plan_analysis, dict)
+                                else ""
+                            ),
+                            failure_type=model_failure_type(state),
+                            context_size=int(context_budget_value.get("used_tokens", 0) or 0),
+                            eval_success_rate=state.get("adaptive_eval_success_rate"),
+                            required_capability=(
+                                "architecture"
+                                if role == "architecture-consistency-agent"
+                                else "deep_review"
+                                if role == "semantic-conflict-agent"
+                                else ""
+                            ),
+                            budget_pressure=(
+                                isinstance(state.get("budget_action"), dict)
+                                and state["budget_action"].get("action") == "economy"
+                            ),
+                            repair_count=active_repair_iteration(state, role),
+                            max_escalations=(
+                                int(plan_budgets.get("max_model_escalations", 2) or 2)
+                                if isinstance(plan_budgets, dict)
+                                else 2
+                            ),
                         )
                         state["current_execution_profile"] = execution_settings
                         write_json(layout.workflow, state)
@@ -2368,28 +3090,34 @@ def run_roles(
                                 **execution_settings,
                             },
                         )
-                        request = build_role_request(
-                            run_id=run_id,
-                            role=role,
-                            goal=role_goal,
-                            repository=worktree,
-                            artifacts_dir=run_artifacts,
-                            context_manifest=manifest_path,
-                            token_budget=token_budget,
-                            timeout_seconds=min(timeout_seconds, 180) if effective_mode == "fast" else timeout_seconds,
-                            project_profile=project_profile,
-                            execution_settings=execution_settings,
-                        )
-                        write_json(requests_dir / f"{role}.json", request)
-                        result = execute_runtime_observed(
-                            runtime,
-                            run_dir=run_dir,
-                            role=role,
-                            context=manifest_path,
-                            task=request,
-                            worktree=worktree,
-                            artifacts=run_artifacts,
-                        )
+                        if execution_settings.get("terminal_action") == "human_or_dead_letter":
+                            result = awaiting_approval_result(
+                                "Bounded model escalation is exhausted.",
+                                ["Human review is required before retrying or dead-lettering this role."],
+                            )
+                        else:
+                            request = build_role_request(
+                                run_id=run_id,
+                                role=role,
+                                goal=role_goal,
+                                repository=worktree,
+                                artifacts_dir=run_artifacts,
+                                context_manifest=manifest_path,
+                                token_budget=role_token_budget,
+                                timeout_seconds=min(timeout_seconds, 180) if effective_mode == "fast" else timeout_seconds,
+                                project_profile=project_profile,
+                                execution_settings=execution_settings,
+                            )
+                            write_json(requests_dir / f"{role}.json", request)
+                            result = execute_runtime_observed(
+                                runtime,
+                                run_dir=run_dir,
+                                role=role,
+                                context=manifest_path,
+                                task=request,
+                                worktree=worktree,
+                                artifacts=run_artifacts,
+                            )
 
         artifact_limit = load_recovery_policy().runtime_limits.max_artifact_bytes
         used_artifact_bytes = artifact_bytes(run_artifacts, stop_after=artifact_limit)
@@ -2456,7 +3184,14 @@ def run_roles(
             for item in contract.get("expected_artifacts", [])
             if isinstance(item, str)
         ]
-        if role == "context-compiler" and effective_mode == "fast":
+        for parallel_role in parallel_role_results:
+            parallel_contract = role_contract(parallel_role)
+            expected_artifacts.extend(
+                str(item)
+                for item in parallel_contract.get("expected_artifacts", [])
+                if isinstance(item, str)
+            )
+        if role == "context-compiler" and effective_mode in {"fast", "adaptive"}:
             expected_artifacts.extend(["plan.md", "risk.json", "project_profile.json"])
         owned_patterns = [
             str(item)
@@ -2481,7 +3216,7 @@ def run_roles(
                 "Read-only role changed repository contents.",
                 [f"{role} changed task worktree code despite {role_filesystem_access(role)} access"],
             )
-        if result.get("status") == "completed":
+        if result.get("status") == "completed" and not budget_skipped:
             artifact_errors = validate_role_artifacts(
                 role=role,
                 result=result,
@@ -2501,7 +3236,7 @@ def run_roles(
         checkpoint = {
             "time": datetime.now(timezone.utc).isoformat(),
             "role": role,
-            "execution_kind": str(role_contract(role).get("execution_kind", "llm_role")),
+            "execution_kind": planned_execution_kind(state, role),
             "llm_invoked": bool(execution_settings) and not used_cached_result,
             "prompt_file": PROMPT_FILES.get(role, ""),
             "prompt": role_prompt(role),
@@ -2514,6 +3249,57 @@ def run_roles(
             completed_roles.append(role)
         write_json(layout.role_results / f"{role}-{role_visits[role]}.json", checkpoint)
         append_trace(layout, {"event": "role_completed", "role": role, "result": result})
+        for parallel_role, parallel_result in parallel_role_results.items():
+            parallel_errors = validate_role_result(parallel_result, parallel_role)
+            if (
+                not parallel_errors
+                and parallel_result.get("status") == "completed"
+                and parallel_result.get("budget_skipped") is not True
+            ):
+                parallel_errors = validate_role_artifacts(
+                    role=parallel_role,
+                    result=parallel_result,
+                    artifacts_dir=run_artifacts,
+                    worktree=worktree,
+                    source_repository=repository,
+                    source_snapshot_before=source_snapshot_before,
+                    create_task_worktree=create_task_worktree,
+                )
+            if parallel_errors:
+                parallel_result = blocked_result(
+                    f"Parallel role {parallel_role} failed validation.",
+                    parallel_errors,
+                )
+            parallel_result.setdefault("duration_ms", int((time.monotonic() - role_started) * 1000))
+            role_visits[parallel_role] = role_visits.get(parallel_role, 0) + 1
+            parallel_checkpoint = {
+                "time": datetime.now(timezone.utc).isoformat(),
+                "role": parallel_role,
+                "execution_kind": planned_execution_kind(state, parallel_role),
+                "llm_invoked": bool(parallel_role_settings.get(parallel_role, {}).get("execution_profile")),
+                "prompt_file": PROMPT_FILES.get(parallel_role, ""),
+                "prompt": role_prompt(parallel_role),
+                "parallel_group": [role, parallel_role],
+                "result": parallel_result,
+            }
+            if parallel_role_settings.get(parallel_role):
+                parallel_checkpoint["execution_profile"] = parallel_role_settings[parallel_role]
+            state["roles"].append(parallel_checkpoint)
+            if parallel_result.get("status") == "completed":
+                completed_roles.append(parallel_role)
+            write_json(
+                layout.role_results / f"{parallel_role}-{role_visits[parallel_role]}.json",
+                parallel_checkpoint,
+            )
+            append_trace(
+                layout,
+                {
+                    "event": "parallel_role_completed",
+                    "role": parallel_role,
+                    "parallel_with": role,
+                    "result": parallel_result,
+                },
+            )
         if isinstance(result.get("_failure"), dict):
             pending_path = layout.role_results / f"{role}-pending.json"
             if pending_path.exists():
