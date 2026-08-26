@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sys
 import threading
 import time
@@ -191,6 +192,197 @@ def test_metrics_derive_latency_cost_retries_loops_pr_time_and_failures(tmp_path
     assert metrics["latency"]["queue_wait_seconds"]["samples"] == 1
 
 
+def test_metrics_project_execution_plan_and_efficiency_for_run(tmp_path: Path) -> None:
+    runs = tmp_path / ".agent-runs"
+    run = runs / "adaptive-run"
+    write_json(
+        run / "workflow.json",
+        {
+            "run_id": "adaptive-run",
+            "task_id": "fix-login",
+            "project": "agent_workspace",
+            "effective_mode": "adaptive",
+            "execution_status": "completed",
+            "elapsed_seconds": 258,
+            "roles": [
+                {
+                    "role": "implementation-agent",
+                    "llm_invoked": True,
+                    "execution_profile": {"execution_profile": "balanced", "model": "gpt-balanced"},
+                    "result": {"status": "completed"},
+                },
+                {
+                    "role": "quality-runner",
+                    "llm_invoked": False,
+                    "result": {"status": "completed"},
+                },
+            ],
+        },
+    )
+    write_json(
+        run / "execution-plan.json",
+        {
+            "workflow_version": 1,
+            "analysis": {"task_class": "bugfix", "scope": "small", "risk": "low"},
+            "nodes": [
+                {
+                    "id": "implementation-agent",
+                    "role": "implementation-agent",
+                    "execution_kind": "llm_role",
+                    "mandatory": True,
+                    "model_profile": "balanced",
+                    "deterministic_checks": [],
+                    "reason": "code change",
+                },
+                {
+                    "id": "quality-runner",
+                    "role": "quality-runner",
+                    "execution_kind": "harness_stage",
+                    "mandatory": True,
+                    "model_profile": "",
+                    "deterministic_checks": ["lint", "tests"],
+                    "reason": "deterministic gate",
+                },
+            ],
+            "skipped_roles": ["planner", "architecture-consistency-agent"],
+            "model_profiles": {"implementation-agent": "balanced"},
+            "reasoning": {"planner": "small task"},
+        },
+    )
+    write_json(
+        run / "metrics.json",
+        {
+            "model_calls_per_task": 1,
+            "input_tokens_per_task": 66_031,
+            "uncached_input_tokens_per_task": 24_821,
+            "output_tokens_per_task": 3_200,
+            "context_cache_hit_rate": 0.62,
+            "roles_executed_per_task": 2,
+            "roles_skipped_per_task": 2,
+            "model_escalations_per_task": 0,
+            "repair_attempts_per_task": 1,
+            "time_to_success": 258,
+            "roles": [{"role": "implementation-agent", "model": "gpt-balanced"}],
+        },
+    )
+
+    metrics = collect_metrics(runs_dir=runs, db_path=tmp_path / "queue.db")
+
+    detail = metrics["runs"]["items"][0]["adaptive"]
+    assert detail["mode"] == "adaptive"
+    assert detail["task_class"] == "bugfix"
+    assert detail["efficiency"]["cached_input_tokens"] == 41_210
+    assert detail["efficiency"]["repair_loops"] == 1
+    nodes = {item["role"]: item for item in detail["execution_plan"]}
+    assert nodes["quality-runner"]["deterministic"] is True
+    assert nodes["implementation-agent"]["model_profile"] == "balanced"
+    assert nodes["planner"]["state"] == "skipped"
+
+
+def test_metrics_read_only_fingerprint_verified_adaptive_acceptance(tmp_path: Path) -> None:
+    runs = tmp_path / ".agent-runs"
+    report_path = runs / "eval-run" / "adaptive-ab-report.json"
+    report = {
+        "schema_version": 1,
+        "kind": "adaptive_ab_acceptance",
+        "status": "pass",
+        "adaptive_default_allowed": True,
+        "evidence_kind": "paired_authoritative_runs",
+        "paired_tasks": 50,
+        "acceptance_summary": [
+            {"key": "model_calls", "label": "Model calls", "value": -47, "unit": "percent", "status": "pass"}
+        ],
+        "comparison": [
+            {
+                "key": "model_calls_per_task",
+                "label": "Model Calls / Task",
+                "full": 8.4,
+                "adaptive": 4.6,
+                "delta": -45.2,
+                "format": "number",
+                "delta_format": "percent_change",
+            }
+        ],
+        "breakdowns": {"scope": [{"value": "small", "paired_tasks": 10, "comparison": []}]},
+        "pairs": [{"case_id": "bug-01", "full": {"scope": "small"}, "adaptive": {"scope": "small"}}],
+        "blockers": [],
+    }
+    write_json(report_path, report)
+    fingerprint = "sha256:" + hashlib.sha256(report_path.read_bytes()).hexdigest()
+    decision_path = tmp_path / "adaptive_execution_acceptance.json"
+    write_json(
+        decision_path,
+        {
+            "schema_version": 1,
+            "status": "pass",
+            "adaptive_default_allowed": True,
+            "dataset_cases": 50,
+            "evidence_kind": "paired_authoritative_runs",
+            "report_path": str(report_path),
+            "report_fingerprint": fingerprint,
+            "blockers": [],
+        },
+    )
+
+    accepted = collect_metrics(
+        runs_dir=runs,
+        db_path=tmp_path / "queue.db",
+        adaptive_acceptance_path=decision_path,
+    )["adaptive"]
+    assert accepted["display_status"] == "PASS"
+    assert accepted["overall"] == "READY FOR DEFAULT"
+    assert accepted["comparison"][0]["delta"] == -45.2
+    assert accepted["pairs"][0]["case_id"] == "bug-01"
+
+    report_path.write_text(report_path.read_text(encoding="utf-8") + " ", encoding="utf-8")
+    stale = collect_metrics(
+        runs_dir=runs,
+        db_path=tmp_path / "queue.db",
+        adaptive_acceptance_path=decision_path,
+    )["adaptive"]
+    assert stale["display_status"] == "NOT ENOUGH DATA"
+    assert stale["adaptive_default_allowed"] is False
+    assert stale["comparison"] == []
+
+    write_json(
+        decision_path,
+        {
+            "schema_version": 1,
+            "status": "fail",
+            "adaptive_default_allowed": False,
+            "dataset_cases": 50,
+            "report_path": "",
+            "blockers": ["median_duration_reduced_25_percent"],
+        },
+    )
+    rejected = collect_metrics(
+        runs_dir=runs,
+        db_path=tmp_path / "queue.db",
+        adaptive_acceptance_path=decision_path,
+    )["adaptive"]
+    assert rejected["display_status"] == "FAIL"
+    assert rejected["overall"] == "NOT READY"
+
+    write_json(
+        decision_path,
+        {
+            "schema_version": 1,
+            "status": "not_evaluated",
+            "adaptive_default_allowed": False,
+            "dataset_cases": "invalid",
+            "report_path": "",
+            "blockers": [],
+        },
+    )
+    malformed = collect_metrics(
+        runs_dir=runs,
+        db_path=tmp_path / "queue.db",
+        adaptive_acceptance_path=decision_path,
+    )["adaptive"]
+    assert malformed["display_status"] == "NOT ENOUGH DATA"
+    assert malformed["dataset_cases"] == 0
+
+
 def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) -> None:
     runs = tmp_path / ".agent-runs"
     awaiting_run(runs, tmp_path)
@@ -254,6 +446,19 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         assert "question.options" in dashboard
         assert "answers:{}" in dashboard
         assert "contains(document.activeElement)" in dashboard
+        assert 'id="adaptivePanel"' in dashboard
+        assert "Adaptive Acceptance" in dashboard
+        assert 'id="adaptiveComparison"' in dashboard
+        assert 'id="adaptiveTaskClass"' in dashboard
+        assert 'id="adaptiveScope"' in dashboard
+        assert 'id="adaptiveRisk"' in dashboard
+        assert 'id="adaptiveRepository"' in dashboard
+        assert 'id="adaptiveModel"' in dashboard
+        assert 'id="adaptiveRole"' in dashboard
+        assert 'id="adaptiveOutcome"' in dashboard
+        assert 'id="adaptiveMode"' in dashboard
+        assert "Execution plan & efficiency" in dashboard
+        assert "model_calls_reduced_40_percent" not in dashboard
         assert "api-run" not in dashboard
 
         config = api_request(f"{base}/config", access_key)
@@ -277,6 +482,7 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
             },
         )
         metrics = api_request(f"{base}/metrics", access_key)
+        adaptive = api_request(f"{base}/adaptive", access_key)
         traces = api_request(f"{base}/traces", access_key)
     finally:
         server.shutdown()
@@ -288,6 +494,7 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
     assert resumed["queue_task"]["run_id"] == "api-run"
     assert task["envelope"]["source"] == "api"
     assert metrics["queue"]["counts"]["queued"] == 2
+    assert adaptive["display_status"] in {"PASS", "FAIL", "NOT ENOUGH DATA"}
     assert traces["count"] == 0
 
 

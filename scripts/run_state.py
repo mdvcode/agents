@@ -300,6 +300,7 @@ def write_metrics(layout: RunLayout, state: dict[str, Any]) -> None:
             "model_calls_per_successful_task": model_calls if completed else 0,
             "input_tokens_per_task": input_tokens,
             "uncached_input_tokens_per_task": uncached_input_tokens,
+            "output_tokens_per_task": output_tokens,
             "cached_input_ratio": (
                 round(cached_input_tokens / input_tokens, 6) if input_tokens else 0.0
             ),

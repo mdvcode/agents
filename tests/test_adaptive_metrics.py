@@ -47,5 +47,6 @@ def test_efficiency_metrics_use_executed_checks_approval_events_and_pr_time(tmp_
 
     assert metrics["deterministic_checks_per_task"] == 3
     assert metrics["human_interventions_per_task"] == 1
+    assert metrics["output_tokens_per_task"] == 20
     assert metrics["time_to_accepted_pr"] == 42
     assert metrics["successful_task_token_cost"] == 95

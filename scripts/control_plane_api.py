@@ -222,6 +222,8 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.OK, {"status": "ok", "service": metrics["service"]})
             elif path == "/metrics":
                 self.send_json(HTTPStatus.OK, metrics)
+            elif path == "/adaptive":
+                self.send_json(HTTPStatus.OK, metrics["adaptive"])
             elif path == "/config":
                 self.send_json(
                     HTTPStatus.OK,

@@ -64,6 +64,16 @@ def test_adaptive_ab_acceptance_requires_each_non_compensating_threshold() -> No
 
     assert accepted["status"] == "pass"
     assert accepted["adaptive_default_allowed"] is True
+    assert accepted["acceptance_summary"][0] == {
+        "key": "model_calls",
+        "label": "Model calls",
+        "value": -50.0,
+        "unit": "percent",
+        "status": "pass",
+    }
+    comparison = {item["key"]: item for item in accepted["comparison"]}
+    assert comparison["model_calls_per_task"]["delta"] == -50.0
+    assert comparison["security_gate_misses"]["required_adaptive_value"] == 0
     assert rejected["status"] == "fail"
     assert rejected["adaptive_default_allowed"] is False
     assert "security_sensitive_misses_zero" in rejected["blockers"]
@@ -92,7 +102,13 @@ def test_paired_ab_collector_reads_authoritative_run_artifacts(tmp_path: Path) -
             }
             metrics = {
                 "model_calls_per_task": calls,
+                "input_tokens_per_task": tokens + 40_000,
                 "uncached_input_tokens_per_task": tokens,
+                "output_tokens_per_task": 10_000 if mode == "full" else 7_000,
+                "context_cache_hit_rate": 0.2 if mode == "full" else 0.6,
+                "roles_executed_per_task": 10 if mode == "full" else 6,
+                "roles_skipped_per_task": 0 if mode == "full" else 4,
+                "model_escalations_per_task": 0,
                 "time_to_success": duration,
                 "repair_attempts_per_task": 0,
                 "human_interventions_per_task": int(case["expected_risk"] == "high"),
@@ -115,3 +131,6 @@ def test_paired_ab_collector_reads_authoritative_run_artifacts(tmp_path: Path) -
     assert report["evidence_kind"] == "paired_authoritative_runs"
     assert report["dataset_cases"] == 50
     assert len(report["pairs"]) == 50
+    assert report["comparison"][0]["key"] == "task_success_rate"
+    assert report["breakdowns"]["scope"]
+    assert report["pairs"][0]["adaptive"]["cached_input_tokens"] == 40_000
