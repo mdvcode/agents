@@ -10,5 +10,6 @@ dist/
 .agent-runs/
 .agent-worktrees/
 .agent-queue/
+.agent-cache/
 tmp/
 output/

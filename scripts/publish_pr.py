@@ -90,6 +90,9 @@ class CommandRunner:
 
 @dataclass
 class PublicationResult:
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    pr_published_at: str = ""
+    completed_at: str = ""
     execution_status: str = "planned"
     target_repository: str = ""
     worktree: str = ""
@@ -124,6 +127,9 @@ class PublicationResult:
         if self.pr_created_or_updated:
             completed_steps.append("pr")
         return {
+            "created_at": self.created_at,
+            "pr_published_at": self.pr_published_at,
+            "completed_at": self.completed_at,
             "run_id": self.run_id,
             "task_id": self.task_id,
             "execution_status": self.execution_status,
@@ -1624,9 +1630,11 @@ class Publisher:
                     self.finalize(worktree, publication, profile_name, post_comment=False)
                     return publication
                 publication.execution_status = "pr_published"
+                publication.pr_published_at = datetime.now(timezone.utc).isoformat()
                 self.write_runtime_state(publication)
 
             publication.execution_status = "completed"
+            publication.completed_at = datetime.now(timezone.utc).isoformat()
             self.finalize(worktree, publication, profile_name, post_comment=True)
             try:
                 if publication.execution_status == "completed" and publication.worktree:

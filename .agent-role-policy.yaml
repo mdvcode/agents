@@ -1,0 +1,157 @@
+version: "1"
+confidence_threshold: 0.75
+
+full_chain:
+  - issue-intake
+  - context-compiler
+  - planner
+  - risk-classifier
+  - implementation-agent
+  - test-generator
+  - quality-runner
+  - security-agent
+  - frontend-qa-agent
+  - architecture-consistency-agent
+  - semantic-conflict-agent
+  - reviewer
+  - orchestrator
+  - publication-prepare
+
+adaptive_candidates:
+  - issue-intake
+  - context-compiler
+  - planner
+  - risk-classifier
+  - implementation-agent
+  - test-generator
+  - quality-runner
+  - security-agent
+  - frontend-qa-agent
+  - architecture-consistency-agent
+  - semantic-conflict-agent
+  - reviewer
+  - orchestrator
+  - publication-prepare
+
+hard_gate_roles:
+  - issue-intake
+  - context-compiler
+  - implementation-agent
+  - quality-runner
+  - security-agent
+  - reviewer
+  - orchestrator
+  - publication-prepare
+
+roles:
+  issue-intake:
+    mandatory: true
+    read_only: true
+    execution_kind: harness_stage
+  context-compiler:
+    mandatory: true
+    read_only: true
+    execution_kind: harness_stage
+  planner:
+    required_when: ["scope:medium", "scope:large", "task_class:architecture", "task_class:multi_repo"]
+    skip_when: [documentation_only, tests_only, trivial_change]
+    read_only: true
+    execution_kind: llm_role
+  risk-classifier:
+    required_when: []
+    skip_when: [low_risk_local_change]
+    read_only: true
+    execution_kind: llm_role
+  implementation-agent:
+    mandatory: true
+    read_only: false
+    execution_kind: llm_role
+  test-generator:
+    required_when: ["scope:medium", "scope:large"]
+    skip_when: [documentation_only, trivial_change]
+    read_only: false
+    execution_kind: llm_role
+  quality-runner:
+    mandatory: true
+    read_only: true
+    execution_kind: harness_stage
+  security-agent:
+    mandatory: true
+    required_when: [auth_change, permissions_change, secrets_change, dependency_change, network_boundary_change]
+    deterministic_only_when: [deterministic_security_sufficient]
+    read_only: true
+    execution_kind: llm_role
+  frontend-qa-agent:
+    required_when: [frontend_verification_required, frontend_change, template_change, css_change, browser_behavior_change]
+    skip_when: [documentation_only, tests_only]
+    read_only: true
+    execution_kind: llm_role
+  architecture-consistency-agent:
+    required_when: [architecture_review_required, architecture_change, public_interface_change, cross_module_refactor, dependency_boundary_change]
+    skip_when: [documentation_only, tests_only, trivial_change]
+    read_only: true
+    execution_kind: llm_role
+  semantic-conflict-agent:
+    required_when: [semantic_review_required, public_behavior_change, complex_refactor, contract_change]
+    skip_when: [documentation_only, tests_only, trivial_change]
+    read_only: true
+    execution_kind: llm_role
+  reviewer:
+    mandatory: true
+    read_only: true
+    execution_kind: llm_role
+  orchestrator:
+    mandatory: true
+    read_only: true
+    execution_kind: harness_stage
+  publication-prepare:
+    mandatory: true
+    read_only: true
+    execution_kind: harness_stage
+
+context_budgets:
+  planner: 12000
+  risk-classifier: 6000
+  implementation-agent: 16000
+  test-generator: 10000
+  reviewer: 10000
+  security-agent: 8000
+  frontend-qa-agent: 8000
+  architecture-consistency-agent: 10000
+  semantic-conflict-agent: 10000
+  report-agent: 4000
+
+task_budgets:
+  trivial:
+    max_model_calls: 3
+    max_uncached_input_tokens: 24000
+    max_output_tokens: 8000
+    max_duration_seconds: 900
+    max_repair_attempts: 1
+    max_model_escalations: 1
+  small:
+    max_model_calls: 5
+    max_uncached_input_tokens: 48000
+    max_output_tokens: 16000
+    max_duration_seconds: 1200
+    max_repair_attempts: 2
+    max_model_escalations: 1
+  medium:
+    max_model_calls: 8
+    max_uncached_input_tokens: 80000
+    max_output_tokens: 25000
+    max_duration_seconds: 1800
+    max_repair_attempts: 3
+    max_model_escalations: 2
+  large:
+    max_model_calls: 16
+    max_uncached_input_tokens: 180000
+    max_output_tokens: 60000
+    max_duration_seconds: 3600
+    max_repair_attempts: 4
+    max_model_escalations: 2
+
+deterministic_checks:
+  agent_workspace: [format, lint, types, tests, secret_scan, dependency_audit, diff_size, changed_symbols]
+  django: [format, lint, types, tests, secret_scan, dependency_audit, django_deploy_check, changed_symbols]
+  nextjs_web: [format, lint, types, tests, secret_scan, dependency_audit, diff_size, changed_symbols]

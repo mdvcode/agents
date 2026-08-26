@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from ai_harness.context import (
+    Context,
+    ContextCache,
+    ContextCacheKey,
     ContextBudget,
     ContextBuilder,
     ContextEngine,
@@ -20,7 +24,10 @@ from ai_harness.context import (
     RuleBasedRetriever,
     estimate_tokens,
 )
+from ai_harness.context.cache import repository_fingerprints
 from ai_harness.context.sources import ObsidianSource
+from ai_harness.context.deduplication import deduplicate_documents
+from scripts.context_compiler import create_context_manifest
 
 
 def write(path: Path, content: str) -> None:
@@ -187,3 +194,197 @@ def test_context_engine_accepts_alternate_retriever_without_api_change(tmp_path:
 def test_memory_manager_is_interface_only() -> None:
     with pytest.raises(TypeError):
         MemoryManager()
+
+
+def test_context_cache_hits_and_invalidates_only_when_selected_sources_change(tmp_path: Path) -> None:
+    control = tmp_path / "control"
+    repository = tmp_path / "repository"
+    prepare_control_root(control)
+    write(repository / "README.md", "# Project\nStable overview.\n")
+    write(repository / "module.py", "VALUE = 1\n")
+    engine = ContextEngine.default(
+        control_root=control,
+        project="example",
+        project_profile="agent_workspace",
+        repository=repository,
+        token_budget=2000,
+    )
+
+    first = engine.build("Update project overview", repository, "planner", "runtime")
+    second = engine.build("Update project overview", repository, "planner", "runtime")
+    write(repository / "module.py", "VALUE = 2\n")
+    compatible = engine.build("Update project overview", repository, "planner", "runtime")
+    write(repository / "README.md", "# Project\nChanged authoritative overview.\n")
+    rebuilt = engine.build("Update project overview", repository, "planner", "runtime")
+
+    assert first.log["cache"]["status"] == "miss"  # type: ignore[index]
+    assert second.log["cache"]["status"] == "hit"  # type: ignore[index]
+    assert compatible.log["cache"]["status"] == "compatible_hit"  # type: ignore[index]
+    assert rebuilt.log["cache"]["status"] == "miss"  # type: ignore[index]
+    assert "Changed authoritative overview" in rebuilt.package
+
+
+def test_context_cache_path_invalidation_is_selective(tmp_path: Path) -> None:
+    cache = ContextCache(tmp_path / "cache")
+    first_key = ContextCacheKey("head", "dirty-a", "planner", "query-a", "profile", "policy", "1")
+    second_key = ContextCacheKey("head", "dirty-b", "reviewer", "query-b", "profile", "policy", "1")
+
+    def cached(path: str) -> Context:
+        return Context(
+            package=f"context for {path}",
+            selected=(),
+            excluded=(),
+            token_budget=1000,
+            tokens_used=10,
+            log={"selected": [{"id": path, "source": "repository_documentation", "path": path}]},
+        )
+
+    cache.put(first_key, cached("docs/one.md"), source_fingerprints={"docs/one.md": "one"})
+    cache.put(second_key, cached("docs/two.md"), source_fingerprints={"docs/two.md": "two"})
+
+    removed = cache.invalidate_paths({"docs/one.md"})
+
+    assert removed == (first_key.digest,)
+    assert cache.get(first_key) is None
+    assert cache.get(second_key) is not None
+
+
+def test_context_engine_deduplicates_near_identical_sources(tmp_path: Path) -> None:
+    duplicate = "Policy requires bounded deterministic verification and explicit approval."
+    first = KnowledgeDocument(
+        id="policy",
+        title="Policy",
+        content=duplicate,
+        source="policy",
+        path="policy.md",
+        knowledge_type=KnowledgeType.POLICY,
+        document_type=DocumentType.POLICY,
+        priority=100,
+    )
+    second = KnowledgeDocument(
+        id="copy",
+        title="Policy copy",
+        content=duplicate + "\n",
+        source="report",
+        path="report.md",
+        knowledge_type=KnowledgeType.DOCUMENTATION,
+        document_type=DocumentType.PROJECT_DOC,
+        priority=20,
+    )
+
+    class DuplicateSource:
+        name = "duplicates"
+
+        def collect(self, request: KnowledgeRequest) -> tuple[KnowledgeDocument, ...]:
+            return first, second
+
+    engine = ContextEngine(
+        sources=(DuplicateSource(),),
+        project="example",
+        project_profile="agent_workspace",
+        builder=ContextBuilder(ContextBudget(total_tokens=1000)),
+    )
+
+    context = engine.build("deterministic verification", tmp_path, "reviewer", "runtime")
+
+    assert context.package.count("Policy requires bounded") == 1
+    assert context.log["deduplication"]["removed_count"] == 1  # type: ignore[index]
+
+
+def test_dirty_fingerprint_tracks_untracked_file_content_with_spaces(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+    subprocess.run(["git", "config", "user.email", "tests@example.invalid"], cwd=repository, check=True)
+    subprocess.run(["git", "config", "user.name", "Tests"], cwd=repository, check=True)
+    write(repository / "tracked.txt", "tracked\n")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-qm", "initial"], cwd=repository, check=True)
+    untracked = repository / "notes with spaces.md"
+    write(untracked, "first\n")
+
+    first = repository_fingerprints(repository)
+    write(untracked, "second\n")
+    second = repository_fingerprints(repository)
+
+    assert first[0] == second[0]
+    assert first[1] != second[1]
+
+
+def test_dedup_prefers_new_authoritative_artifact_and_removes_superseded_copy() -> None:
+    old = KnowledgeDocument(
+        id="old-plan",
+        title="Old plan",
+        content="Use the old sequence.",
+        source="report",
+        path="report-plan.md",
+        knowledge_type=KnowledgeType.DOCUMENTATION,
+        document_type=DocumentType.PROJECT_DOC,
+        priority=80,
+    )
+    current = KnowledgeDocument(
+        id="current-plan",
+        title="Current plan",
+        content="Use the authoritative sequence.",
+        source="run_artifacts",
+        path="plan.md",
+        knowledge_type=KnowledgeType.ARTIFACT,
+        document_type=DocumentType.ARTIFACT,
+        priority=90,
+        metadata={"authoritative": "true", "created_at": "2026-08-26T12:00:00+00:00", "supersedes": "old-plan"},
+    )
+
+    kept, removed = deduplicate_documents((old, current))
+
+    assert [item.id for item in kept] == ["current-plan"]
+    assert [item.id for item in removed] == ["old-plan"]
+
+
+def test_context_manifest_contains_real_artifact_failure_and_decision_delta(tmp_path: Path) -> None:
+    control = tmp_path / "control"
+    repository = tmp_path / "repository"
+    run = control / ".agent-runs" / "run"
+    artifacts = run / "artifacts"
+    context_dir = run / "context-manifests"
+    prepare_control_root(control)
+    write(repository / "README.md", "# Project\n")
+    write(artifacts / "plan.md", "# Plan v1\n")
+    write(run / "workflow.json", json.dumps({"last_route": {"next_role": "reviewer"}}))
+    write(run / "errors.jsonl", json.dumps({"code": "FIRST"}) + "\n")
+    first = create_context_manifest(
+        run_id="run",
+        role="planner",
+        goal="Update project",
+        repository=repository,
+        artifacts_dir=artifacts,
+        context_dir=context_dir,
+        project="example",
+        project_profile="agent_workspace",
+        token_budget=2000,
+        allowed_tools=[],
+        previous_roles=[],
+    )
+    assert first.is_file()
+    write(artifacts / "plan.md", "# Plan v2\n")
+    write(artifacts / "quality.json", json.dumps({"overall_status": "pass"}))
+    write(run / "errors.jsonl", json.dumps({"code": "FIRST"}) + "\n" + json.dumps({"code": "SECOND"}) + "\n")
+
+    second = create_context_manifest(
+        run_id="run",
+        role="reviewer",
+        goal="Update project",
+        repository=repository,
+        artifacts_dir=artifacts,
+        context_dir=context_dir,
+        project="example",
+        project_profile="agent_workspace",
+        token_budget=2000,
+        allowed_tools=[],
+        previous_roles=["planner"],
+    )
+    manifest = json.loads(second.read_text(encoding="utf-8"))
+
+    assert manifest["runtime_delta"]["from_role"] == "planner"
+    assert set(manifest["runtime_delta"]["changed_artifacts"]) == {"plan.md", "quality.json"}
+    assert len(manifest["runtime_delta"]["new_failures"]) == 1
+    assert manifest["context_layers"]["delta"]

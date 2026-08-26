@@ -8,6 +8,15 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .builder import ContextBudget, ContextBuilder
+from .cache import (
+    ContextCache,
+    ContextCacheKey,
+    document_fingerprints,
+    fingerprint_text,
+    repository_fingerprints,
+    version_fingerprint,
+)
+from .deduplication import deduplicate_documents
 from .logging import ContextLogger, JsonlContextLogger, attach_log
 from .models import Context, KnowledgeDocument, KnowledgeRequest
 from .retrieval import Retriever, RuleBasedRetriever
@@ -21,6 +30,7 @@ from .sources import (
     ProjectProfileSource,
     RepositoryDocumentationSource,
     RepositoryMetadataSource,
+    RuntimeDeltaSource,
     SkillSource,
 )
 
@@ -55,6 +65,11 @@ class ContextEngine:
         retriever: Retriever | None = None,
         builder: ContextBuilder | None = None,
         logger: ContextLogger | None = None,
+        cache: ContextCache | None = None,
+        project_profile_version: str = "",
+        policy_version: str = "",
+        compiler_version: str = "1",
+        cache_query_salt: str = "",
     ) -> None:
         self.sources = tuple(sources)
         self.project = project
@@ -62,6 +77,11 @@ class ContextEngine:
         self.retriever = retriever or RuleBasedRetriever()
         self.builder = builder or ContextBuilder()
         self.logger = logger
+        self.cache = cache
+        self.project_profile_version = project_profile_version
+        self.policy_version = policy_version
+        self.compiler_version = compiler_version
+        self.cache_query_salt = cache_query_salt
 
     @classmethod
     def default(
@@ -75,6 +95,8 @@ class ContextEngine:
         obsidian_vaults: Sequence[Path] = (),
         repository: Path | None = None,
         token_budget: int = 12_000,
+        runtime_delta: str = "",
+        cache_query_salt: str = "",
     ) -> "ContextEngine":
         repository_root = repository.resolve() if repository is not None else control_root.resolve()
         sources: list[KnowledgeSource] = [
@@ -88,8 +110,20 @@ class ContextEngine:
         ]
         if artifacts_dir is not None:
             sources.append(ArtifactSource(artifacts_dir))
+        if runtime_delta.strip():
+            sources.append(RuntimeDeltaSource(runtime_delta))
         sources.append(ObsidianSource.discover(repository_root, obsidian_vaults))
         logger = JsonlContextLogger(context_log_path) if context_log_path is not None else None
+        project_profile_version = version_fingerprint(
+            (control_root.resolve() / ".agent-project-profiles.yaml",)
+        )
+        policy_version = version_fingerprint(
+            (
+                control_root.resolve() / ".agent-policy.yaml",
+                control_root.resolve() / ".agent-role-policy.yaml",
+                control_root.resolve() / ".agent-tool-policy.yaml",
+            )
+        )
         return cls(
             sources=sources,
             project=project,
@@ -97,6 +131,11 @@ class ContextEngine:
             retriever=RuleBasedRetriever(),
             builder=ContextBuilder(ContextBudget(total_tokens=token_budget)),
             logger=logger,
+            cache=ContextCache(control_root.resolve() / ".agent-cache" / "context"),
+            project_profile_version=project_profile_version,
+            policy_version=policy_version,
+            compiler_version="2",
+            cache_query_salt=cache_query_salt,
         )
 
     def build(self, task: object, repository: Path, role: str, runtime: object) -> Context:
@@ -110,6 +149,34 @@ class ContextEngine:
             project=self.project,
             project_profile=self.project_profile,
         )
+        cache_key: ContextCacheKey | None = None
+        if self.cache is not None:
+            head_sha, dirty_fingerprint = repository_fingerprints(request.repository)
+            cache_key = ContextCacheKey(
+                repository_head_sha=head_sha,
+                dirty_state_fingerprint=dirty_fingerprint,
+                role=request.role,
+                query_fingerprint=fingerprint_text(
+                    json.dumps(
+                        {
+                            "task": request.task,
+                            "role": request.role,
+                            "project": request.project,
+                            "profile": request.project_profile,
+                            "runtime_delta": self.cache_query_salt,
+                        },
+                        sort_keys=True,
+                        ensure_ascii=False,
+                    )
+                ),
+                project_profile_version=self.project_profile_version,
+                policy_version=self.policy_version,
+                context_compiler_version=self.compiler_version,
+            )
+            exact = self.cache.get(cache_key)
+            if exact is not None:
+                cached_context = exact.context(cache_status="hit")
+                return attach_log(cached_context, cached_context.log, self.logger)
         documents: dict[str, KnowledgeDocument] = {}
         source_counts: dict[str, int] = {}
         for source in self.sources:
@@ -117,7 +184,23 @@ class ContextEngine:
             source_counts[source.name] = len(collected)
             for document in collected:
                 documents.setdefault(document.id, document)
-        retrieval = self.retriever.retrieve(request, tuple(documents.values()))
+        deduplicated, duplicates = deduplicate_documents(tuple(documents.values()))
+        source_fingerprints = document_fingerprints(deduplicated)
+        if self.cache is not None and cache_key is not None:
+            self.cache.invalidate_changed_sources(source_fingerprints, key=cache_key)
+            compatible = self.cache.get_compatible(
+                cache_key,
+                source_fingerprints=source_fingerprints,
+            )
+            if compatible is not None:
+                cached_context = compatible.context(cache_status="compatible_hit")
+                self.cache.put(
+                    cache_key,
+                    cached_context,
+                    source_fingerprints=source_fingerprints,
+                )
+                return attach_log(cached_context, cached_context.log, self.logger)
+        retrieval = self.retriever.retrieve(request, deduplicated)
         context = self.builder.build(request, retrieval)
         event: dict[str, object] = {
             "version": 1,
@@ -136,6 +219,19 @@ class ContextEngine:
                 "remaining_tokens": max(0, context.token_budget - context.tokens_used),
             },
             "source_counts": source_counts,
+            "deduplication": {
+                "candidate_count": len(documents),
+                "unique_count": len(deduplicated),
+                "removed_count": len(duplicates),
+                "removed": [
+                    {"id": item.id, "source": item.source, "path": item.path}
+                    for item in duplicates
+                ],
+            },
+            "cache": {
+                "status": "miss" if cache_key is not None else "disabled",
+                "key": cache_key.digest if cache_key is not None else "",
+            },
             "selected": [
                 {
                     "id": item.document.id,
@@ -149,6 +245,7 @@ class ContextEngine:
                     "original_tokens": item.original_tokens,
                     "included_tokens": item.included_tokens,
                     "truncated": item.truncated,
+                    "metadata": dict(item.document.metadata),
                 }
                 for item in context.selected
             ],
@@ -162,8 +259,16 @@ class ContextEngine:
                     "priority": item.document.priority,
                     "score": round(item.score, 6),
                     "reason": item.reason,
+                    "metadata": dict(item.document.metadata),
                 }
                 for item in context.excluded
             ],
         }
-        return attach_log(context, event, self.logger)
+        attached = attach_log(context, event, self.logger)
+        if self.cache is not None and cache_key is not None:
+            self.cache.put(
+                cache_key,
+                attached,
+                source_fingerprints=source_fingerprints,
+            )
+        return attached

@@ -34,6 +34,7 @@ include = ["ai_harness*"]
   ".agent-artifact-owners.yaml",
   ".agent-policy.yaml",
   ".agent-project-profiles.yaml",
+  ".agent-role-policy.yaml",
   ".agent-recovery.yaml",
   ".agent-role-capabilities.yaml",
   ".agent-role-contracts.yaml",
@@ -52,8 +53,9 @@ include = ["ai_harness*"]
 "share/ai-harness/schemas" = ["schemas/*.json"]
 "share/ai-harness/schemas/roles" = ["schemas/roles/*.json"]
 "share/ai-harness/.agents/prompts" = [".agents/prompts/*.md"]
-"share/ai-harness/evals" = ["evals/README.md"]
+"share/ai-harness/evals" = ["evals/README.md", "evals/adaptive_execution_acceptance.json"]
 "share/ai-harness/evals/datasets" = ["evals/datasets/*.json"]
+"share/ai-harness/evals/datasets/adaptive_execution" = ["evals/datasets/adaptive_execution/*.json"]
 "share/ai-harness/evals/benchmarks" = ["evals/benchmarks/*.json"]
 "share/ai-harness/evals/golden_tasks" = ["evals/golden_tasks/*.json"]
 "share/ai-harness/evals/regressions" = ["evals/regressions/*.json"]

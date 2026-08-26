@@ -1,5 +1,11 @@
 # Evaluation Framework
 
+## Adaptive execution v1
+
+`datasets/adaptive_execution/golden_tasks_v1.json` is the 50-case deterministic role-selection corpus. `ai_harness.evaluation.adaptive.evaluate_adaptive_plans` verifies risk/scope classification, required roles, and forbidden skips. `compare_adaptive_ab` evaluates paired full/adaptive evidence and keeps adaptive mode opt-in unless every efficiency, quality, security, and approval threshold passes.
+
+Run the deterministic corpus with `make adaptive-eval-plans ADAPTIVE_REPORT=<run-artifact-path>`. For acceptance, prepare a manifest with one `case_id`, `full_run_dir`, and `adaptive_run_dir` entry for every golden case, then run `make adaptive-eval-ab ADAPTIVE_MANIFEST=<manifest> ADAPTIVE_REPORT=<report>`. Generate comparisons with `make adaptive-eval-leaderboard EVAL_REPORTS="<report...>"`; only after a passing authoritative report may `make adaptive-eval-gate ADAPTIVE_REPORT=<report>` enable adaptive-by-default. The decision is invalidated automatically when role policy or compiler version changes.
+
 This directory contains versioned evaluation inputs. Generated reports do not belong here; write them to the owning `.agent-runs/<run-id>/artifacts/evals/` directory or another explicitly chosen evidence directory.
 
 ## Layout

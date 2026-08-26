@@ -13,6 +13,7 @@ from typing import Any
 
 import yaml
 
+from ai_harness.economics import BudgetAction, BudgetController, BudgetUsage
 from security_approval import scope_accepts_security, security_finding_ids
 
 
@@ -78,7 +79,76 @@ FAST_SENSITIVE_PARTS = {
 
 
 def execution_mode(state: dict[str, Any]) -> str:
-    return "fast" if state.get("effective_mode") == "fast" else "full"
+    value = str(state.get("effective_mode", "full"))
+    return value if value in {"adaptive", "fast", "full", "goal"} else "full"
+
+
+def execution_plan(state: dict[str, Any]) -> dict[str, Any]:
+    path = state.get("execution_plan_path")
+    if not isinstance(path, str) or not path:
+        return {}
+    value = load_json(Path(path))
+    return value if isinstance(value, dict) else {}
+
+
+def adaptive_next_role(
+    state: dict[str, Any],
+    *,
+    current_role: str,
+) -> tuple[str, str] | None:
+    """Return the next ready DAG node while repair and hard gates stay authoritative."""
+
+    plan = execution_plan(state)
+    nodes = plan.get("nodes", [])
+    if not isinstance(nodes, list) or not nodes:
+        return None
+    if current_role == "implementation-agent":
+        # Only the route that immediately dispatched this implementation run may
+        # request a verifier re-run. Historical loop counters remain non-zero for
+        # audit purposes and must not keep pulling the DAG back into an old loop.
+        last_route = state.get("last_route", {})
+        active_loop = last_route.get("loop", {}) if isinstance(last_route, dict) else {}
+        loop_name = str(active_loop.get("name", "")) if isinstance(active_loop, dict) else ""
+        repair_targets = {
+            "security_repair": "security-agent",
+            "quality_repair": "quality-runner",
+            "review_repair": "reviewer",
+            "frontend_verification_repair": "frontend-qa-agent",
+        }
+        target = repair_targets.get(loop_name)
+        if target:
+            return target, f"Adaptive {loop_name} requires re-running {target}."
+    completed = completed_roles(state)
+    skipped = state.get("budget_skipped_roles", [])
+    if isinstance(skipped, list):
+        completed.update(str(role) for role in skipped if isinstance(role, str))
+    controller = BudgetController.from_plan(plan)
+    usage = BudgetUsage.from_state(state)
+    for raw in nodes:
+        if not isinstance(raw, dict):
+            continue
+        node_id = str(raw.get("id", ""))
+        role = str(raw.get("role", node_id))
+        dependencies = {
+            str(value)
+            for value in raw.get("dependencies", [])
+            if isinstance(value, str)
+        }
+        if not node_id or role in completed or role == current_role:
+            continue
+        if dependencies <= completed:
+            mandatory = bool(raw.get("mandatory", False))
+            decision = controller.assess(usage, mandatory_role=mandatory)
+            state["budget_action"] = decision.as_dict()
+            state["budget_usage"] = usage.as_dict()
+            if decision.action == BudgetAction.SKIP_OPTIONAL and not mandatory:
+                skipped_roles = state.setdefault("budget_skipped_roles", [])
+                if isinstance(skipped_roles, list) and role not in skipped_roles:
+                    skipped_roles.append(role)
+                completed.add(role)
+                continue
+            return role, f"Adaptive execution plan selected ready node {node_id}."
+    return None
 
 
 def fast_path_blockers(state: dict[str, Any], artifacts_dir: Path) -> list[str]:
@@ -789,6 +859,25 @@ def _blocked(reason: str, warnings: list[str] | None = None) -> dict[str, Any]:
 
 
 def required_gate_roles(state: dict[str, Any], artifacts_dir: Path) -> list[str]:
+    if execution_mode(state) == "adaptive":
+        plan = execution_plan(state)
+        configured = plan.get("required_roles", [])
+        if isinstance(configured, list) and configured:
+            skipped = {
+                str(role)
+                for role in state.get("budget_skipped_roles", [])
+                if isinstance(role, str)
+            }
+            mandatory = {
+                str(node.get("role", node.get("id", "")))
+                for node in plan.get("nodes", [])
+                if isinstance(node, dict) and node.get("mandatory") is True
+            }
+            return [
+                str(role)
+                for role in configured
+                if isinstance(role, str) and (role not in skipped or role in mandatory)
+            ]
     if execution_mode(state) == "fast":
         return list(FAST_REQUIRED_ROLES)
     routing = load_yaml(ROUTING_CONFIG)
@@ -1067,6 +1156,23 @@ def decide_next_role(
     budget_blockers = _budget_blockers(state, workflows)
     if budget_blockers and not (bypass_approval or budget_approved):
         return _approval("Workflow budget exceeded; execution is awaiting approval.", warnings + budget_blockers)
+    if execution_mode(state) == "adaptive":
+        plan = execution_plan(state)
+        if plan:
+            usage = BudgetUsage.from_state(state)
+            decision = BudgetController.from_plan(plan).assess(usage, mandatory_role=True)
+            state["budget_usage"] = usage.as_dict()
+            state["budget_action"] = decision.as_dict()
+            if decision.action == BudgetAction.REQUIRE_APPROVAL and not (
+                bypass_approval or budget_approved
+            ):
+                return _approval(
+                    "Adaptive task budget exhausted; execution is awaiting approval.",
+                    warnings + [
+                        decision.reason,
+                        "exhausted dimensions: " + ", ".join(decision.exhausted_dimensions),
+                    ],
+                )
 
     if result.get("status") in {"blocked", "failed", "awaiting_approval"}:
         return _approval(
@@ -1193,6 +1299,19 @@ def decide_next_role(
     mode = execution_mode(state)
     next_role = ""
     reason = ""
+    if mode == "adaptive" and current_role not in {
+        "orchestrator",
+        "publication-prepare",
+        "publication",
+    }:
+        planned = adaptive_next_role(state, current_role=current_role)
+        if planned is None:
+            return _approval(
+                "Adaptive execution plan has no ready node before final orchestration.",
+                warnings + ["The DAG may be incomplete or its dependencies may be unsatisfied."],
+            )
+        next_role, reason = planned
+        return _route(next_role, reason, warnings=warnings)
     if current_role == "issue-intake":
         next_role, reason = "context-compiler", "Issue intake is recorded; compile scoped context."
     elif current_role == "context-compiler":

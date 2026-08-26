@@ -297,6 +297,7 @@ def test_agent_task_accepts_custom_prefix_and_auto_starts_worker(
 @pytest.mark.parametrize(
     ("mode", "goal", "task_id"),
     [
+        ("adaptive", "Compile the minimum safe execution plan", "adaptive-plan"),
         ("fast", "Fix CSS color", "fast-css"),
         ("goal", "Complete checkpointed objective", "long-goal"),
     ],

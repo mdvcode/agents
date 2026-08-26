@@ -206,6 +206,88 @@ def write_metrics(layout: RunLayout, state: dict[str, Any]) -> None:
                 ),
             }
         )
+    input_tokens = sum(role["input_tokens"] for role in roles)
+    cached_input_tokens = sum(role["cached_input_tokens"] for role in roles)
+    output_tokens = sum(role["output_tokens"] for role in roles)
+    model_calls = sum(
+        checkpoint.get("llm_invoked") is True
+        for checkpoint in state.get("roles", [])
+        if isinstance(checkpoint, dict)
+    )
+    plan: dict[str, Any] = {}
+    plan_path = state.get("execution_plan_path")
+    if isinstance(plan_path, str) and Path(plan_path).is_file():
+        try:
+            value = json.loads(Path(plan_path).read_text(encoding="utf-8"))
+            plan = value if isinstance(value, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            plan = {}
+    cache_statuses: list[str] = []
+    for manifest_path in layout.context.glob("*.json"):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        cache = manifest.get("context_cache", {}) if isinstance(manifest, dict) else {}
+        if isinstance(cache, dict) and isinstance(cache.get("status"), str):
+            cache_statuses.append(str(cache["status"]))
+    cache_hits = sum(status in {"hit", "compatible_hit"} for status in cache_statuses)
+    skipped_roles = {
+        str(role)
+        for role in plan.get("skipped_roles", [])
+        if isinstance(role, str)
+    } | {
+        str(role)
+        for role in state.get("budget_skipped_roles", [])
+        if isinstance(role, str)
+    }
+    repair_attempts = sum(
+        int(value.get("iterations", 0) or 0)
+        for value in state.get("loops", {}).values()
+        if isinstance(value, dict)
+    ) if isinstance(state.get("loops"), dict) else 0
+    completed = state.get("execution_status") == "completed"
+    elapsed_seconds = int(state.get("elapsed_seconds", 0) or 0)
+    uncached_input_tokens = max(0, input_tokens - cached_input_tokens)
+    total_success_tokens = uncached_input_tokens + output_tokens if completed else 0
+    deterministic_checks = 0
+    for artifact_name, field in (("quality.json", "checks"), ("security.json", "evidence")):
+        artifact_path = layout.artifacts / artifact_name
+        try:
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        values = artifact.get(field, []) if isinstance(artifact, dict) else []
+        deterministic_checks += len(values) if isinstance(values, list) else 0
+    approval_requests = 0
+    approvals_path = layout.raw_events / "approvals.jsonl"
+    if approvals_path.is_file():
+        try:
+            approval_requests = sum(
+                json.loads(line).get("event") == "approval.requested"
+                for line in approvals_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            )
+        except (OSError, json.JSONDecodeError):
+            approval_requests = 0
+    time_to_accepted_pr: int | None = None
+    publication_path = layout.artifacts / "publication.json"
+    if publication_path.is_file():
+        try:
+            publication = json.loads(publication_path.read_text(encoding="utf-8"))
+            if isinstance(publication, dict) and publication.get("pr_created_or_updated") is True:
+                started = datetime.fromisoformat(str(state.get("started_at", "")).replace("Z", "+00:00"))
+                accepted_value = str(
+                    publication.get("pr_published_at", publication.get("completed_at", ""))
+                )
+                accepted = (
+                    datetime.fromisoformat(accepted_value.replace("Z", "+00:00"))
+                    if accepted_value
+                    else datetime.fromtimestamp(publication_path.stat().st_mtime, tz=timezone.utc)
+                )
+                time_to_accepted_pr = max(0, int((accepted - started).total_seconds()))
+        except (OSError, ValueError, json.JSONDecodeError):
+            time_to_accepted_pr = None
     write_json(
         layout.metrics,
         {
@@ -214,6 +296,27 @@ def write_metrics(layout: RunLayout, state: dict[str, Any]) -> None:
             "role_count": len(roles),
             "tokens_used": sum(role["tokens_used"] for role in roles),
             "duration_ms": sum(role["duration_ms"] for role in roles),
+            "model_calls_per_task": model_calls,
+            "model_calls_per_successful_task": model_calls if completed else 0,
+            "input_tokens_per_task": input_tokens,
+            "uncached_input_tokens_per_task": uncached_input_tokens,
+            "cached_input_ratio": (
+                round(cached_input_tokens / input_tokens, 6) if input_tokens else 0.0
+            ),
+            "context_cache_hit_rate": (
+                round(cache_hits / len(cache_statuses), 6) if cache_statuses else 0.0
+            ),
+            "roles_executed_per_task": len(roles),
+            "roles_skipped_per_task": len(skipped_roles),
+            "deterministic_checks_per_task": deterministic_checks,
+            "model_escalations_per_task": sum(role["escalation_level"] > 0 for role in roles),
+            "repair_attempts_per_task": repair_attempts,
+            "time_to_success": elapsed_seconds if completed else None,
+            "time_to_accepted_pr": time_to_accepted_pr,
+            "tokens_to_success": total_success_tokens,
+            "successful_task_token_cost": total_success_tokens,
+            "successful_task_latency": elapsed_seconds if completed else None,
+            "human_interventions_per_task": approval_requests,
             "roles": roles,
         },
     )

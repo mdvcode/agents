@@ -63,5 +63,8 @@
     "command_results": "list",
     "warnings": "list",
     "errors": "list"
+    ,"created_at": "str"
+    ,"pr_published_at": "str"
+    ,"completed_at": "str"
   }
 }

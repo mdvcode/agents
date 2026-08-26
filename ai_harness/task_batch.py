@@ -170,7 +170,7 @@ def parse_batch_manifest(
         if not isinstance(parallel, bool):
             raise BatchManifestError(f"{label}.parallel must be true or false")
         mode = str(raw.get("mode", "auto"))
-        if mode not in {"auto", "fast", "full", "goal"}:
+        if mode not in {"auto", "adaptive", "fast", "full", "goal"}:
             raise BatchManifestError(f"{label}.mode is invalid")
         priority = raw.get("priority", 0)
         max_retries = raw.get("max_retries", 2)

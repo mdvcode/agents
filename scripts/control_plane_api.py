@@ -270,7 +270,7 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 if workspace_mode not in {"new_branch", "current_branch", "worktree"}:
                     raise APIError(HTTPStatus.BAD_REQUEST, "unknown workspace mode")
                 execution_mode = str(payload.get("execution_mode", "auto"))
-                if execution_mode not in {"auto", "fast", "full", "goal"}:
+                if execution_mode not in {"auto", "adaptive", "fast", "full", "goal"}:
                     raise APIError(HTTPStatus.BAD_REQUEST, "unknown execution mode")
                 arguments = ["task", goal, "--mode", execution_mode]
                 task_id = str(payload.get("task_id", "")).strip()

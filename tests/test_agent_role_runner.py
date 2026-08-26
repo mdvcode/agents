@@ -345,6 +345,7 @@ def test_role_budget_tokens_excludes_cached_input() -> None:
         ("auto", "Implement a small local feature", "fast"),
         ("auto", "", "full"),
         ("fast", "Change authentication permissions", "fast"),
+        ("adaptive", "Fix a typo", "adaptive"),
         ("full", "Fix a typo", "full"),
         ("goal", "Complete a checkpointed multi-hour objective", "goal"),
     ],
@@ -354,14 +355,35 @@ def test_execution_mode_selection(requested: str, goal: str, expected: str) -> N
 
 
 def test_repository_execution_modes_have_distinct_session_budgets() -> None:
+    adaptive = agent_role_runner.workflow_budgets("full_agent_workflow", "adaptive")
     fast = agent_role_runner.workflow_budgets("full_agent_workflow", "fast")
     full = agent_role_runner.workflow_budgets("full_agent_workflow", "full")
     goal = agent_role_runner.workflow_budgets("full_agent_workflow", "goal")
 
     assert fast["max_duration_seconds"] == 900
+    assert adaptive["max_duration_seconds"] == 1800
     assert full["max_duration_seconds"] == 3600
     assert goal["max_duration_seconds"] == 14_400
     assert fast["max_roles"] < full["max_roles"] < goal["max_roles"]
+
+
+def test_adaptive_plan_is_compiled_deterministically_and_parallelism_is_read_only() -> None:
+    plan = agent_role_runner.compile_adaptive_execution_plan(
+        task_id="fix-status",
+        goal="Fix the status regression in ai_harness/cli.py",
+        project_profile="agent_workspace",
+        requested_paths=["ai_harness/cli.py"],
+    )
+
+    assert plan["mode"] == "adaptive"
+    assert "quality-runner" in plan["required_roles"]
+    assert "security-agent" in plan["required_roles"]
+    assert all(
+        node["read_only"] is True
+        for group in plan["parallel_groups"]
+        for node in plan["nodes"]
+        if node["id"] in group
+    )
 
 
 def test_completed_role_result_is_reused_after_post_role_approval() -> None:
@@ -997,3 +1019,26 @@ def test_hard_router_stop_is_recorded_as_structured_blocker(tmp_path: Path, monk
     ]
     errors = (tmp_path / ".agent-runs" / "critical-security-stop" / "errors.jsonl").read_text(encoding="utf-8")
     assert "ROUTER_BLOCKED" in errors
+
+
+def test_dependency_change_fails_closed_when_vulnerability_scanner_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    monkeypatch.setattr(agent_role_runner, "profile_required_commands", lambda *_args: [])
+    monkeypatch.setattr(agent_role_runner.shutil, "which", lambda _name: None)
+
+    result = agent_role_runner.run_deterministic_security(
+        project_profile="django",
+        repository=tmp_path,
+        artifacts_dir=artifacts,
+        timeout_seconds=30,
+        required_checks={"dependency_audit"},
+    )
+    evidence = json.loads((artifacts / "security.json").read_text(encoding="utf-8"))
+
+    assert result["status"] == "awaiting_approval"
+    assert evidence["verdict"] == "unavailable"
+    assert evidence["evidence"][-1]["command"] == "dependency vulnerability scanner"

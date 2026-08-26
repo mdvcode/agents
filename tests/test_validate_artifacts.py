@@ -116,6 +116,10 @@ def test_runtime_config_requires_subscription_sdk_profiles_without_router() -> N
     assert any("model_router is forbidden" in error for error in errors)
 
 
+def test_adaptive_role_policy_preserves_all_hard_gates() -> None:
+    assert validator.validate_adaptive_role_policy() == []
+
+
 def policy_payload(branch_prefixes: list[str] | None = None) -> dict[str, Any]:
     allowed = branch_prefixes if branch_prefixes is not None else ["feat/", "fix/", "issue/", "tast/"]
     publication = {

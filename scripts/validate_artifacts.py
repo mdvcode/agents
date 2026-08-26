@@ -23,6 +23,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ai_harness.evaluation.io import EvaluationInputError
+from ai_harness.evaluation.adaptive import validate_adaptive_dataset
+from ai_harness.planning import RolePolicy, RolePolicyError
 from ai_harness.evaluation.corpus import (
     CORPUS_METRICS,
     compare_corpus_to_baseline,
@@ -46,6 +48,7 @@ AGENT_REPOSITORIES = ROOT / ".agent-repositories.yaml"
 AGENT_ROLE_CONTRACTS = ROOT / ".agent-role-contracts.yaml"
 AGENT_ARTIFACT_OWNERS = ROOT / ".agent-artifact-owners.yaml"
 AGENT_ROLE_CAPABILITIES = ROOT / ".agent-role-capabilities.yaml"
+AGENT_ROLE_POLICY = ROOT / ".agent-role-policy.yaml"
 AGENT_TOOL_POLICY = ROOT / ".agent-tool-policy.yaml"
 DEPRECATED_COMBINED_PUBLICATION_KEY = "commit" + "_push"
 JSON_ARTIFACTS = {
@@ -448,6 +451,45 @@ def validate_eval_contracts() -> list[str]:
             if field not in benchmark:
                 errors.append(f"evals/benchmarks/milestone3_v1.json: missing {field!r}")
     errors.extend(validate_production_corpus_contracts())
+    adaptive_path = EVALS / "datasets" / "adaptive_execution" / "golden_tasks_v1.json"
+    try:
+        adaptive_dataset = load_json(adaptive_path)
+        if not isinstance(adaptive_dataset, dict):
+            raise EvaluationInputError("top-level value must be an object")
+        validate_adaptive_dataset(adaptive_dataset)
+    except (OSError, json.JSONDecodeError, EvaluationInputError) as exc:
+        errors.append(f"{adaptive_path.relative_to(ROOT)}: {exc}")
+    return errors
+
+
+def validate_adaptive_role_policy(path: Path = AGENT_ROLE_POLICY) -> list[str]:
+    try:
+        policy = RolePolicy.load(path)
+    except RolePolicyError as exc:
+        return [f".agent-role-policy.yaml: {exc}"]
+    required_hard_gates = {
+        "issue-intake",
+        "context-compiler",
+        "implementation-agent",
+        "quality-runner",
+        "security-agent",
+        "reviewer",
+        "orchestrator",
+        "publication-prepare",
+    }
+    missing = sorted(required_hard_gates - set(policy.hard_gate_roles))
+    errors = []
+    if missing:
+        errors.append(
+            ".agent-role-policy.yaml: hard gates cannot be omitted: " + ", ".join(missing)
+        )
+    if not set(policy.hard_gate_roles) <= set(policy.full_chain):
+        errors.append(".agent-role-policy.yaml: every hard gate must remain in full_chain")
+    execution_plan_schema = SCHEMAS / "execution_plan.schema.json"
+    try:
+        load_json(execution_plan_schema)
+    except (OSError, json.JSONDecodeError) as exc:
+        errors.append(f"schemas/execution_plan.schema.json: {exc}")
     return errors
 
 
@@ -1129,6 +1171,7 @@ def main(artifacts_dir: Path | None = None) -> int:
     errors.extend(profile_errors)
     if profiles_doc is not None:
         errors.extend(validate_project_profiles_data(profiles_doc))
+    errors.extend(validate_adaptive_role_policy())
     workflows_doc, workflow_errors = load_yaml(AGENT_WORKFLOWS, ".agent-workflows.yaml")
     errors.extend(workflow_errors)
     if workflows_doc is not None:

@@ -175,7 +175,7 @@ def test_worker_rejects_unknown_execution_mode(tmp_path: Path) -> None:
         payload={"task_id": "unsafe-mode", "repository": str(tmp_path), "mode": "turbo"},
     )
 
-    with pytest.raises(ValueError, match="mode must be auto, fast, full, or goal"):
+    with pytest.raises(ValueError, match="mode must be auto, adaptive, fast, full, or goal"):
         safe_payload(record)
 
 

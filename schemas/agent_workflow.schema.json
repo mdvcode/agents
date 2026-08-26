@@ -17,8 +17,8 @@
   "enums": {
     "execution_status": ["planned", "created", "running", "role_pending", "role_running", "role_output_received", "role_validating", "role_completed", "retry_wait", "repairing", "resuming", "awaiting_approval", "completed", "blocked", "dead_letter", "failed", "cancelled"],
     "workspace_mode": ["checkout", "worktree", "isolated", "current_branch"],
-    "mode": ["auto", "fast", "full", "goal"],
-    "effective_mode": ["fast", "full", "goal"]
+    "mode": ["auto", "adaptive", "fast", "full", "goal"],
+    "effective_mode": ["adaptive", "fast", "full", "goal"]
   },
   "types": {
     "run_id": "str",
@@ -59,7 +59,13 @@
     "recovery_reason": "str",
     "retry_after_seconds": "int",
     "recovery": "dict",
-    "manual_recovery_count": "int"
+    "manual_recovery_count": "int",
+    "execution_plan_path": "str",
+    "execution_plan_fingerprint": "str",
+    "task_analysis": "dict",
+    "budget_usage": "dict",
+    "budget_action": "dict",
+    "budget_skipped_roles": "list"
   },
   "object_required": {
     "loops": ["quality_repair", "review_repair", "ci_repair", "frontend_verification_repair"],

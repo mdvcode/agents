@@ -154,8 +154,8 @@ def safe_payload(record: TaskRecord) -> dict[str, Any]:
     if workspace_mode not in {"checkout", "worktree", "isolated", "current_branch"}:
         raise ValueError("workspace_mode must be checkout or worktree")
     mode = record.payload.get("mode", "auto")
-    if mode not in {"auto", "fast", "full", "goal"}:
-        raise ValueError("mode must be auto, fast, full, or goal")
+    if mode not in {"auto", "adaptive", "fast", "full", "goal"}:
+        raise ValueError("mode must be auto, adaptive, fast, full, or goal")
     if (
         record.payload.get("adapter_command") or record.payload.get("runtime_command")
     ) and os.environ.get("AGENT_HARNESS_TEST_MODE") != "1":

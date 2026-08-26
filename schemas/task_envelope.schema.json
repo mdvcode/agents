@@ -22,7 +22,7 @@
   "enums": {
     "source": ["cli", "github_issue", "webhook", "api", "ci"],
     "workspace_mode": ["checkout", "worktree"],
-    "mode": ["auto", "fast", "full", "goal"],
+    "mode": ["auto", "adaptive", "fast", "full", "goal"],
     "runtime_provider": ["codex-sdk", "codex-cli"],
     "relation": ["root", "repair", "investigation", "test", "implementation"],
     "dependency_mode": ["none", "blocking", "non_blocking"]
