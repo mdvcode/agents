@@ -146,8 +146,176 @@ def _success_rate(rows: Sequence[Mapping[str, Any]]) -> float:
     return sum(bool(row.get("success")) for row in rows) / len(rows) if rows else 0.0
 
 
+def _median(rows: Sequence[Mapping[str, Any]], field: str) -> float:
+    values = [float(row.get(field, 0) or 0) for row in rows]
+    return float(median(values)) if values else 0.0
+
+
 def _reduction(before: float, after: float) -> float:
     return (before - after) / before if before > 0 else 0.0
+
+
+def _percent_change(before: float, after: float) -> float | None:
+    return (after - before) / before if before > 0 else None
+
+
+def _comparison_rows(
+    baseline: Sequence[Mapping[str, Any]],
+    adaptive: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build display aggregates in the evaluator, not in dashboard JavaScript."""
+
+    rate_metrics = (
+        ("task_success_rate", "Task Success Rate", _success_rate(baseline), _success_rate(adaptive)),
+        ("pr_success_rate", "PR Success Rate", _mean(baseline, "pr_success"), _mean(adaptive, "pr_success")),
+        (
+            "context_cache_hit_rate",
+            "Context Cache Hit Rate",
+            _mean(baseline, "context_cache_hit_rate"),
+            _mean(adaptive, "context_cache_hit_rate"),
+        ),
+    )
+    rows = [
+        {
+            "key": key,
+            "label": label,
+            "full": round(before, 6),
+            "adaptive": round(after, 6),
+            "delta": round((after - before) * 100, 3),
+            "format": "rate",
+            "delta_format": "percentage_points",
+        }
+        for key, label, before, after in rate_metrics
+    ]
+    mean_metrics = (
+        ("model_calls_per_task", "Model Calls / Task", "model_calls"),
+        (
+            "uncached_input_tokens_per_task",
+            "Uncached Input Tokens / Task",
+            "uncached_input_tokens",
+        ),
+        ("output_tokens_per_task", "Output Tokens / Task", "output_tokens"),
+        ("roles_executed_per_task", "Roles Executed / Task", "roles_executed"),
+        ("roles_skipped_per_task", "Roles Skipped / Task", "roles_skipped"),
+        ("repair_attempts_per_task", "Repair Attempts / Task", "repair_count"),
+        ("model_escalations_per_task", "Model Escalations", "model_escalations"),
+        ("human_interventions_per_task", "Human Interventions", "human_interventions"),
+    )
+    for key, label, field in mean_metrics:
+        before = _mean(baseline, field)
+        after = _mean(adaptive, field)
+        delta = _percent_change(before, after)
+        rows.append(
+            {
+                "key": key,
+                "label": label,
+                "full": round(before, 3),
+                "adaptive": round(after, 3),
+                "delta": round(delta * 100, 3) if delta is not None else None,
+                "format": "number",
+                "delta_format": "percent_change",
+            }
+        )
+    before_duration = _median(baseline, "duration_seconds")
+    after_duration = _median(adaptive, "duration_seconds")
+    duration_delta = _percent_change(before_duration, after_duration)
+    rows.insert(
+        5,
+        {
+            "key": "median_completion_time",
+            "label": "Median Completion Time",
+            "full": round(before_duration, 3),
+            "adaptive": round(after_duration, 3),
+            "delta": round(duration_delta * 100, 3) if duration_delta is not None else None,
+            "format": "seconds",
+            "delta_format": "percent_change",
+        },
+    )
+    for key, label, field in (
+        ("security_gate_misses", "Security Gate Misses", "mandatory_security_gates_missed"),
+        ("approval_bypasses", "Approval Bypasses", "high_risk_approval_bypasses"),
+    ):
+        before = sum(int(item.get(field, 0) or 0) for item in baseline)
+        after = sum(int(item.get(field, 0) or 0) for item in adaptive)
+        rows.append(
+            {
+                "key": key,
+                "label": label,
+                "full": before,
+                "adaptive": after,
+                "delta": after - before,
+                "format": "integer",
+                "delta_format": "absolute",
+                "required_adaptive_value": 0,
+            }
+        )
+    order = {
+        key: index
+        for index, key in enumerate(
+            (
+                "task_success_rate",
+                "pr_success_rate",
+                "model_calls_per_task",
+                "uncached_input_tokens_per_task",
+                "output_tokens_per_task",
+                "median_completion_time",
+                "roles_executed_per_task",
+                "roles_skipped_per_task",
+                "context_cache_hit_rate",
+                "repair_attempts_per_task",
+                "model_escalations_per_task",
+                "human_interventions_per_task",
+                "security_gate_misses",
+                "approval_bypasses",
+            )
+        )
+    }
+    return sorted(rows, key=lambda row: order[str(row["key"])])
+
+
+def _breakdowns(
+    baseline: Sequence[Mapping[str, Any]],
+    adaptive: Sequence[Mapping[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Pre-compute exploratory segments while keeping acceptance checks global."""
+
+    dimensions = ("task_class", "scope", "risk", "repository", "model", "role", "outcome")
+    result: dict[str, list[dict[str, Any]]] = {}
+    paired = list(zip(baseline, adaptive, strict=True))
+    for dimension in dimensions:
+        values: set[str] = set()
+        for before, after in paired:
+            for row in (before, after):
+                raw = row.get(dimension, [])
+                if isinstance(raw, list):
+                    values.update(str(item) for item in raw if str(item))
+                elif raw is not None and str(raw):
+                    values.add(str(raw))
+        segments: list[dict[str, Any]] = []
+        for value in sorted(values):
+            selected: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
+            for before, after in paired:
+                memberships: set[str] = set()
+                for row in (before, after):
+                    raw = row.get(dimension, [])
+                    if isinstance(raw, list):
+                        memberships.update(str(item) for item in raw)
+                    elif raw is not None and str(raw):
+                        memberships.add(str(raw))
+                if value in memberships:
+                    selected.append((before, after))
+            segments.append(
+                {
+                    "value": value,
+                    "paired_tasks": len(selected),
+                    "comparison": _comparison_rows(
+                        [item[0] for item in selected],
+                        [item[1] for item in selected],
+                    ),
+                }
+            )
+        result[dimension] = segments
+    return result
 
 
 def compare_adaptive_ab(
@@ -194,11 +362,57 @@ def compare_adaptive_ab(
         "high_risk_approval_bypasses_zero": approval_bypasses == 0,
     }
     blockers = [name for name, passed in checks.items() if not passed]
+    status = "pass" if not blockers else "fail"
+    comparison = _comparison_rows(baseline, adaptive)
+    acceptance_summary = [
+        {
+            "key": "model_calls",
+            "label": "Model calls",
+            "value": round(-model_call_reduction * 100, 3),
+            "unit": "percent",
+            "status": "pass" if checks["model_calls_reduced_40_percent"] else "fail",
+        },
+        {
+            "key": "uncached_tokens",
+            "label": "Uncached tokens",
+            "value": round(-uncached_token_reduction * 100, 3),
+            "unit": "percent",
+            "status": "pass" if checks["uncached_tokens_reduced_30_percent"] else "fail",
+        },
+        {
+            "key": "median_latency",
+            "label": "Median latency",
+            "value": round(-duration_reduction * 100, 3),
+            "unit": "percent",
+            "status": "pass" if checks["median_duration_reduced_25_percent"] else "fail",
+        },
+        {
+            "key": "success_regression",
+            "label": "Success regression",
+            "value": round(-success_regression * 100, 3),
+            "unit": "percentage_points",
+            "status": "pass" if checks["success_regression_within_2pp"] else "fail",
+        },
+        {
+            "key": "security_misses",
+            "label": "Security misses",
+            "value": security_misses,
+            "unit": "integer",
+            "status": "pass" if checks["security_sensitive_misses_zero"] else "fail",
+        },
+        {
+            "key": "approval_bypasses",
+            "label": "Approval bypasses",
+            "value": approval_bypasses,
+            "unit": "integer",
+            "status": "pass" if checks["high_risk_approval_bypasses_zero"] else "fail",
+        },
+    ]
     return {
         "schema_version": 1,
         "kind": "adaptive_ab_acceptance",
         "created_at": utc_now(),
-        "status": "pass" if not blockers else "fail",
+        "status": status,
         "adaptive_default_allowed": not blockers,
         "paired_tasks": len(baseline),
         "metrics": {
@@ -225,6 +439,9 @@ def compare_adaptive_ab(
         },
         "checks": checks,
         "blockers": blockers,
+        "acceptance_summary": acceptance_summary,
+        "comparison": comparison,
+        "breakdowns": _breakdowns(baseline, adaptive),
     }
 
 
@@ -267,12 +484,37 @@ def collect_adaptive_run(run_dir: Path, case: Mapping[str, Any], *, expected_mod
     category = str(case.get("category", ""))
     approval_grants = workflow.get("approval_grants", [])
     security_required = category == "security_sensitive" or "security-agent" in set(case.get("forbidden_skips", []))
+    role_metrics = [item for item in metrics.get("roles", []) if isinstance(item, dict)]
+    input_tokens = int(metrics.get("input_tokens_per_task", 0) or 0)
+    uncached_input_tokens = int(metrics.get("uncached_input_tokens_per_task", 0) or 0)
+    analysis = workflow.get("task_analysis", {})
+    task_class = str(analysis.get("task_class", "")) if isinstance(analysis, dict) else ""
     return {
         "case_id": str(case["id"]),
+        "task_class": task_class or category,
         "scope": str(case["expected_scope"]),
+        "risk": risk,
+        "repository": str(workflow.get("project", case.get("repository_profile", ""))),
+        "mode": actual_mode,
+        "model": sorted(
+            {
+                str(item.get("model", item.get("execution_profile", "")))
+                for item in role_metrics
+                if str(item.get("model", item.get("execution_profile", "")))
+            }
+        ),
+        "role": sorted(role for role in roles if role),
         "success": workflow.get("execution_status") == "completed",
+        "outcome": "success" if workflow.get("execution_status") == "completed" else "failure",
         "model_calls": int(metrics.get("model_calls_per_task", 0) or 0),
-        "uncached_input_tokens": int(metrics.get("uncached_input_tokens_per_task", 0) or 0),
+        "input_tokens": input_tokens,
+        "uncached_input_tokens": uncached_input_tokens,
+        "cached_input_tokens": max(0, input_tokens - uncached_input_tokens),
+        "output_tokens": int(metrics.get("output_tokens_per_task", 0) or 0),
+        "context_cache_hit_rate": float(metrics.get("context_cache_hit_rate", 0) or 0),
+        "roles_executed": int(metrics.get("roles_executed_per_task", len(roles)) or 0),
+        "roles_skipped": int(metrics.get("roles_skipped_per_task", 0) or 0),
+        "model_escalations": int(metrics.get("model_escalations_per_task", 0) or 0),
         "duration_seconds": float(metrics.get("time_to_success", workflow.get("elapsed_seconds", 0)) or 0),
         "quality_score": _artifact_score(artifacts / "quality.json", status_fields=("overall_status",)),
         "security_score": _artifact_score(artifacts / "security.json", status_fields=("status", "verdict")),

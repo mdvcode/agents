@@ -16,6 +16,11 @@ from list_runs import collect
 from task_queue import DEFAULT_DB, TaskQueue
 from worker_service import SERVICE_STATE, process_alive, read_state
 from ai_harness.branch_conflicts import analyze_branch_conflicts
+from ai_harness.observability.adaptive_dashboard import (
+    DEFAULT_ACCEPTANCE_PATH,
+    adaptive_run_detail,
+    load_adaptive_acceptance,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -196,6 +201,7 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
         publication_path = run_dir / "publication.json"
     if publication.get("pr_created_or_updated") is True and started_at is not None and publication_path.exists():
         pr_time_seconds = round(max(0, publication_path.stat().st_mtime - started_at), 3)
+    adaptive = adaptive_run_detail(run_dir, workflow, metrics)
     return {
         "run_id": run_dir.name,
         "task_id": str(workflow.get("task_id", "")),
@@ -207,6 +213,7 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
         "base_sha": str(workflow.get("base_sha", "")),
         "branch_owner_run_id": str(workflow.get("branch_owner_run_id", "")),
         "current_role": str(workflow.get("current_role", "")),
+        "mode": adaptive["mode"],
         "status": str(workflow.get("execution_status", "unknown")),
         "attention": attention,
         "risk_class": str(workflow.get("risk_class", "")),
@@ -251,6 +258,7 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
             "max_repair_iterations": int(budgets.get("max_repair_iterations", 0) or 0),
         },
         "approval_status": str(approval.get("status", "")),
+        "adaptive": adaptive,
         "updated_at": run_dir.joinpath("workflow.json").stat().st_mtime,
     }
 
@@ -282,6 +290,7 @@ def collect_metrics(
     runs_dir: Path = RUNS_DIR,
     db_path: Path = DEFAULT_DB,
     stale_seconds: int = 180,
+    adaptive_acceptance_path: Path = DEFAULT_ACCEPTANCE_PATH,
 ) -> dict[str, Any]:
     runs = [
         summary
@@ -431,6 +440,10 @@ def collect_metrics(
             "actions": dict(Counter(item.recovery_action for item in tasks if item.recovery_action)),
         },
         "tracing": tracing,
+        "adaptive": load_adaptive_acceptance(
+            runs_dir=runs_dir,
+            acceptance_path=adaptive_acceptance_path,
+        ),
         "exceptions": [asdict(item) for item in exceptions],
         "service": {**service, "alive": process_alive(service_pid)},
     }

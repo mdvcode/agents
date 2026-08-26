@@ -29,6 +29,7 @@ Unlike `artifacts/`, this directory is not cleared between tasks. Agents update 
 - `decisions/2026-08-17-deterministic-model-and-workflow-policy.md`: Sol/Terra/Luna execution profiles, changed-file/risk-driven role activation, deterministic gates, and semantic missing-requirement deduplication.
 - `decisions/2026-08-17-batch-and-child-orchestration.md`: batch intake, repository limits, shared worktree caches, branch overlap analysis, and bounded parent/child task joins.
 - `decisions/2026-08-26-adaptive-execution-context-efficiency.md`: deterministic task analysis, immutable minimum-safe DAGs, context cache/deduplication, bounded model/task economics, and the default-mode evaluation gate.
+- `decisions/2026-08-26-dashboard-adaptive-acceptance-extension.md`: authoritative Full/Adaptive comparison, per-run efficiency diagnostics, and a visualization-only dashboard boundary.
 - `contradictions.md`: claims or practices that need reconciliation.
 
 ## Update Rules
