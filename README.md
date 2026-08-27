@@ -1,6 +1,6 @@
 # AI Harness
 
-AI Harness runs software tasks in local Git repositories through one command-line interface: `agent`. Users describe the required result; the Harness prepares the Git workspace, starts the task, runs implementation and verification, repairs recoverable failures, and returns a reviewable branch or pull request.
+AI Harness runs software tasks in local Git repositories through one command-line interface: `agent`. Users describe the required result; the Harness prepares the Git workspace, selects a safe execution path, runs implementation and verification, repairs recoverable failures, and returns a reviewable branch or pull request.
 
 It supports single tasks, parallel work in isolated Git worktrees, batches across several repositories, background recovery, and explicit human approval when a decision cannot be made safely. Merge and deployment always remain human actions.
 
@@ -9,17 +9,18 @@ It supports single tasks, parallel work in isolated Git worktrees, batches acros
 ```mermaid
 flowchart LR
     A["Task or batch"] --> B["Queue and Git workspace"]
-    B --> C["Codex implementation"]
-    C --> D["Tests and deterministic gates"]
-    D -->|"recoverable failure"| C
-    D -->|"independent subtask"| E["Isolated child run"]
-    E --> F["Parent joins result"]
-    F --> D
-    D -->|"passed"| G["Reviewable branch or PR"]
-    D -->|"decision required"| H["Human attention"]
+    B --> C["Execution mode"]
+    C -->|"adaptive"| D["Task Analyzer and Workflow Compiler"]
+    C -->|"auto, fast, full, or goal"| E["Existing workflow policy"]
+    D --> F["Minimum safe execution DAG"]
+    E --> F
+    F --> G["Implementation and required verification"]
+    G -->|"recoverable failure"| F
+    G -->|"passed"| H["Reviewable branch or PR"]
+    G -->|"decision required"| I["Human attention"]
 ```
 
-One run keeps the same task identity, Git workspace, checkpoint, and Codex thread across implementation, repair, user answers, and verification. A blocking compiler or test failure stays in that run. Only genuinely independent work may become a bounded child run.
+One run keeps the same task identity, Git workspace, checkpoint, and Codex thread across implementation, repair, user answers, and verification. A blocking compiler or test failure stays in that run. Only genuinely independent work may become a bounded child run. Adaptive mode reduces unnecessary roles, context, and model calls without changing recovery, approvals, security gates, worktree isolation, or publication safety.
 
 ## Requirements
 
@@ -69,6 +70,29 @@ agent task "Fix startup and add a regression test"
 agent watch
 ```
 
+The accepted production default remains `auto`. To use the new adaptive planner explicitly:
+
+```sh
+agent task --mode adaptive --task-id fix-startup \
+  "Fix startup and add a regression test"
+agent watch --task-id fix-startup
+```
+
+If an existing installation rejects `adaptive` as an unknown mode, update it from this checkout
+before launching the task:
+
+```sh
+agent update --source /path/to/agents
+hash -r
+agent task --help
+```
+
+Adaptive mode analyzes the task deterministically where possible, persists an auditable
+`.agent-runs/<run-id>/execution-plan.json`, and runs the minimum safe role DAG. It prefers
+deterministic format, lint, type, test, secret, and dependency checks before optional model-backed
+review. Low-confidence or sensitive work expands to a safer workflow; hard security, approval,
+recovery, and publication gates remain mandatory.
+
 Or use the local browser dashboard:
 
 ```sh
@@ -77,6 +101,11 @@ agent dashboard
 
 The dashboard does not require YAML: use **Launch several tasks** to add ordinary
 project-and-task rows. YAML remains available only under the advanced import section.
+
+The dashboard's **Adaptive / Efficiency** section reads the backend acceptance report and
+compares Full with Adaptive. `NOT ENOUGH DATA` means that the representative paired A/B acceptance
+run has not been completed; it is not a failure of the current task and does not prevent explicit
+`--mode adaptive` runs. Until that acceptance passes, `auto` does not select Adaptive by default.
 
 `agent task` starts the background worker automatically when needed. The project checkout must be clean before a task can create or switch branches.
 
@@ -174,6 +203,7 @@ The default mode is `auto`:
 
 ```sh
 agent task "Fix a typo in the settings page"
+agent task --mode adaptive "Fix a small backend bug and add a regression test"
 agent task --mode fast "Apply a small local styling change"
 agent task --mode full "Refactor the authentication architecture"
 agent task --mode goal "Complete a checkpointed multi-hour objective"
@@ -182,11 +212,12 @@ agent task --mode goal "Complete a checkpointed multi-hour objective"
 | Mode | Behavior |
 | --- | --- |
 | `auto` | Uses the guarded fast workflow for ordinary work and selects the full workflow when the goal names sensitive or broad changes. It never selects `goal`. |
+| `adaptive` | Opts into deterministic task analysis and an auditable minimum-safe execution DAG. Optional roles may be skipped, independent read-only checks may run in parallel, and model-backed roles receive scoped context and the cheapest sufficient profile. Low confidence expands the plan safely. |
 | `fast` | Runs the short workflow for at most 15 minutes, with implementation and review as the only model-backed roles. Context, quality, security, and verdict stages are deterministic. |
 | `full` | Runs the complete specialist workflow for at most 60 minutes. |
 | `goal` | Explicitly runs a checkpointed long objective for at most 4 hours. Use it only when the success condition genuinely needs multiple hours. |
 
-Fast mode automatically escalates to the full workflow before publication if the patch touches protected areas, changes more than five files, exceeds 200 changed lines, or reports increased risk. Required checks and approval gates are never bypassed. The 30-minute role timeout is an emergency limit for one model executor, not the duration of the whole task; workflow, recovery, iteration, and human-attention limits are tracked separately.
+Use `auto` for the current accepted production behavior and `adaptive` when explicitly evaluating or using the new planner. Fast mode automatically escalates to the full workflow before publication if the patch touches protected areas, changes more than five files, exceeds 200 changed lines, or reports increased risk. Required checks and approval gates are never bypassed. The 30-minute role timeout is an emergency limit for one model executor, not the duration of the whole task; workflow, recovery, iteration, and human-attention limits are tracked separately.
 
 ## Branch and workspace modes
 
@@ -269,7 +300,7 @@ agent init [--repo PATH] [--project-id ID]
 ```sh
 agent task [--repo PATH] [--task-id ID] [--branch BRANCH]
            [--current-branch | --worktree] [--keep-paused]
-           [--mode auto|fast|full|goal] [--priority -100..100]
+           [--mode auto|adaptive|fast|full|goal] [--priority -100..100]
            [--max-retries 0..10] [--dry-run] [--json]
            "TASK DESCRIPTION"
 ```
@@ -313,7 +344,7 @@ agent worker stop [--json]
 agent dashboard [--repo PATH] [--port PORT] [--no-open]
 ```
 
-The dashboard binds to loopback, opens in the default browser, and provides single-task launch plus a visual multi-task builder that does not require YAML. YAML import remains available as an advanced option. The dashboard also provides execution-mode (`auto`, `adaptive`, `fast`, `full`, or explicit `goal`) and Git-workspace selection, lifecycle/repository/branch/worker filters, probable-conflict hints, status, structured answer choices with a custom-answer fallback, approval, retry, and abort controls. Its Adaptive section compares evaluator-produced Full/Adaptive metrics, exposes filterable paired-run evidence, and shows each run's persisted execution plan and efficiency counters. The browser never calculates or overrides the authoritative acceptance, security, or approval verdict. Answered questions are fingerprinted so the same question cannot silently reopen in a loop. `--no-open` starts the server without opening a browser. `Ctrl+C` stops the dashboard server but does not stop the worker service.
+The dashboard binds to loopback, opens in the default browser, and provides single-task launch plus a visual multi-task builder that does not require YAML. YAML import remains available as an advanced option. The dashboard also provides execution-mode (`auto`, `adaptive`, `fast`, `full`, or explicit `goal`) and Git-workspace selection, lifecycle/repository/branch/worker filters, probable-conflict hints, status, structured answer choices with a custom-answer fallback, approval, retry, and abort controls. Its Adaptive section compares evaluator-produced Full/Adaptive metrics, exposes filterable paired-run evidence, and shows each run's persisted execution plan, executed/skipped/deterministic roles, model profiles, cache and token use, repair loops, and escalation counters. The browser never calculates or overrides the authoritative acceptance, security, or approval verdict. `NOT ENOUGH DATA` is the expected status until authoritative paired acceptance evidence exists. Answered questions are fingerprinted so the same question cannot silently reopen in a loop. `--no-open` starts the dashboard server without opening a browser. `Ctrl+C` stops the dashboard server but does not stop the worker service.
 
 ### Status and monitoring
 
