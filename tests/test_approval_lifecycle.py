@@ -52,6 +52,23 @@ def awaiting_run(tmp_path: Path) -> Path:
 
 def test_approval_scope_is_exact_and_consumed_once(tmp_path: Path) -> None:
     run = awaiting_run(tmp_path)
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    write_json(
+        run / "checkpoints" / "risk-classifier.json",
+        {
+            "run_id": "run-approval",
+            "role": "risk-classifier",
+            "state": "role_validating",
+            "attempt": 1,
+            "worktree": str(worktree),
+            "input_fingerprint": "task-fingerprint",
+            "output_fingerprint": "sha256:old-result",
+            "artifacts": ["risk.json"],
+            "side_effects": [],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
     workflow_path = run / "workflow.json"
     workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
     workflow["attention"] = {
@@ -81,6 +98,12 @@ def test_approval_scope_is_exact_and_consumed_once(tmp_path: Path) -> None:
     assert "attention" not in resumed["workflow"]
     assert resumed["workflow"]["blockers"] == []
     assert resumed["workflow"]["attention_history"][-1]["resolution"] == "approval_consumed"
+    checkpoint = json.loads(
+        (run / "checkpoints" / "risk-classifier.json").read_text(encoding="utf-8")
+    )
+    assert checkpoint["state"] == "role_pending"
+    assert checkpoint["output_fingerprint"] == ""
+    assert checkpoint["artifacts"] == []
     replay = prepare_resume(run)
     assert replay["already_consumed"] is True
     assert len(replay["workflow"]["approval_grants"]) == 1

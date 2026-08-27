@@ -16,6 +16,7 @@ from typing import Any
 from runtime_contracts import load_json as load_schema, validate_contract
 from security_approval import security_scope
 from task_queue import DEFAULT_DB, TaskQueue, TaskRecord
+from ai_harness.recovery.checkpoints import RoleCheckpoint, read_checkpoint, write_checkpoint
 from ai_harness.recovery.policy import load_recovery_policy
 
 
@@ -380,6 +381,25 @@ def _resolve_approved_attention(workflow: dict[str, Any]) -> None:
     workflow["attention_history"] = history[-50:]
 
 
+def _reset_checkpoint_for_resume(run_dir: Path, role: str) -> None:
+    """Rerun a paused role after its blocking condition was approved or repaired."""
+
+    checkpoint = read_checkpoint(run_dir, role)
+    if checkpoint is None or checkpoint.state in {"role_pending", "role_running"}:
+        return
+    write_checkpoint(
+        run_dir,
+        RoleCheckpoint(
+            run_id=checkpoint.run_id,
+            role=checkpoint.role,
+            state="role_pending",
+            attempt=checkpoint.attempt,
+            worktree=checkpoint.worktree,
+            input_fingerprint=checkpoint.input_fingerprint,
+        ),
+    )
+
+
 def _prepare_resume_locked(run_dir: Path) -> dict[str, Any]:
     approval = expire_if_needed(run_dir, read_json(run_dir / "artifacts" / "approval.json"))
     workflow = read_json(run_dir / "workflow.json")
@@ -401,6 +421,7 @@ def _prepare_resume_locked(run_dir: Path) -> dict[str, Any]:
         workflow["execution_status"] = "resuming"
         workflow["resume_role"] = role
         _resolve_approved_attention(workflow)
+        _reset_checkpoint_for_resume(run_dir, role)
         workflow["approval_override"] = {
             "approval_id": approval["approval_id"],
             "gate": role,
