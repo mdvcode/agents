@@ -85,12 +85,14 @@ def test_metrics_expose_bounded_structured_question(tmp_path: Path) -> None:
                             "description": "Use local services.",
                             "value": "local",
                             "recommended": True,
+                            "requires_input": True,
                         },
                         {
                             "label": "Staging",
                             "description": "Use shared services.",
                             "value": "staging",
                             "recommended": False,
+                            "requires_input": False,
                         },
                     ],
                     "allow_custom": True,
@@ -105,6 +107,8 @@ def test_metrics_expose_bounded_structured_question(tmp_path: Path) -> None:
     assert attention["action"] == "answer"
     assert attention["question"]["id"] == "environment"
     assert attention["question"]["options"][0]["recommended"] is True
+    assert attention["question"]["options"][0]["requires_input"] is True
+    assert attention["question"]["options"][1]["requires_input"] is False
 
 
 def api_request(url: str, token: str, *, method: str = "GET", body: dict[str, object] | None = None) -> dict[str, object]:
@@ -444,6 +448,9 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         assert "Быстрый старт" in dashboard
         assert "Другой ответ" in dashboard
         assert "question.options" in dashboard
+        assert "item.requires_input" in dashboard
+        assert "Добавьте данные для выбранного варианта" in dashboard
+        assert "choice: ${select.value}" in dashboard
         assert "answers:{}" in dashboard
         assert "contains(document.activeElement)" in dashboard
         assert 'id="adaptivePanel"' in dashboard

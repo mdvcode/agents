@@ -119,6 +119,7 @@ def bounded_question(value: Any) -> dict[str, Any]:
                 "description": str(raw_option.get("description", ""))[:500],
                 "value": option_value,
                 "recommended": raw_option.get("recommended") is True,
+                "requires_input": raw_option.get("requires_input") is True,
             }
         )
     if len(options) < 2:

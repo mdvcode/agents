@@ -127,6 +127,7 @@ def test_role_prompt_includes_interaction_policy_and_recorded_user_answer(tmp_pa
     assert "do not perform empty retries" in prompt
     assert "status=awaiting_approval" in prompt
     assert "2-3 mutually exclusive options" in prompt
+    assert "requires_input=true" in prompt
     assert "never ask a substantially identical question again" in prompt
 
     schema = codex_cli_executor.standard_role_result_schema({"required": [], "types": {}})
@@ -140,6 +141,9 @@ def test_role_prompt_includes_interaction_policy_and_recorded_user_answer(tmp_pa
     assert schema["properties"]["question"]["properties"]["options"]["type"] == "array"
     assert schema["properties"]["question"]["properties"]["options"]["minItems"] == 2
     assert schema["properties"]["question"]["properties"]["options"]["maxItems"] == 3
+    option_schema = schema["properties"]["question"]["properties"]["options"]["items"]
+    assert option_schema["properties"]["requires_input"] == {"type": "boolean"}
+    assert set(option_schema["required"]) == set(option_schema["properties"])
 
 
 def test_noncompleted_role_result_gets_a_nonempty_attention_reason() -> None:

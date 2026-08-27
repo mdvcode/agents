@@ -823,6 +823,7 @@ def normalize_question(value: Any) -> dict[str, Any]:
                 "description": str(raw_option.get("description", "")).strip()[:500],
                 "value": option_value,
                 "recommended": bool(raw_option.get("recommended", False)),
+                "requires_input": bool(raw_option.get("requires_input", False)),
             }
         )
         if len(options) == 3:

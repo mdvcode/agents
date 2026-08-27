@@ -87,8 +87,18 @@ def test_question_options_are_bounded_and_recommended_option_is_first() -> None:
         question={
             "id": "Environment Choice",
             "options": [
-                {"label": "Local", "value": "local", "recommended": False},
-                {"label": "Staging", "value": "staging", "recommended": True},
+                {
+                    "label": "Local",
+                    "value": "local",
+                    "recommended": False,
+                    "requires_input": False,
+                },
+                {
+                    "label": "Staging",
+                    "value": "staging",
+                    "recommended": True,
+                    "requires_input": True,
+                },
                 {"label": "Preview", "value": "preview", "recommended": False},
                 {"label": "Production", "value": "production", "recommended": False},
             ],
@@ -105,6 +115,9 @@ def test_question_options_are_bounded_and_recommended_option_is_first() -> None:
         "preview",
     ]
     assert question["options"][0]["recommended"] is True
+    assert question["options"][0]["requires_input"] is True
+    assert question["options"][1]["requires_input"] is False
+    assert question["options"][2]["requires_input"] is False
 
 
 def test_semantically_equivalent_missing_requirement_is_stopped() -> None:

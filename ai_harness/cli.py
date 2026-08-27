@@ -1097,6 +1097,15 @@ def handle_answer(args: argparse.Namespace) -> int:
         raise CLIError(
             "this gate requires an explicit approval decision, not an informational answer; use `agent approve`"
         )
+    question = attention.get("question", {})
+    options = question.get("options", []) if isinstance(question, dict) else []
+    if any(
+        isinstance(option, dict)
+        and option.get("requires_input") is True
+        and response == str(option.get("value", "")).strip()
+        for option in options
+    ):
+        raise CLIError("the selected option requires accompanying details")
     record_human_input(
         run_dir,
         run_id=args.run_id,
