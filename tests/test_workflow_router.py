@@ -1038,12 +1038,8 @@ def test_implementation_in_review_repair_defers_old_verifier_blockers_to_rerun(
             "repair_required": True,
         },
     )
-    state = completed_state(
-        last_route={
-            "next_role": "implementation-agent",
-            "loop": {"name": "review_repair", "iteration": 1},
-        }
-    )
+    state = completed_state()
+    state["loops"]["review_repair"]["iterations"] = 1
     state["roles"].extend(
         [
             {
