@@ -127,11 +127,14 @@ def test_role_prompt_includes_interaction_policy_and_recorded_user_answer(tmp_pa
     assert "do not perform empty retries" in prompt
     assert "status=awaiting_approval" in prompt
     assert "2-3 mutually exclusive options" in prompt
+    assert "requires_input=true" in prompt
     assert "never ask a substantially identical question again" in prompt
 
     schema = codex_cli_executor.standard_role_result_schema({"required": [], "types": {}})
     assert "question" in schema["properties"]
     assert "question" in schema["required"]
+    assert "child_tasks" in schema["properties"]
+    assert set(schema["required"]) == set(schema["properties"])
     assert schema["properties"]["question"]["type"] == ["object", "null"]
     assert schema["properties"]["question"]["properties"]["requirement"] == {"type": "string"}
     assert "requirement" in schema["properties"]["question"]["required"]

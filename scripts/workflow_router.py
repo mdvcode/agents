@@ -519,6 +519,31 @@ def workflow_blockers(
     current_role: str,
 ) -> list[str]:
     accepted_ids = accepted_security_finding_ids(state, artifacts_dir)
+    active_repair_sources: set[str] = set()
+    entries = _role_entries(state)
+    last_positions = {
+        role: max(index for index, entry in enumerate(entries) if entry.get("role") == role)
+        for role in {str(entry.get("role", "")) for entry in entries}
+    }
+    implementation_position = last_positions.get("implementation-agent", -1)
+    loop_sources = {
+        "quality_repair": {"quality-runner"},
+        "security_repair": {"security-agent"},
+        "review_repair": {
+            "architecture-consistency-agent",
+            "semantic-conflict-agent",
+            "reviewer",
+        },
+        "frontend_verification_repair": {"frontend-qa-agent"},
+    }
+    loops = state.get("loops", {})
+    if isinstance(loops, dict):
+        for loop_name, sources in loop_sources.items():
+            loop = loops.get(loop_name, {})
+            if not isinstance(loop, dict) or int(loop.get("iterations", 0) or 0) <= 0:
+                continue
+            if any(last_positions.get(source, -1) < implementation_position for source in sources):
+                active_repair_sources.update(sources)
 
     def unresolved(values: Any) -> list[str]:
         return [
@@ -548,6 +573,8 @@ def workflow_blockers(
         # unresolved work. Likewise, a successful rerun supersedes an older
         # failed result for the same role.
         if role == "approval-gate":
+            continue
+        if role in active_repair_sources:
             continue
         if verifier_unavailability_accepted(state, artifacts_dir, role):
             continue
@@ -617,13 +644,6 @@ def verifier_environment_unavailable(artifacts_dir: Path, artifact_name: str) ->
     artifact = _artifact(artifacts_dir, artifact_name)
     if not isinstance(artifact, dict):
         return False
-    text_value = " ".join(
-        [
-            *[str(item) for item in artifact.get("blockers", []) if isinstance(item, (str, int))],
-            *[str(item) for item in artifact.get("warnings", []) if isinstance(item, (str, int))],
-            *[str(item) for item in artifact.get("observed", []) if isinstance(item, (str, int))],
-        ]
-    ).lower()
     markers = (
         "unavailable",
         "missing dependenc",
@@ -634,7 +654,22 @@ def verifier_environment_unavailable(artifacts_dir: Path, artifact_name: str) ->
         "runtime capability",
         "did not complete",
     )
-    return any(marker in text_value for marker in markers)
+    if str(artifact.get("verdict", "")).lower() == "unavailable":
+        return True
+    blockers = [
+        str(item).lower()
+        for item in artifact.get("blockers", [])
+        if isinstance(item, (str, int)) and str(item).strip()
+    ]
+    if blockers:
+        return all(any(marker in blocker for marker in markers) for blocker in blockers)
+    fallback = " ".join(
+        [
+            *[str(item) for item in artifact.get("warnings", []) if isinstance(item, (str, int))],
+            *[str(item) for item in artifact.get("observed", []) if isinstance(item, (str, int))],
+        ]
+    ).lower()
+    return any(marker in fallback for marker in markers)
 
 
 def verifier_artifact_fingerprint(artifacts_dir: Path, artifact_name: str) -> str:

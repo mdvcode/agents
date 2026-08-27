@@ -292,8 +292,15 @@ def standard_role_result_schema(output_contract: dict[str, Any]) -> dict[str, An
                                 "description": {"type": "string"},
                                 "value": {"type": "string"},
                                 "recommended": {"type": "boolean"},
+                                "requires_input": {"type": "boolean"},
                             },
-                            "required": ["label", "description", "value", "recommended"],
+                            "required": [
+                                "label",
+                                "description",
+                                "value",
+                                "recommended",
+                                "requires_input",
+                            ],
                             "additionalProperties": False,
                         },
                     },
@@ -492,6 +499,8 @@ def role_prompt_payload(
                 "closed set of answers, also return question with a stable short id, a stable semantic requirement "
                 "name, "
                 "2-3 mutually exclusive options, the recommended option first, concise descriptions, and "
+                "requires_input=true for every option whose value is only an action such as supplying, "
+                "pasting, or naming required text, a URL, or a file path; otherwise set requires_input=false. "
                 "allow_custom=true unless free-form input would be unsafe. Treat recorded user answers as "
                 "authoritative: never ask a substantially identical question again after it was answered. If an "
                 "answer is insufficient or contradictory, identify the new specific gap instead. Return "

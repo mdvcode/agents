@@ -823,6 +823,7 @@ def normalize_question(value: Any) -> dict[str, Any]:
                 "description": str(raw_option.get("description", "")).strip()[:500],
                 "value": option_value,
                 "recommended": bool(raw_option.get("recommended", False)),
+                "requires_input": bool(raw_option.get("requires_input", False)),
             }
         )
         if len(options) == 3:
@@ -944,9 +945,13 @@ def question_was_answered(state: dict[str, Any], fingerprints: set[str]) -> bool
 
 
 def role_attention_action(result: dict[str, Any]) -> str:
-    """Only a deliberate role question may be resolved with informational input."""
+    """Route deliberate structured questions to informational input."""
 
-    return "answer" if result.get("status") == "awaiting_approval" else "approve"
+    if result.get("status") == "awaiting_approval" or normalize_question(
+        result.get("question")
+    ):
+        return "answer"
+    return "approve"
 
 
 def validate_role_result(result: dict[str, Any], role: str) -> list[str]:

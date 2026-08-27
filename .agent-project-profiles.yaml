@@ -94,7 +94,7 @@ profiles:
       - "pages/**"
     quality_commands:
       required:
-        - "bun node_modules/typescript/lib/tsc.js --noEmit"
+        - "node node_modules/typescript/lib/tsc.js --noEmit --incremental false"
         - "git diff HEAD --check"
       optional:
         - "bun lint"
@@ -111,7 +111,7 @@ profiles:
       focused_tests:
         - "bun test --run <focused-test>"
       repository_checks:
-        - "bun node_modules/typescript/lib/tsc.js --noEmit"
+        - "node node_modules/typescript/lib/tsc.js --noEmit --incremental false"
         - "git diff HEAD --check"
     frontend_evidence:
       required_for:

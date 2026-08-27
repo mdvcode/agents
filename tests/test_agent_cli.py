@@ -4,6 +4,7 @@ import json
 import sqlite3
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -1098,6 +1099,104 @@ def test_agent_answer_records_requested_input_and_resumes_same_run(
     assert checkpoint["artifacts"] == []
 
 
+def test_agent_answer_rejects_a_choice_that_requires_missing_details(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    approval_lifecycle = cli.load_harness_module(state_root, "approval_lifecycle")
+    run_dir = state_root / ".agent-runs" / "run-required-details"
+    (run_dir / "artifacts").mkdir(parents=True)
+    (run_dir / "workflow.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-required-details",
+                "task_id": "provide-contract",
+                "repository": str(repository),
+                "execution_status": "awaiting_approval",
+                "current_role": "implementation-agent",
+                "resume_role": "implementation-agent",
+                "attention": {
+                    "required": True,
+                    "summary": "Provide the backend contract.",
+                    "details": ["Paste the contract text."],
+                    "role": "implementation-agent",
+                    "action": "answer",
+                    "question": {
+                        "id": "backend_contract",
+                        "options": [
+                            {
+                                "label": "Paste contract",
+                                "description": "Provide the complete wire contract.",
+                                "value": "paste_contract",
+                                "recommended": True,
+                                "requires_input": True,
+                            },
+                            {
+                                "label": "Cancel",
+                                "description": "Do not continue.",
+                                "value": "cancel",
+                                "recommended": False,
+                                "requires_input": False,
+                            },
+                        ],
+                        "allow_custom": True,
+                    },
+                },
+                "roles": [
+                    {
+                        "role": "implementation-agent",
+                        "result": {
+                            "status": "awaiting_approval",
+                            "summary": "Provide the backend contract.",
+                            "blockers": ["Paste the contract text."],
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    checkpoints = run_dir / "checkpoints"
+    checkpoints.mkdir()
+    (checkpoints / "implementation-agent.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-required-details",
+                "role": "implementation-agent",
+                "state": "role_validating",
+                "attempt": 1,
+                "worktree": str(repository),
+                "input_fingerprint": "input",
+                "output_fingerprint": "output",
+                "artifacts": [],
+                "side_effects": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    approval_lifecycle.request_approval(run_dir, reason="Provide the backend contract.")
+
+    assert cli.main(
+        [
+            "answer",
+            "run-required-details",
+            "paste_contract",
+            "--repo",
+            str(repository),
+        ]
+    ) == 2
+
+    assert "requires accompanying details" in capsys.readouterr().err
+    assert not (run_dir / "human-input.json").exists()
+
+
 def test_agent_answer_cannot_replace_explicit_risk_approval(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1755,6 +1854,41 @@ def test_parser_exposes_recovery_commands(
 
     assert args.command == command
     assert getattr(args, "run_id", None) == run_id
+
+
+def test_retry_checkpoint_reruns_current_role_instead_of_cached_blocker(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    workflow = {"current_role": "quality-runner"}
+    checkpoint_path = run / "checkpoints" / "quality-runner.json"
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "run_id": "run-123",
+                "role": "quality-runner",
+                "state": "role_validating",
+                "attempt": 2,
+                "worktree": str(worktree),
+                "input_fingerprint": "task-fingerprint",
+                "output_fingerprint": "sha256:blocked-result",
+                "artifacts": ["quality.json"],
+                "side_effects": [],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cli.reset_role_checkpoint_for_rerun(run, workflow)
+
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert workflow["resume_role"] == "quality-runner"
+    assert checkpoint["state"] == "role_pending"
+    assert checkpoint["attempt"] == 2
+    assert checkpoint["output_fingerprint"] == ""
+    assert checkpoint["artifacts"] == []
 
 
 @pytest.mark.parametrize("worker_command", ["status", "start", "restart", "stop"])

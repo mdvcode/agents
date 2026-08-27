@@ -1107,6 +1107,29 @@ def record_human_input(
     return path
 
 
+def reset_role_checkpoint_for_rerun(run_dir: Path, workflow: dict[str, Any]) -> None:
+    """Reset the current role to execution instead of replaying its cached blocked output."""
+
+    role = str(workflow.get("current_role", ""))
+    if not role:
+        return
+    checkpoint = read_checkpoint(run_dir, role)
+    if checkpoint is None:
+        return
+    write_checkpoint(
+        run_dir,
+        RoleCheckpoint(
+            run_id=checkpoint.run_id,
+            role=checkpoint.role,
+            state="role_pending",
+            attempt=checkpoint.attempt,
+            worktree=checkpoint.worktree,
+            input_fingerprint=checkpoint.input_fingerprint,
+        ),
+    )
+    workflow["resume_role"] = role
+
+
 def resolve_answer_attention(run_dir: Path) -> None:
     """Archive the answer and rerun the paused role with the new information."""
     path = run_dir / "workflow.json"
@@ -1162,21 +1185,7 @@ def resolve_answer_attention(run_dir: Path) -> None:
         workflow["blockers"] = [
             item for item in blockers if str(item).strip() not in active_values
         ]
-    role = str(workflow.get("current_role", ""))
-    if role:
-        checkpoint = read_checkpoint(run_dir, role)
-        if checkpoint is not None:
-            write_checkpoint(
-                run_dir,
-                RoleCheckpoint(
-                    run_id=checkpoint.run_id,
-                    role=checkpoint.role,
-                    state="role_pending",
-                    attempt=checkpoint.attempt,
-                    worktree=checkpoint.worktree,
-                    input_fingerprint=checkpoint.input_fingerprint,
-                ),
-            )
+    reset_role_checkpoint_for_rerun(run_dir, workflow)
     with temporary.open("w", encoding="utf-8") as handle:
         handle.write(json.dumps(workflow, indent=2, ensure_ascii=False) + "\n")
         handle.flush()
@@ -1208,6 +1217,15 @@ def handle_answer(args: argparse.Namespace) -> int:
         raise CLIError(
             "this gate requires an explicit approval decision, not an informational answer; use `agent approve`"
         )
+    question = attention.get("question", {})
+    options = question.get("options", []) if isinstance(question, dict) else []
+    if any(
+        isinstance(option, dict)
+        and option.get("requires_input") is True
+        and response == str(option.get("value", "")).strip()
+        for option in options
+    ):
+        raise CLIError("the selected option requires accompanying details")
     record_human_input(
         run_dir,
         run_id=args.run_id,
@@ -1822,6 +1840,8 @@ def handle_recovery_command(args: argparse.Namespace) -> int:
             record = queue.recover_run(args.run_id, action=args.command)
             workflow["execution_status"] = "retry_wait" if args.command == "retry" else "resuming"
             workflow["recovery_action"] = args.command
+            if args.command == "retry":
+                reset_role_checkpoint_for_rerun(run_dir, workflow)
             recovery = workflow.get("recovery", {})
             if not isinstance(recovery, dict):
                 recovery = {}
