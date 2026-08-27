@@ -944,9 +944,13 @@ def question_was_answered(state: dict[str, Any], fingerprints: set[str]) -> bool
 
 
 def role_attention_action(result: dict[str, Any]) -> str:
-    """Only a deliberate role question may be resolved with informational input."""
+    """Route deliberate structured questions to informational input."""
 
-    return "answer" if result.get("status") == "awaiting_approval" else "approve"
+    if result.get("status") == "awaiting_approval" or normalize_question(
+        result.get("question")
+    ):
+        return "answer"
+    return "approve"
 
 
 def validate_role_result(result: dict[str, Any], role: str) -> list[str]:

@@ -173,6 +173,40 @@ def test_technical_failures_are_not_classified_as_answerable_questions() -> None
     assert agent_role_runner.role_attention_action({"status": "awaiting_approval"}) == "answer"
 
 
+def test_blocked_role_with_structured_question_remains_answerable() -> None:
+    result = {
+        "status": "blocked",
+        "question": {
+            "id": "backend_signal_format",
+            "requirement": "Which backend signal format should be used?",
+            "options": [
+                {
+                    "label": "Provide backend ticket",
+                    "value": "provide_backend_ticket",
+                    "recommended": True,
+                },
+                {
+                    "label": "Provide signal format",
+                    "value": "provide_signal_spec",
+                    "recommended": False,
+                },
+            ],
+            "allow_custom": True,
+        },
+    }
+
+    assert agent_role_runner.role_attention_action(result) == "answer"
+
+
+def test_blocked_role_with_malformed_question_still_requires_approval() -> None:
+    result = {
+        "status": "blocked",
+        "question": {"id": "backend_signal_format", "options": []},
+    }
+
+    assert agent_role_runner.role_attention_action(result) == "approve"
+
+
 def fake_adapter_script(path: Path) -> str:
     (path.parent / "Makefile").write_text(
         "check:\n\t@true\nsecurity:\n\t@true\n", encoding="utf-8"

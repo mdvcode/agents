@@ -159,3 +159,12 @@
   Example bad pattern: treat an alive PID and static semantic version as proof that the worker runs current code.
   Example good pattern: fail readiness on source/install drift, fail worker health on install/process fingerprint drift, and repair through `agent update` or `agent restart`.
   Scope: packaged agent control plane, worker lifecycle, and readiness diagnostics
+
+- Date: 2026-08-27
+  Agent: Codex
+  Failure: A role returned a bounded structured question together with `status=blocked`, but the Harness displayed an approval action; each approval resumed the same cached result without recording an answer until the adaptive budget was exhausted.
+  Root cause: Answerability was inferred only from the status string and ignored the validated question contract already present in the role result.
+  Prevention rule: Treat a valid structured question as informational input regardless of a conservative blocked status, while keeping blocked or failed results without a valid question on the technical approval or repair path.
+  Example bad pattern: map every blocked result to `approve` even when it contains a stable question id, semantic requirement, and bounded choices.
+  Example good pattern: normalize the structured question first, expose `answer`, record the response against its requirement fingerprint, and stop any post-answer repeat.
+  Scope: agent control-plane workflow, budget gate, CLI, and dashboard attention routing
