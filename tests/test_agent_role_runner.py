@@ -25,6 +25,13 @@ sys.modules[SPEC.name] = agent_role_runner
 SPEC.loader.exec_module(agent_role_runner)
 
 
+def test_nextjs_required_typecheck_uses_package_manager_neutral_node_runtime() -> None:
+    commands = agent_role_runner.profile_required_commands("nextjs_web", "quality_commands")
+
+    assert "node node_modules/typescript/lib/tsc.js --noEmit --incremental false" in commands
+    assert not any(command.startswith("bun ") for command in commands)
+
+
 def test_attention_stops_a_question_that_was_already_answered() -> None:
     state = {
         "attention_history": [
