@@ -7,6 +7,7 @@
 - Keep `.agents/prompts/` aligned with the docs/onboarding flow.
 
 ## In Progress
+- Task execution reliability: reproduce current task crashes and non-execution across CLI, installed-build freshness, worker, queue, workflow, and recovery boundaries; patch confirmed blockers and add regressions.
 - Adaptive Execution & Context Efficiency v1: implementation, deterministic 50-case plan evaluation, and the read-only Adaptive Acceptance dashboard extension are complete; real paired full/adaptive task evidence is still required before changing the default from the previously accepted auto policy.
 - Step 1 evidence series: implementation and real Codex smoke are complete; collect and verify 10-20 real task runs against a disposable publication target.
 - Step 2 production evidence: implementation is complete; run at least three real queued tasks with two overlapping workers, one successful PR, one human exception, and UI evidence in a registered web repository.

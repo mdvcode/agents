@@ -37,7 +37,7 @@ agent task --task-id fix-startup "Fix startup and add a regression test"
 agent watch --task-id fix-startup
 ```
 
-`agent task` prepares a dedicated branch in the current checkout, starts autonomous workers when necessary, and queues the work. The checkout must be clean before it switches branches. The service stays available for all locally initialized projects until `agent stop` is called. `agent start` remains an optional proactive service command.
+`agent task` checks that a known local Harness source matches the installed build, prepares a dedicated branch in the current checkout, queues the work, and verifies worker readiness. The checkout must be clean before it switches branches. A stale or unhealthy live worker is restarted automatically. If worker startup fails after queueing, the error includes the preserved run id and exact restart/watch commands; do not submit a replacement task. The service stays available for all locally initialized projects until `agent stop` is called. `agent start` remains an optional proactive service command.
 
 Generated branch prefixes are configurable and are not limited to a fixed allowlist:
 
@@ -96,10 +96,12 @@ agent worker status
 The first failing doctor check is the prerequisite to repair. Common actions are:
 
 - Missing Python runtime module: `agent update`, then `agent doctor --full`.
+- Installed build differs from its local source checkout: run the exact `agent update --source <path>` command reported by `agent doctor`, then retry the same task.
 - `agent update` is an invalid command: the installed CLI predates self-update. Run the current `install.sh` once from a fresh download (or use the documented `curl ... | sh` installer), open a new terminal or run `hash -r`, then use `agent update` normally.
 - Missing or wrong base branch: fetch it, or run `agent init --force --base-branch <existing-branch>`.
 - Worker not running: `agent start`.
 - Worker unhealthy after an upgrade: `agent worker restart`, then inspect the log path printed by the command.
+- Worker failed after a run was queued: run `agent worker restart`, then use the printed `agent watch --run-id <run-id>` command; the queued run is retained.
 - Pending approval: read the reason in `agent status`, then run its exact `agent approve` command if acceptable.
 - Missing information: use the exact `agent answer` command printed under `ATTENTION REQUIRED`, then continue with `agent watch --run-id ...`.
 - Stuck or failed run after the underlying cause is fixed: `agent retry <run-id>`; use `agent resume <run-id>` only for a recorded resume checkpoint.

@@ -107,7 +107,7 @@ compares Full with Adaptive. `NOT ENOUGH DATA` means that the representative pai
 run has not been completed; it is not a failure of the current task and does not prevent explicit
 `--mode adaptive` runs. Until that acceptance passes, `auto` does not select Adaptive by default.
 
-`agent task` starts the background worker automatically when needed. The project checkout must be clean before a task can create or switch branches.
+`agent task` refuses a stale source/install combination, starts or repairs the background worker when needed, and waits for worker readiness before reporting a healthy launch. If the task was already queued when worker startup failed, the error preserves its run id and prints the exact restart/watch commands instead of discarding the work. The project checkout must be clean before a task can create or switch branches.
 
 `agent init` creates `.agent/project.yaml` and, when absent, `AGENTS.md`. If Git already ignores either file, keep it local and do not force-add it. Otherwise, commit the new file or add a repository-approved ignore rule before starting work.
 

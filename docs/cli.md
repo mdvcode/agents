@@ -85,7 +85,7 @@ If an older installed command does not list `adaptive`, install the current chec
 `agent update --source /path/to/agents`, refresh the shell command cache with `hash -r`, and check
 `agent task --help` again.
 
-`agent task` is the ordinary start command: it validates the request, starts the persistent worker service when necessary, prepares the task workspace, and idempotently enqueues the normalized Task envelope. Repeating the same explicit `--task-id` returns the existing queue item.
+`agent task` is the ordinary start command: it validates the request, rejects a known stale source/install combination, prepares the task workspace, idempotently enqueues the normalized Task envelope, and verifies that the persistent worker is ready. Repeating the same explicit `--task-id` returns the existing queue item. If worker startup fails after queueing, the run is preserved and the error prints its run id plus the restart/watch commands needed to continue it.
 
 Task mode defaults to `auto`. Auto uses the current guarded fast path unless the goal names a sensitive or broad change such as authentication, migrations, payments, production, dependencies, architecture, or a refactor; it never selects a multi-hour mode or Adaptive before acceptance. `--mode adaptive` explicitly opts into deterministic task analysis and an auditable minimum-safe execution DAG. It may skip optional roles, use deterministic verification instead of optional model calls, run independent read-only checks in parallel, and provide each model-backed role only its scoped context. Low-confidence or sensitive analysis expands to a safer workflow, and hard security, approval, recovery, and publication gates remain mandatory.
 

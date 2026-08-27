@@ -12,11 +12,13 @@ def test_makefile_exposes_real_codex_sdk_smoke_gate() -> None:
     assert "runtime-preflight:" in makefile
     assert "codex-preflight:" in makefile
     assert "CODEX_CLI ?=" in makefile
-    assert "python3 scripts/check_runtime.py --repo ." in makefile
+    assert "PYTHON ?=" in makefile
+    assert "[ -x .venv/bin/python ]" in makefile
+    assert "$(PYTHON) scripts/check_runtime.py --repo ." in makefile
     assert "codex-preflight: runtime-preflight" in makefile
     assert "codex-smoke:" in makefile
     assert "AGENT_REAL_CODEX_SMOKE=1" in makefile
-    assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_real_codex_smoke.py -q" in makefile
+    assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(PYTHON) -m pytest tests/test_real_codex_smoke.py -q" in makefile
 
 
 def test_docs_describe_codex_preflight_and_smoke() -> None:

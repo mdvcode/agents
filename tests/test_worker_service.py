@@ -40,6 +40,19 @@ def test_build_fingerprint_is_layout_independent(tmp_path: Path) -> None:
     )
 
 
+def test_build_fingerprint_covers_execution_policy_and_make_targets(tmp_path: Path) -> None:
+    root = tmp_path / "harness"
+    (root / "ai_harness").mkdir(parents=True)
+    (root / "scripts").mkdir()
+    (root / ".agent-role-policy.yaml").write_text("version: 1\n", encoding="utf-8")
+    (root / "Makefile").write_text("check:\n\tpython3 -m pytest\n", encoding="utf-8")
+    initial = harness_build_fingerprint(root)
+
+    (root / "Makefile").write_text("check:\n\t.venv/bin/python -m pytest\n", encoding="utf-8")
+
+    assert harness_build_fingerprint(root) != initial
+
+
 def test_worker_service_registers_reports_health_and_stops_gracefully(tmp_path: Path) -> None:
     queue = TaskQueue(tmp_path / "queue.db")
     state_path = tmp_path / "service.json"
