@@ -1024,3 +1024,43 @@ def test_successful_verifier_artifact_supersedes_historical_role_blockers(tmp_pa
 
     assert result["next_role"] == "quality-runner"
     assert result["stop"] is False
+
+
+def test_implementation_in_review_repair_defers_old_verifier_blockers_to_rerun(
+    tmp_path: Path,
+) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    artifact(
+        artifacts_dir / "architecture_consistency.json",
+        {
+            "verdict": "broken",
+            "blockers": ["P2: terminal cleanup rejection overrides done handling."],
+            "repair_required": True,
+        },
+    )
+    state = completed_state(
+        last_route={
+            "next_role": "implementation-agent",
+            "loop": {"name": "review_repair", "iteration": 1},
+        }
+    )
+    state["roles"].extend(
+        [
+            {
+                "role": "architecture-consistency-agent",
+                "result": {
+                    "status": "completed",
+                    "blockers": ["P2: terminal cleanup rejection overrides done handling."],
+                },
+            },
+            {
+                "role": "implementation-agent",
+                "result": {"status": "completed", "blockers": []},
+            },
+        ]
+    )
+
+    result = route(tmp_path, state, "implementation-agent")
+
+    assert result["next_role"] == "quality-runner"
+    assert result["stop"] is False

@@ -519,6 +519,21 @@ def workflow_blockers(
     current_role: str,
 ) -> list[str]:
     accepted_ids = accepted_security_finding_ids(state, artifacts_dir)
+    active_repair_sources: set[str] = set()
+    if current_role == "implementation-agent":
+        last_route = state.get("last_route", {})
+        active_loop = last_route.get("loop", {}) if isinstance(last_route, dict) else {}
+        loop_name = str(active_loop.get("name", "")) if isinstance(active_loop, dict) else ""
+        active_repair_sources = {
+            "quality_repair": {"quality-runner"},
+            "security_repair": {"security-agent"},
+            "review_repair": {
+                "architecture-consistency-agent",
+                "semantic-conflict-agent",
+                "reviewer",
+            },
+            "frontend_verification_repair": {"frontend-qa-agent"},
+        }.get(loop_name, set())
 
     def unresolved(values: Any) -> list[str]:
         return [
@@ -548,6 +563,8 @@ def workflow_blockers(
         # unresolved work. Likewise, a successful rerun supersedes an older
         # failed result for the same role.
         if role == "approval-gate":
+            continue
+        if role in active_repair_sources:
             continue
         if verifier_unavailability_accepted(state, artifacts_dir, role):
             continue
