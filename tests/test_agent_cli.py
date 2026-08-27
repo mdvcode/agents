@@ -51,6 +51,7 @@ def configure_temporary_harness(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
         (ROOT / ".agent-recovery.yaml").read_bytes()
     )
     monkeypatch.setattr(cli, "harness_home", lambda: state_root)
+    monkeypatch.setattr(cli, "missing_runtime_imports", lambda: [])
     monkeypatch.setattr(
         cli,
         "run_worker_command",
@@ -586,6 +587,247 @@ def test_agent_task_replaces_paused_checkout_owner_and_preserves_run(
         capture_output=True,
         text=True,
     ).stdout.strip() == "feat/kc-432"
+
+
+def test_agent_task_checks_runtime_before_superseding_paused_checkout_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    commit_all(repository)
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    assert cli.main(
+        ["task", "Old task", "--repo", str(repository), "--task-id", "old-task"]
+    ) == 0
+    capsys.readouterr()
+    task_queue = cli.load_harness_module(state_root, "task_queue")
+    queue = task_queue.TaskQueue(state_root / ".agent-queue" / "tasks.db")
+    old = queue.claim(worker_id="worker-old")
+    assert old is not None
+    assert queue.mark_running(old.id, "worker-old")
+    queue.finish(
+        task_id=old.id,
+        worker_id="worker-old",
+        status="awaiting_approval",
+        run_id="run-old",
+        requires_human=True,
+        exception_reason="Choose a timeout policy",
+    )
+    monkeypatch.setattr(cli, "missing_runtime_imports", lambda: ["openai_codex"])
+
+    result = cli.main(
+        ["task", "New task", "--repo", str(repository), "--task-id", "new-task"]
+    )
+
+    assert result == 2
+    assert "missing runtime dependencies: openai_codex" in capsys.readouterr().err
+    records = queue.list()
+    assert len(records) == 1
+    assert records[0].status == "awaiting_approval"
+    assert records[0].payload["task_id"] == "old-task"
+    assert subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == "feat/old-task"
+
+
+def test_agent_task_rejects_source_install_drift_before_queue_or_branch_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    original_branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    commit_all(repository)
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    source = tmp_path / "harness-source"
+    monkeypatch.setattr(cli, "source_build_comparison", lambda _repository, _root: (source, False))
+
+    result = cli.main(
+        ["task", "Do not queue", "--repo", str(repository), "--task-id", "drifted"]
+    )
+
+    assert result == 2
+    error = capsys.readouterr().err
+    assert f"agent update --source {source}" in error
+    assert not (state_root / ".agent-queue" / "tasks.db").exists()
+    assert subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == original_branch
+
+
+def test_source_build_comparison_uses_pipx_local_source_for_other_projects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prefix = tmp_path / "venv"
+    installed = prefix / "share" / "ai-harness"
+    source = tmp_path / "harness-source"
+    repository = tmp_path / "target-project"
+    for root, value in ((installed, "installed"), (source, "source")):
+        (root / "ai_harness").mkdir(parents=True)
+        (root / "scripts").mkdir()
+        (root / "ai_harness" / "build.py").write_text(f"VALUE = {value!r}\n", encoding="utf-8")
+        (root / "scripts" / "worker_service.py").write_text("RUN = True\n", encoding="utf-8")
+    repository.mkdir()
+    monkeypatch.setattr(cli.sys, "prefix", str(prefix))
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: "/fake/pipx")
+    monkeypatch.setattr(cli, "pipx_installed_source", lambda _pipx: str(source))
+
+    detected, matches = cli.source_build_comparison(repository, installed)
+
+    assert detected == source.resolve()
+    assert matches is False
+
+
+def test_agent_task_preserves_queued_run_when_worker_startup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    commit_all(repository)
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+
+    def fail_worker(_root: Path, _action: str, *, workers: int = 0) -> dict[str, object]:
+        raise cli.CLIError("worker failed during startup: missing policy")
+
+    monkeypatch.setattr(cli, "run_worker_command", fail_worker)
+
+    result = cli.main(
+        ["task", "Queue safely", "--repo", str(repository), "--task-id", "safe-queue"]
+    )
+
+    assert result == 2
+    error = capsys.readouterr().err
+    assert "was queued as run" in error
+    assert "agent worker restart" in error
+    task_queue = cli.load_harness_module(state_root, "task_queue")
+    records = task_queue.TaskQueue(state_root / ".agent-queue" / "tasks.db").list()
+    assert len(records) == 1
+    assert records[0].status == "queued"
+    assert records[0].payload["task_id"] == "safe-queue"
+
+
+def test_ensure_worker_service_restarts_stale_live_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "worker_service_status",
+        lambda _root: {
+            "alive": True,
+            "status": "healthy",
+            "build_fingerprint": "old",
+            "stale_build": True,
+        },
+    )
+    calls: list[tuple[str, int]] = []
+
+    def restart(_root: Path, action: str, *, workers: int = 0) -> dict[str, object]:
+        calls.append((action, workers))
+        return {"alive": True, "status": "healthy", "build_fingerprint": "new"}
+
+    monkeypatch.setattr(cli, "run_worker_command", restart)
+
+    result = cli.ensure_worker_service(tmp_path, workers=2)
+
+    assert result["status"] == "healthy"
+    assert calls == [("restart", 2)]
+
+
+def test_wait_for_worker_ready_observes_registration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    states = iter(
+        [
+            {
+                "configured": True,
+                "alive": True,
+                "status": "starting",
+                "build_fingerprint": "",
+                "stale_build": False,
+                "last_error": {},
+            },
+            {
+                "configured": True,
+                "alive": True,
+                "status": "healthy",
+                "build_fingerprint": "current",
+                "stale_build": False,
+                "last_error": {},
+            },
+        ]
+    )
+    monkeypatch.setattr(cli, "worker_service_status", lambda _root: next(states))
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+
+    result = cli.wait_for_worker_ready(tmp_path, timeout_seconds=1)
+
+    assert result["status"] == "healthy"
+    assert result["build_fingerprint"] == "current"
+
+
+def test_wait_for_worker_stopped_observes_process_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    states = iter(
+        [
+            {"alive": True, "status": "stopping"},
+            {"alive": False, "status": "stopped"},
+        ]
+    )
+    monkeypatch.setattr(cli, "worker_service_status", lambda _root: next(states))
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+
+    result = cli.wait_for_worker_stopped(tmp_path, timeout_seconds=1)
+
+    assert result["status"] == "stopped"
+
+
+def test_last_worker_error_recovers_raw_startup_traceback(tmp_path: Path) -> None:
+    queue = tmp_path / ".agent-queue"
+    queue.mkdir()
+    (queue / "worker-service.log").write_text(
+        "Traceback (most recent call last):\n"
+        "  File \"worker_service.py\", line 1, in <module>\n"
+        "FileNotFoundError: missing recovery policy\n",
+        encoding="utf-8",
+    )
+
+    error = cli.last_worker_error(tmp_path)
+
+    assert error["error_type"] == "WorkerStartupError"
+    assert "missing recovery policy" in error["message"]
 
 
 def test_task_worktree_can_use_a_committed_local_base_without_origin(tmp_path: Path) -> None:

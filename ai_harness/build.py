@@ -10,6 +10,7 @@ CONFIG_FILES = (
     ".agent-artifact-owners.yaml",
     ".agent-policy.yaml",
     ".agent-project-profiles.yaml",
+    ".agent-role-policy.yaml",
     ".agent-recovery.yaml",
     ".agent-role-capabilities.yaml",
     ".agent-role-contracts.yaml",
@@ -18,6 +19,7 @@ CONFIG_FILES = (
     ".agent-tool-policy.yaml",
     ".agent-workflows.yaml",
     "AGENTS.md",
+    "Makefile",
 )
 
 

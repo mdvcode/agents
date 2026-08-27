@@ -141,9 +141,8 @@ def test_role_prompt_includes_interaction_policy_and_recorded_user_answer(tmp_pa
     assert schema["properties"]["question"]["properties"]["options"]["type"] == "array"
     assert schema["properties"]["question"]["properties"]["options"]["minItems"] == 2
     assert schema["properties"]["question"]["properties"]["options"]["maxItems"] == 3
-    option_schema = schema["properties"]["question"]["properties"]["options"]["items"]
-    assert option_schema["properties"]["requires_input"] == {"type": "boolean"}
-    assert set(option_schema["required"]) == set(option_schema["properties"])
+    assert "child_tasks" in schema["required"]
+    assert set(schema["required"]) == set(schema["properties"])
 
 
 def test_noncompleted_role_result_gets_a_nonempty_attention_reason() -> None:

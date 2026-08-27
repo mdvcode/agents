@@ -99,6 +99,48 @@ def missing_runtime_imports() -> list[str]:
     return missing
 
 
+def source_build_comparison(repository: Path, root: Path) -> tuple[Path | None, bool]:
+    """Return a known local Harness source and whether the installed build matches it."""
+
+    repository = repository.resolve()
+    root = root.resolve()
+    source: Path | None = None
+    if (
+        repository != root
+        and (repository / "pyproject.toml").is_file()
+        and (repository / "ai_harness" / "build.py").is_file()
+        and (repository / "scripts" / "worker_service.py").is_file()
+    ):
+        source = repository
+    elif root == (Path(sys.prefix) / "share" / "ai-harness").resolve():
+        pipx = shutil.which("pipx")
+        if pipx:
+            try:
+                configured_source = pipx_installed_source(pipx)
+            except CLIError:
+                configured_source = ""
+            candidate = Path(configured_source).expanduser() if configured_source else None
+            if (
+                candidate is not None
+                and candidate.is_dir()
+                and (candidate / "ai_harness" / "build.py").is_file()
+                and (candidate / "scripts" / "worker_service.py").is_file()
+            ):
+                source = candidate.resolve()
+    if source is None:
+        return None, True
+    return source, harness_build_fingerprint(root) == harness_build_fingerprint(source)
+
+
+def require_current_installed_build(repository: Path, root: Path) -> None:
+    source, matches = source_build_comparison(repository, root)
+    if source is not None and not matches:
+        raise CLIError(
+            "installed harness differs from its source checkout; "
+            f"run `agent update --source {source}`, then retry the same task"
+        )
+
+
 def emit(payload: dict[str, Any], *, as_json: bool, lines: Sequence[str]) -> None:
     if as_json:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
@@ -376,6 +418,10 @@ def handle_task(args: argparse.Namespace) -> int:
             ),
         )
         return 0
+    require_current_installed_build(repository, root)
+    missing = missing_runtime_imports()
+    if missing:
+        raise CLIError(f"missing runtime dependencies: {', '.join(missing)}; {dependency_repair_hint()}")
     task_queue = load_harness_module(root, "task_queue")
     queue_path = root / ".agent-queue" / "tasks.db"
     try:
@@ -414,9 +460,6 @@ def handle_task(args: argparse.Namespace) -> int:
             f"with status {conflict.status!r}; inspect it with `agent status` "
             "or submit again without --keep-paused to replace a human-paused task"
         )
-    missing = missing_runtime_imports()
-    if missing:
-        raise CLIError(f"missing runtime dependencies: {', '.join(missing)}; {dependency_repair_hint()}")
     branch_warnings: list[str] = list(supersession_warnings)
     prepared: dict[str, object] | None = None
     if not args.current_branch and workspace_mode == "checkout" and existing_same_task is None:
@@ -442,8 +485,13 @@ def handle_task(args: argparse.Namespace) -> int:
             rollback_errors = worktree_manager.rollback_prepared_task_branch(repository, prepared)
         rollback_note = f"; branch rollback failed: {'; '.join(rollback_errors)}" if rollback_errors else ""
         raise CLIError(f"task could not be queued: {exc}{rollback_note}") from exc
-    service = worker_service_status(root)
-    worker = service if service["alive"] else run_worker_command(root, "start", workers=3)
+    try:
+        worker = ensure_worker_service(root, workers=3)
+    except CLIError as exc:
+        raise CLIError(
+            f"task {task_id!r} was queued as run {record.run_id!r}, but the worker is unavailable: "
+            f"{exc}; repair it, then run `agent worker restart` and `agent watch --run-id {record.run_id}`"
+        ) from exc
     stored_branch = str(record.payload.get("branch", branch))
     result = {
         "status": record.status,
@@ -621,6 +669,16 @@ def last_worker_error(root: Path) -> dict[str, Any]:
                 "message": str(value.get("message", "")),
                 "time": str(value.get("time", "")),
             }
+    for line in reversed(lines[-100:]):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("Traceback (") or stripped.startswith("File "):
+            continue
+        if any(marker in stripped for marker in ("Error:", "Exception:", "ModuleNotFoundError")):
+            return {
+                "error_type": "WorkerStartupError",
+                "message": sanitized_message(stripped),
+                "time": "",
+            }
     return {}
 
 
@@ -657,6 +715,59 @@ def worker_service_status(root: Path) -> dict[str, Any]:
         "current_build_fingerprint": current_build_fingerprint,
         "stale_build": stale_build,
     }
+
+
+def wait_for_worker_ready(root: Path, *, timeout_seconds: float = 10.0) -> dict[str, Any]:
+    """Wait until a background worker has registered or report its startup failure."""
+
+    deadline = time.monotonic() + max(0.1, timeout_seconds)
+    status: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        status = worker_service_status(root)
+        if (
+            status.get("alive")
+            and status.get("status") in {"healthy", "degraded"}
+            and status.get("build_fingerprint")
+            and not status.get("stale_build")
+        ):
+            return status
+        if status.get("configured") and not status.get("alive"):
+            detail = status.get("last_error") or {}
+            cause = str(detail.get("message", "worker process exited during startup"))
+            raise CLIError(f"worker failed during startup: {cause}")
+        time.sleep(0.05)
+    detail = status.get("last_error") or {}
+    cause = str(detail.get("message", "worker did not become ready within 10 seconds"))
+    raise CLIError(f"worker startup could not be verified: {cause}")
+
+
+def wait_for_worker_stopped(root: Path, *, timeout_seconds: float = 30.0) -> dict[str, Any]:
+    """Wait for the registered process to exit before update or shutdown continues."""
+
+    deadline = time.monotonic() + max(0.1, timeout_seconds)
+    status: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        status = worker_service_status(root)
+        if not status.get("alive"):
+            return status
+        time.sleep(0.05)
+    raise CLIError(
+        "worker did not stop within 30 seconds; inspect `agent worker status` before updating"
+    )
+
+
+def ensure_worker_service(root: Path, *, workers: int = 3) -> dict[str, Any]:
+    """Return a ready worker, restarting stale or unhealthy live services."""
+
+    service = worker_service_status(root)
+    if service["alive"] and service["status"] in {"healthy", "degraded"}:
+        if service["build_fingerprint"] and not service["stale_build"]:
+            return service
+        return run_worker_command(root, "restart", workers=workers)
+    if service["alive"] and service["status"] == "starting":
+        return wait_for_worker_ready(root)
+    action = "restart" if service["alive"] else "start"
+    return run_worker_command(root, action, workers=workers)
 
 
 def project_tasks(db_path: Path, repository: Path) -> list[dict[str, Any]]:
@@ -1567,6 +1678,10 @@ def run_worker_command(root: Path, action: str, *, workers: int = 0) -> dict[str
         raise CLIError(f"worker {action} failed: {exc}") from exc
     if completed.returncode != 0:
         raise CLIError(worker_subprocess_error(completed))
+    if action in {"start", "restart"}:
+        return wait_for_worker_ready(root)
+    if action == "stop":
+        return wait_for_worker_stopped(root)
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError:
@@ -1589,7 +1704,12 @@ def handle_worker_command(args: argparse.Namespace) -> int:
             ),
         )
         return 0 if status["alive"] else 1
-    payload = run_worker_command(root, args.worker_command, workers=int(getattr(args, "workers", 0) or 0))
+    workers = int(getattr(args, "workers", 0) or 0)
+    payload = (
+        ensure_worker_service(root, workers=workers or 3)
+        if args.worker_command == "start"
+        else run_worker_command(root, args.worker_command, workers=workers)
+    )
     emit(
         payload,
         as_json=args.json,
@@ -1607,6 +1727,8 @@ def handle_start(args: argparse.Namespace) -> int:
     config = load_project_config(repository)
     if not project_is_trusted(config):
         raise CLIError("project configuration is not locally trusted; run `agent init` again")
+    root = harness_home()
+    require_current_installed_build(repository, root)
     missing = missing_runtime_imports()
     if missing:
         raise CLIError(f"missing runtime dependencies: {', '.join(missing)}; {dependency_repair_hint()}")
@@ -1616,8 +1738,7 @@ def handle_start(args: argparse.Namespace) -> int:
             f"configured base branch {config.base_branch!r} was not found locally or under origin; "
             "fetch it or run `agent init --force --base-branch <branch>`"
         )
-    root = harness_home()
-    payload = run_worker_command(root, "start", workers=args.workers)
+    payload = ensure_worker_service(root, workers=args.workers)
     emit(
         payload,
         as_json=args.json,
@@ -2169,26 +2290,22 @@ def handle_doctor(args: argparse.Namespace) -> int:
         except subprocess.TimeoutExpired:
             checks.append(DoctorCheck("runtime_preflight", "fail", "runtime preflight timed out after 90s"))
     if root is not None:
-        if (
-            repository is not None
-            and repository.resolve() != root.resolve()
-            and (repository / "scripts" / "worker_service.py").is_file()
-            and (repository / "ai_harness" / "build.py").is_file()
-        ):
-            installed_fingerprint = harness_build_fingerprint(root)
-            source_fingerprint = harness_build_fingerprint(repository)
-            source_synced = installed_fingerprint == source_fingerprint
+        if repository is not None:
+            source, source_synced = source_build_comparison(repository, root)
+        else:
+            source, source_synced = None, True
+        if source is not None:
             checks.append(
                 DoctorCheck(
                     "installed_build",
                     "pass" if source_synced else "fail",
                     "installed harness matches this source checkout"
                     if source_synced
-                    else "installed harness differs from this source checkout; run `agent update --source .`",
+                    else f"installed harness differs from source checkout {source}; run `agent update --source {source}`",
                 )
             )
             if not source_synced:
-                next_actions.append(f"agent update --source {repository}")
+                next_actions.append(f"agent update --source {source}")
         service = worker_service_status(root)
         service_detail = (
             f"running pid={service['pid']}"
