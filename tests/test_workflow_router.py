@@ -285,6 +285,28 @@ def test_environmental_verifier_failure_does_not_repeat_implementation(tmp_path:
     assert "will not be repeated" in result["reason"]
 
 
+def test_mixed_environment_and_code_verifier_blockers_start_repair(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    artifact(
+        artifacts_dir / "architecture_consistency.json",
+        {
+            "verdict": "broken",
+            "blockers": [
+                "P2: terminal cleanup rejection overrides an authoritative done event.",
+                "Browser verification is unavailable because dependencies are missing.",
+            ],
+            "repair_required": True,
+        },
+    )
+    state = completed_state()
+
+    result = route(tmp_path, state, "architecture-consistency-agent")
+
+    assert result["next_role"] == "implementation-agent"
+    assert result["stop"] is False
+    assert result["loop"]["name"] == "review_repair"
+
+
 def test_environmental_verifier_approval_advances_without_reprompting(tmp_path: Path) -> None:
     artifacts_dir = setup_artifacts(tmp_path)
     semantic = {

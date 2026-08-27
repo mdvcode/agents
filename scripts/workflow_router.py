@@ -617,13 +617,6 @@ def verifier_environment_unavailable(artifacts_dir: Path, artifact_name: str) ->
     artifact = _artifact(artifacts_dir, artifact_name)
     if not isinstance(artifact, dict):
         return False
-    text_value = " ".join(
-        [
-            *[str(item) for item in artifact.get("blockers", []) if isinstance(item, (str, int))],
-            *[str(item) for item in artifact.get("warnings", []) if isinstance(item, (str, int))],
-            *[str(item) for item in artifact.get("observed", []) if isinstance(item, (str, int))],
-        ]
-    ).lower()
     markers = (
         "unavailable",
         "missing dependenc",
@@ -634,7 +627,22 @@ def verifier_environment_unavailable(artifacts_dir: Path, artifact_name: str) ->
         "runtime capability",
         "did not complete",
     )
-    return any(marker in text_value for marker in markers)
+    if str(artifact.get("verdict", "")).lower() == "unavailable":
+        return True
+    blockers = [
+        str(item).lower()
+        for item in artifact.get("blockers", [])
+        if isinstance(item, (str, int)) and str(item).strip()
+    ]
+    if blockers:
+        return all(any(marker in blocker for marker in markers) for blocker in blockers)
+    fallback = " ".join(
+        [
+            *[str(item) for item in artifact.get("warnings", []) if isinstance(item, (str, int))],
+            *[str(item) for item in artifact.get("observed", []) if isinstance(item, (str, int))],
+        ]
+    ).lower()
+    return any(marker in fallback for marker in markers)
 
 
 def verifier_artifact_fingerprint(artifacts_dir: Path, artifact_name: str) -> str:
