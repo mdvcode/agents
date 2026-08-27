@@ -4,6 +4,7 @@ import json
 import sqlite3
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -1611,6 +1612,41 @@ def test_parser_exposes_recovery_commands(
 
     assert args.command == command
     assert getattr(args, "run_id", None) == run_id
+
+
+def test_retry_checkpoint_reruns_current_role_instead_of_cached_blocker(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    workflow = {"current_role": "quality-runner"}
+    checkpoint_path = run / "checkpoints" / "quality-runner.json"
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "run_id": "run-123",
+                "role": "quality-runner",
+                "state": "role_validating",
+                "attempt": 2,
+                "worktree": str(worktree),
+                "input_fingerprint": "task-fingerprint",
+                "output_fingerprint": "sha256:blocked-result",
+                "artifacts": ["quality.json"],
+                "side_effects": [],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cli.reset_role_checkpoint_for_rerun(run, workflow)
+
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert workflow["resume_role"] == "quality-runner"
+    assert checkpoint["state"] == "role_pending"
+    assert checkpoint["attempt"] == 2
+    assert checkpoint["output_fingerprint"] == ""
+    assert checkpoint["artifacts"] == []
 
 
 @pytest.mark.parametrize("worker_command", ["status", "start", "restart", "stop"])
