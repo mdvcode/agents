@@ -132,6 +132,8 @@ def test_role_prompt_includes_interaction_policy_and_recorded_user_answer(tmp_pa
     schema = codex_cli_executor.standard_role_result_schema({"required": [], "types": {}})
     assert "question" in schema["properties"]
     assert "question" in schema["required"]
+    assert "child_tasks" in schema["properties"]
+    assert set(schema["required"]) == set(schema["properties"])
     assert schema["properties"]["question"]["type"] == ["object", "null"]
     assert schema["properties"]["question"]["properties"]["requirement"] == {"type": "string"}
     assert "requirement" in schema["properties"]["question"]["required"]

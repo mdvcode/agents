@@ -342,6 +342,7 @@ def standard_role_result_schema(output_contract: dict[str, Any]) -> dict[str, An
             "warnings",
             "tokens_used",
             "question",
+            "child_tasks",
         ],
         "additionalProperties": False,
     }
