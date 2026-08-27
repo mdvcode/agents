@@ -159,3 +159,12 @@
   Example bad pattern: treat an alive PID and static semantic version as proof that the worker runs current code.
   Example good pattern: fail readiness on source/install drift, fail worker health on install/process fingerprint drift, and repair through `agent update` or `agent restart`.
   Scope: packaged agent control plane, worker lifecycle, and readiness diagnostics
+
+- Date: 2026-08-27
+  Agent: Codex
+  Failure: Runtime preflight passed, but every first model-backed role was rejected before inference with `invalid_json_schema`, so tasks queued successfully and then stopped without implementation.
+  Root cause: The provider-facing structured-output schema declared `child_tasks` in `properties` but omitted it from `required`; the SDK/API strict-schema contract requires every object property to be required.
+  Prevention rule: Validate provider-facing schemas against the provider's strict structured-output rules and keep a real read-only model turn in the runtime gate; authentication/configuration preflight alone cannot prove that task execution starts.
+  Example bad pattern: unit-test local schema parsing and account preflight while never submitting the exact response schema used by production roles.
+  Example good pattern: assert every declared object property is required, run the production response schema through a real SDK smoke, and block release when that turn is rejected before inference.
+  Scope: provider-neutral runtime adapters, structured role output, and production readiness
