@@ -520,31 +520,30 @@ def workflow_blockers(
 ) -> list[str]:
     accepted_ids = accepted_security_finding_ids(state, artifacts_dir)
     active_repair_sources: set[str] = set()
-    if current_role == "implementation-agent":
-        entries = _role_entries(state)
-        last_positions = {
-            role: max(index for index, entry in enumerate(entries) if entry.get("role") == role)
-            for role in {str(entry.get("role", "")) for entry in entries}
-        }
-        implementation_position = last_positions.get("implementation-agent", -1)
-        loop_sources = {
-            "quality_repair": {"quality-runner"},
-            "security_repair": {"security-agent"},
-            "review_repair": {
-                "architecture-consistency-agent",
-                "semantic-conflict-agent",
-                "reviewer",
-            },
-            "frontend_verification_repair": {"frontend-qa-agent"},
-        }
-        loops = state.get("loops", {})
-        if isinstance(loops, dict):
-            for loop_name, sources in loop_sources.items():
-                loop = loops.get(loop_name, {})
-                if not isinstance(loop, dict) or int(loop.get("iterations", 0) or 0) <= 0:
-                    continue
-                if any(last_positions.get(source, -1) < implementation_position for source in sources):
-                    active_repair_sources.update(sources)
+    entries = _role_entries(state)
+    last_positions = {
+        role: max(index for index, entry in enumerate(entries) if entry.get("role") == role)
+        for role in {str(entry.get("role", "")) for entry in entries}
+    }
+    implementation_position = last_positions.get("implementation-agent", -1)
+    loop_sources = {
+        "quality_repair": {"quality-runner"},
+        "security_repair": {"security-agent"},
+        "review_repair": {
+            "architecture-consistency-agent",
+            "semantic-conflict-agent",
+            "reviewer",
+        },
+        "frontend_verification_repair": {"frontend-qa-agent"},
+    }
+    loops = state.get("loops", {})
+    if isinstance(loops, dict):
+        for loop_name, sources in loop_sources.items():
+            loop = loops.get(loop_name, {})
+            if not isinstance(loop, dict) or int(loop.get("iterations", 0) or 0) <= 0:
+                continue
+            if any(last_positions.get(source, -1) < implementation_position for source in sources):
+                active_repair_sources.update(sources)
 
     def unresolved(values: Any) -> list[str]:
         return [

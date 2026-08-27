@@ -987,10 +987,13 @@ def test_resumed_role_ignores_historical_approval_and_superseded_blockers(tmp_pa
         ]
     )
 
-    result = route(tmp_path, state, "implementation-agent")
+    implementation = route(tmp_path, state, "implementation-agent")
+    test_generation = route(tmp_path, state, "test-generator")
 
-    assert result["next_role"] == "quality-runner"
-    assert result["stop"] is False
+    assert implementation["next_role"] == "quality-runner"
+    assert implementation["stop"] is False
+    assert test_generation["next_role"] == "quality-runner"
+    assert test_generation["stop"] is False
 
 
 def test_successful_verifier_artifact_supersedes_historical_role_blockers(tmp_path: Path) -> None:
