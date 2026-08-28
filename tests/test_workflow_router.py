@@ -338,6 +338,91 @@ def test_environmental_verifier_approval_advances_without_reprompting(tmp_path: 
     assert any("publication must remain draft" in item for item in result["warnings"])
 
 
+def test_active_verifier_acceptance_rebinds_to_rerun_artifact(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    review = {
+        "verdict": "works",
+        "status": "pass",
+        "blockers": [],
+        "warnings": ["Browser verification is unavailable."],
+    }
+    artifact(artifacts_dir / "review.json", review)
+    scope = {
+        "actions": ["accept_unavailable_verification", "resume_workflow"],
+        "verifier_fingerprint": "previous-review-fingerprint",
+    }
+    state = completed_state(
+        approval_override={
+            "approval_id": "active-reviewer-acceptance",
+            "gate": "reviewer",
+            "scope": scope.copy(),
+        },
+        approval_grants=[
+            {
+                "approval_id": "active-reviewer-acceptance",
+                "gate": "reviewer",
+                "scope": scope.copy(),
+            }
+        ],
+    )
+
+    result = route(tmp_path, state, "reviewer")
+
+    current_fingerprint = hashlib.sha256(
+        json.dumps(review, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    assert result["next_role"] == "orchestrator"
+    assert result["stop"] is False
+    assert (
+        state["approval_grants"][0]["scope"]["verifier_fingerprint"]
+        == current_fingerprint
+    )
+    assert any("publication must remain draft" in item for item in result["warnings"])
+
+
+def test_active_verifier_acceptance_does_not_cover_code_blockers(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    artifact(
+        artifacts_dir / "review.json",
+        {
+            "verdict": "broken",
+            "status": "block",
+            "blockers": [
+                "P2: refresh admits stale response state.",
+                "Browser verification is unavailable.",
+            ],
+            "repair_required": True,
+        },
+    )
+    scope = {
+        "actions": ["accept_unavailable_verification", "resume_workflow"],
+        "verifier_fingerprint": "previous-review-fingerprint",
+    }
+    state = completed_state(
+        approval_override={
+            "approval_id": "active-reviewer-acceptance",
+            "gate": "reviewer",
+            "scope": scope.copy(),
+        },
+        approval_grants=[
+            {
+                "approval_id": "active-reviewer-acceptance",
+                "gate": "reviewer",
+                "scope": scope.copy(),
+            }
+        ],
+    )
+
+    result = route(tmp_path, state, "reviewer")
+
+    assert result["next_role"] == "implementation-agent"
+    assert result["stop"] is False
+    assert (
+        state["approval_grants"][0]["scope"]["verifier_fingerprint"]
+        == "previous-review-fingerprint"
+    )
+
+
 def test_legacy_environmental_verifier_approval_advances_current_run(tmp_path: Path) -> None:
     artifacts_dir = setup_artifacts(tmp_path)
     artifact(

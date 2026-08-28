@@ -1130,6 +1130,32 @@ def decide_next_role(
         warnings.append("Consumed one scoped approval override for this checkpoint.")
     grants = state.get("approval_grants", [])
     valid_grants = [item for item in grants if isinstance(item, dict)] if isinstance(grants, list) else []
+    active_verifier_acceptance = False
+    verifier_artifacts = {
+        "architecture-consistency-agent": "architecture_consistency.json",
+        "semantic-conflict-agent": "semantic_conflict.json",
+        "reviewer": "review.json",
+    }
+    verifier_artifact = verifier_artifacts.get(current_role)
+    if (
+        bypass_approval
+        and verifier_artifact
+        and "accept_unavailable_verification" in override_scope.get("actions", [])
+        and verifier_environment_unavailable(artifacts_dir, verifier_artifact)
+    ):
+        active_verifier_acceptance = True
+        current_fingerprint = verifier_artifact_fingerprint(
+            artifacts_dir,
+            verifier_artifact,
+        )
+        override_scope["verifier_fingerprint"] = current_fingerprint
+        approval_id = approval_override.get("approval_id")
+        for grant in valid_grants:
+            if grant.get("approval_id") != approval_id or grant.get("gate") != current_role:
+                continue
+            scope = grant.get("scope")
+            if isinstance(scope, dict):
+                scope["verifier_fingerprint"] = current_fingerprint
     risk_approved = any(
         item.get("gate") == "risk-classifier"
         and isinstance(item.get("scope"), dict)
@@ -1257,8 +1283,9 @@ def decide_next_role(
         reviewer_environment_unavailable = verifier_environment_unavailable(
             artifacts_dir, "review.json"
         )
-        reviewer_unavailability_accepted = verifier_unavailability_accepted(
-            state, artifacts_dir, current_role
+        reviewer_unavailability_accepted = (
+            active_verifier_acceptance
+            or verifier_unavailability_accepted(state, artifacts_dir, current_role)
         )
         if reviewer_environment_unavailable:
             if not reviewer_unavailability_accepted:
@@ -1311,8 +1338,9 @@ def decide_next_role(
             else "semantic_conflict.json"
         )
         verification = verifier_verdict(artifacts_dir, artifact_name)
-        unavailability_accepted = verifier_unavailability_accepted(
-            state, artifacts_dir, current_role
+        unavailability_accepted = (
+            active_verifier_acceptance
+            or verifier_unavailability_accepted(state, artifacts_dir, current_role)
         )
         if verification == "broken":
             if verifier_environment_unavailable(artifacts_dir, artifact_name):
