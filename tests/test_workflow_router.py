@@ -1034,7 +1034,7 @@ def test_broken_frontend_verification_starts_bounded_repair(tmp_path: Path) -> N
     assert result["loop"]["diff_fingerprint"] == "ui-diff"
 
 
-def test_loop_token_budget_routes_to_approval(tmp_path: Path) -> None:
+def test_loop_token_budget_continues_repair_in_economy(tmp_path: Path) -> None:
     artifacts_dir = setup_artifacts(tmp_path)
     artifact(artifacts_dir / "quality.json", {"overall_status": "fail", "failed_command": "pytest"})
     state = completed_state(diff_hash="changed", tokens_used=70000)
@@ -1042,8 +1042,10 @@ def test_loop_token_budget_routes_to_approval(tmp_path: Path) -> None:
 
     result = route(tmp_path, state, "quality-runner")
 
-    assert result["next_role"] == "approval-gate"
-    assert any("tokens" in warning for warning in result["warnings"])
+    assert result["next_role"] == "implementation-agent"
+    assert result["stop"] is False
+    assert state["budget_action"]["action"] == "economy"
+    assert any("soft repair token ceiling" in warning for warning in result["warnings"])
 
 
 def test_loop_time_budget_routes_to_approval(tmp_path: Path) -> None:
@@ -1073,12 +1075,24 @@ def test_invalid_required_artifact_keeps_publication_unreachable(tmp_path: Path)
     assert result["publication_allowed"] is False
 
 
-def test_role_and_token_budgets_route_to_approval(tmp_path: Path) -> None:
-    artifacts_dir = setup_artifacts(tmp_path)
-    for state in (completed_state(role_count=41), completed_state(tokens_used=1500001)):
-        result = route(tmp_path, state, "reviewer")
-        assert result["next_role"] == "approval-gate"
-        assert result["stop"] is True
+def test_role_budget_remains_a_hard_approval_bound(tmp_path: Path) -> None:
+    setup_artifacts(tmp_path)
+    result = route(tmp_path, completed_state(role_count=41), "reviewer")
+
+    assert result["next_role"] == "approval-gate"
+    assert result["stop"] is True
+
+
+def test_workflow_token_budget_continues_in_economy(tmp_path: Path) -> None:
+    setup_artifacts(tmp_path)
+    state = completed_state(tokens_used=1500001)
+
+    result = route(tmp_path, state, "reviewer")
+
+    assert result["next_role"] == "orchestrator"
+    assert result["stop"] is False
+    assert state["budget_action"]["action"] == "economy"
+    assert any("soft max_tokens" in warning for warning in result["warnings"])
 
 
 def test_budget_approval_override_allows_checkpoint_to_continue(tmp_path: Path) -> None:

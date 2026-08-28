@@ -25,6 +25,16 @@ sys.modules[SPEC.name] = agent_role_runner
 SPEC.loader.exec_module(agent_role_runner)
 
 
+def test_workflow_token_ceiling_is_economy_pressure_not_a_blocker() -> None:
+    action = agent_role_runner.workflow_token_pressure_action(
+        {"budgets": {"max_tokens": 100}, "tokens_used": 125}
+    )
+
+    assert action is not None
+    assert action["action"] == "economy"
+    assert action["exhausted_dimensions"] == ["tokens_used"]
+
+
 def test_publication_requires_central_registration(monkeypatch: object, tmp_path: Path) -> None:
     monkeypatch.setattr(agent_role_runner, "git_remote", lambda _repository: "local-origin")
     monkeypatch.setattr(agent_role_runner, "find_by_remote", lambda _remote: None)

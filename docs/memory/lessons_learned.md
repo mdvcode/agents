@@ -186,3 +186,12 @@
   Example bad pattern: require `docs/memory/lessons_learned.md` in every target, deduplicate two `AGENTS.md` documents by the same identifier, and convert a subprocess import error into `agent approve`.
   Example good pattern: identify `control-plane/AGENTS.md` and `repository/AGENTS.md` separately, treat target lessons as optional, route technical failures to repair/retry, and emit `local_complete` for unregistered or explicitly local-only work.
   Scope: context compilation, role prompts, routing, and publication authorization
+
+- Date: 2026-08-28
+  Agent: Codex
+  Failure: Long but progressing tasks repeatedly paused for human approval after cumulative token or model-call totals crossed configured cost ceilings.
+  Root cause: Economic telemetry and hard execution-safety bounds shared one exhaustion path, so a cost threshold was treated as missing human authority.
+  Prevention rule: Treat cumulative token and model-call ceilings as soft pressure that selects economy profiles and sheds only optional work; keep mandatory gates running, and reserve approval or blocking for hard time/repair/escalation bounds, no progress, security, protected actions, or genuine provider failures.
+  Example bad pattern: route `tokens_used >= max_tokens` directly to `approval-gate`.
+  Example good pattern: persist an `economy` budget action, continue the next mandatory role, and report the soft ceiling as a warning rather than a blocker.
+  Scope: task economics, deterministic routing, adaptive execution, repair loops, and operator UX

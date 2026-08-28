@@ -1373,6 +1373,32 @@ def workflow_budgets(workflow: str, execution_mode: str = "full") -> dict[str, i
     return defaults
 
 
+def workflow_token_pressure_action(state: dict[str, Any]) -> dict[str, object] | None:
+    """Return economy pressure after the soft cumulative token ceiling is crossed."""
+
+    budgets = state.get("budgets", {})
+    if not isinstance(budgets, dict):
+        return None
+    max_tokens = budgets.get("max_tokens")
+    tokens_used = state.get("tokens_used")
+    if (
+        not isinstance(max_tokens, (int, float))
+        or max_tokens <= 0
+        or not isinstance(tokens_used, (int, float))
+        or tokens_used < max_tokens
+    ):
+        return None
+    return {
+        "action": BudgetAction.ECONOMY.value,
+        "reason": (
+            "The soft workflow token ceiling was exceeded; mandatory execution "
+            "continues in economy mode."
+        ),
+        "pressure": round(tokens_used / max_tokens, 6),
+        "exhausted_dimensions": ["tokens_used"],
+    }
+
+
 def initial_loops() -> dict[str, dict[str, Any]]:
     return {
         name: {
@@ -2227,7 +2253,7 @@ def run_adaptive_read_only_verifier(
     kind = planned_execution_kind(state, role)
     plan_path = Path(str(state.get("execution_plan_path", "")))
     plan = load_json(plan_path) if plan_path.is_file() else {}
-    budget_pressure = False
+    budget_pressure = workflow_token_pressure_action(state) is not None
     if isinstance(plan, dict):
         budget_decision = BudgetController.from_plan(plan).assess(
             BudgetUsage.from_state(state),
@@ -2235,14 +2261,14 @@ def run_adaptive_read_only_verifier(
         )
         if budget_decision.action == BudgetAction.REQUIRE_APPROVAL:
             return awaiting_approval_result(
-                "Adaptive task budget is exhausted.",
-                ["Mandatory safety gates remain enabled; approval is required to continue."],
+                "An adaptive hard execution bound is exhausted.",
+                ["Mandatory safety gates remain enabled; approval is required to extend the hard bound."],
             ), {"budget_action": budget_decision.as_dict()}
         if budget_decision.action == BudgetAction.SKIP_OPTIONAL:
             result = completed_result("Optional verifier skipped near the task budget ceiling.")
             result["budget_skipped"] = True
             return result, {"budget_action": budget_decision.as_dict()}
-        budget_pressure = budget_decision.action == BudgetAction.ECONOMY
+        budget_pressure = budget_pressure or budget_decision.action == BudgetAction.ECONOMY
     if role == "quality-runner":
         return run_deterministic_quality(
             goal=goal,
@@ -2863,14 +2889,20 @@ def run_roles(
                         mandatory_role=bool(adaptive_node(state, role).get("mandatory", False)),
                     )
                     state["budget_action"] = budget_decision.as_dict()
+                    soft_workflow_pressure = workflow_token_pressure_action(state)
+                    if (
+                        soft_workflow_pressure is not None
+                        and budget_decision.action == BudgetAction.CONTINUE
+                    ):
+                        state["budget_action"] = soft_workflow_pressure
                 write_json(layout.workflow, state)
         if (
             effective_mode == "adaptive"
             and state.get("budget_action", {}).get("action") == BudgetAction.REQUIRE_APPROVAL.value
         ):
             result = awaiting_approval_result(
-                "Adaptive task budget is exhausted.",
-                ["Mandatory safety gates remain enabled; approval is required to continue."],
+                "An adaptive hard execution bound is exhausted.",
+                ["Mandatory safety gates remain enabled; approval is required to extend the hard bound."],
             )
         elif (
             effective_mode == "adaptive"
@@ -2879,7 +2911,7 @@ def run_roles(
         ):
             budget_skipped = True
             state.setdefault("budget_skipped_roles", []).append(role)
-            result = completed_result("Optional role skipped near the immutable task budget ceiling.")
+            result = completed_result("Optional role skipped under soft task cost pressure.")
         elif security_preflight is not None and security_preflight.get("status") != "completed":
             result = security_preflight
         elif resume_cached_result is not None:
