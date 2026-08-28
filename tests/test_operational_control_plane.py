@@ -445,6 +445,11 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         assert 'id="branchFilter"' in dashboard
         assert 'id="workerFilter"' in dashboard
         assert 'id="clearFilters"' in dashboard
+        assert 'id="clearHistory"' in dashboard
+        assert 'id="restoreHistory"' in dashboard
+        assert "historyCanHide(task){return ['completed','cancelled'].includes(task.status)}" in dashboard
+        assert "Активные задачи, ошибки, журналы и файлы сохранятся" in dashboard
+        assert "localStorage.setItem(historyStorageKey" in dashboard
         assert "Быстрый старт" in dashboard
         assert "Другой ответ" in dashboard
         assert "question.options" in dashboard

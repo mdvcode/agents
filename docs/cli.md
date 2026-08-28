@@ -61,7 +61,7 @@ The ordinary visual entry point is:
 agent dashboard
 ```
 
-It starts an authenticated loopback control center for the initialized project and opens it in the default browser. The page launches tasks through the same CLI policy boundary, refreshes live task/worker state, displays bounded attention questions, and provides answer, approval, retry, and abort controls. The temporary token is passed in the URL fragment, moved to session storage, and removed from the visible URL. Use `Ctrl+C` to stop only the dashboard server.
+It starts an authenticated loopback control center for the initialized project and opens it in the default browser. The page launches tasks through the same CLI policy boundary and healthy worker as `agent task`, refreshes live task/worker state, displays bounded attention questions, and provides answer, approval, retry, and abort controls. **Очистить историю** hides only completed and cancelled task rows in that browser; active or actionable tasks remain visible, queue/run evidence is retained, and **Вернуть скрытые** restores the rows. The temporary token is passed in the URL fragment, moved to session storage, and removed from the visible URL. Use `Ctrl+C` to stop only the dashboard server.
 
 Validate the installation once after installation or an upgrade:
 
