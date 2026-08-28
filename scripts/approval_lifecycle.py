@@ -400,6 +400,34 @@ def _reset_checkpoint_for_resume(run_dir: Path, role: str) -> None:
     )
 
 
+def _exclude_approval_wait_from_recovery(
+    workflow: dict[str, Any],
+    approval: dict[str, Any],
+    *,
+    resumed_at: datetime,
+) -> None:
+    """Keep human decision time outside the automated recovery budget."""
+
+    recovery = workflow.get("recovery")
+    if not isinstance(recovery, dict):
+        return
+    started_at = recovery.get("started_at")
+    if not isinstance(started_at, (int, float)) or isinstance(started_at, bool):
+        return
+    try:
+        requested_at = datetime.fromisoformat(
+            str(approval.get("requested_at", "")).replace("Z", "+00:00")
+        )
+    except ValueError:
+        return
+    wait_seconds = max(0.0, (resumed_at - requested_at).total_seconds())
+    shifted_started_at = min(resumed_at.timestamp(), float(started_at) + wait_seconds)
+    recovery["started_at"] = shifted_started_at
+    recovery["elapsed_seconds"] = int(
+        max(0.0, resumed_at.timestamp() - shifted_started_at)
+    )
+
+
 def _prepare_resume_locked(run_dir: Path) -> dict[str, Any]:
     approval = expire_if_needed(run_dir, read_json(run_dir / "artifacts" / "approval.json"))
     workflow = read_json(run_dir / "workflow.json")
@@ -418,10 +446,16 @@ def _prepare_resume_locked(run_dir: Path) -> dict[str, Any]:
     if workflow.get("execution_status") not in {"awaiting_approval", "resuming"}:
         raise ApprovalError("workflow is not awaiting approval")
     if not _matching_consumed_grant(workflow, approval):
+        resumed_at = utc_now()
         workflow["execution_status"] = "resuming"
         workflow["resume_role"] = role
         _resolve_approved_attention(workflow)
         _reset_checkpoint_for_resume(run_dir, role)
+        _exclude_approval_wait_from_recovery(
+            workflow,
+            approval,
+            resumed_at=resumed_at,
+        )
         workflow["approval_override"] = {
             "approval_id": approval["approval_id"],
             "gate": role,

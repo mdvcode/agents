@@ -12,6 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import approval_lifecycle  # noqa: E402
 from approval_lifecycle import (  # noqa: E402
     ApprovalError,
     approve_run,
@@ -107,6 +108,38 @@ def test_approval_scope_is_exact_and_consumed_once(tmp_path: Path) -> None:
     replay = prepare_resume(run)
     assert replay["already_consumed"] is True
     assert len(replay["workflow"]["approval_grants"]) == 1
+
+
+def test_approval_wait_does_not_exhaust_recovery_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = awaiting_run(tmp_path)
+    requested_at = datetime(2026, 8, 28, 8, 0, tzinfo=timezone.utc)
+    resumed_at = requested_at + timedelta(hours=1)
+    workflow_path = run / "workflow.json"
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    workflow["recovery"] = {
+        "started_at": requested_at.timestamp() - 12,
+        "elapsed_seconds": 12,
+        "attempts": 1,
+    }
+    write_json(workflow_path, workflow)
+    now = requested_at
+    monkeypatch.setattr(approval_lifecycle, "utc_now", lambda: now)
+
+    request_approval(run, reason="review required")
+    approve_run(run, actor="reviewer")
+    now = resumed_at
+    resumed = prepare_resume(run)
+
+    recovery = resumed["workflow"]["recovery"]
+    assert recovery["started_at"] == resumed_at.timestamp() - 12
+    assert recovery["elapsed_seconds"] == 12
+    assert recovery["attempts"] == 1
+
+    replay = prepare_resume(run)
+    assert replay["workflow"]["recovery"] == recovery
 
 
 def test_rejection_blocks_workflow(tmp_path: Path) -> None:
