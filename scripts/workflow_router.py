@@ -1027,6 +1027,7 @@ def _repair_route(
     role_result: dict[str, Any],
     artifacts_dir: Path,
     routing: dict[str, Any],
+    approval_consumed: bool = False,
 ) -> dict[str, Any]:
     config = _loop_config(name, routing)
     loops = state.get("loops")
@@ -1034,7 +1035,10 @@ def _repair_route(
         loops = {}
         state["loops"] = loops
     previous = loops.get(name, {}) if isinstance(loops.get(name), dict) else {}
-    iteration = int(previous.get("iterations", 0)) + 1
+    iteration = min(
+        int(previous.get("iterations", 0)) + 1,
+        config["max_iterations"],
+    )
     fingerprint = failure_fingerprint(role_result=role_result, state=state, artifacts_dir=artifacts_dir)
     current_diff = diff_hash(state, artifacts_dir)
     total_tokens = int(state.get("tokens_used", 0) or 0)
@@ -1074,14 +1078,18 @@ def _repair_route(
         or loop_elapsed >= config["max_duration_seconds"]
     )
     if exhausted or not progress:
-        return _approval(
-            f"{config['name']} stopped after a repeated failure or loop budget exhaustion.",
-            [
-                f"{config['name']} iteration {iteration} of {config['max_iterations']}",
-                f"tokens {loop_tokens} of {config['max_tokens']}",
-                f"seconds {loop_elapsed} of {config['max_duration_seconds']}",
-            ],
-        ) | {"loop": loop}
+        reason = f"{config['name']} stopped after a repeated failure or loop budget exhaustion."
+        loop_warnings = [
+            f"{config['name']} iteration {iteration} of {config['max_iterations']}",
+            f"tokens {loop_tokens} of {config['max_tokens']}",
+            f"seconds {loop_elapsed} of {config['max_duration_seconds']}",
+        ]
+        if approval_consumed:
+            return _blocked(
+                f"{reason} The scoped approval was consumed, but the same checkpoint is still unresolved; repair it before retrying.",
+                loop_warnings,
+            ) | {"loop": loop}
+        return _approval(reason, loop_warnings) | {"loop": loop}
     return _route(
         config["to"],
         f"{config['name']} repair iteration {iteration} started.",
@@ -1186,6 +1194,7 @@ def decide_next_role(
             role_result=result,
             artifacts_dir=artifacts_dir,
             routing=routing,
+            approval_consumed=bypass_approval,
         )
 
     budget_blockers = _budget_blockers(state, workflows)
@@ -1218,9 +1227,23 @@ def decide_next_role(
     quality = quality_status(state, artifacts_dir)
     if current_role == "quality-runner" and quality == "fail":
         if ci_status(state, artifacts_dir) == "fail":
-            route = _repair_route("ci_repair", state=state, role_result=result, artifacts_dir=artifacts_dir, routing=routing)
+            route = _repair_route(
+                "ci_repair",
+                state=state,
+                role_result=result,
+                artifacts_dir=artifacts_dir,
+                routing=routing,
+                approval_consumed=bypass_approval,
+            )
         else:
-            route = _repair_route("quality_repair", state=state, role_result=result, artifacts_dir=artifacts_dir, routing=routing)
+            route = _repair_route(
+                "quality_repair",
+                state=state,
+                role_result=result,
+                artifacts_dir=artifacts_dir,
+                routing=routing,
+                approval_consumed=bypass_approval,
+            )
         if not route["stop"]:
             after_loop_budget = _budget_blockers(state, workflows)
             if after_loop_budget:
@@ -1247,7 +1270,14 @@ def decide_next_role(
                 "Accepted unavailable independent verification from reviewer; publication must remain draft."
             )
         elif reviewer_status == "block":
-            route = _repair_route("review_repair", state=state, role_result=result, artifacts_dir=artifacts_dir, routing=routing)
+            route = _repair_route(
+                "review_repair",
+                state=state,
+                role_result=result,
+                artifacts_dir=artifacts_dir,
+                routing=routing,
+                approval_consumed=bypass_approval,
+            )
             if not route["stop"]:
                 after_loop_budget = _budget_blockers(state, workflows)
                 if after_loop_budget:
@@ -1262,6 +1292,7 @@ def decide_next_role(
                 role_result=result,
                 artifacts_dir=artifacts_dir,
                 routing=routing,
+                approval_consumed=bypass_approval,
             )
             if not route["stop"]:
                 after_loop_budget = _budget_blockers(state, workflows)
@@ -1300,6 +1331,7 @@ def decide_next_role(
                     role_result=result,
                     artifacts_dir=artifacts_dir,
                     routing=routing,
+                    approval_consumed=bypass_approval,
                 )
         if verification == "unavailable":
             if not unavailability_accepted:
