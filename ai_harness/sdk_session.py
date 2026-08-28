@@ -20,6 +20,16 @@ class SdkSessionUnavailable(RuntimeError):
     """Raised when a managed SDK sidecar cannot become healthy."""
 
 
+MAX_UNIX_SOCKET_PATH_BYTES = 100
+
+
+def managed_socket_root(harness_root: Path) -> Path:
+    """Return a short private path that stays below macOS AF_UNIX limits."""
+
+    harness_digest = hashlib.sha256(str(harness_root.resolve()).encode("utf-8")).hexdigest()[:10]
+    return Path("/tmp") / f"ai-harness-{os.getuid()}-{harness_digest}"
+
+
 class ManagedCodexSdkSession:
     def __init__(
         self,
@@ -27,6 +37,7 @@ class ManagedCodexSdkSession:
         worker_id: str,
         harness_root: Path,
         state_root: Path,
+        socket_root: Path | None = None,
         startup_timeout_seconds: float = 15.0,
         shutdown_grace_seconds: float = 3.0,
         busy_stale_seconds: float = 180.0,
@@ -35,8 +46,14 @@ class ManagedCodexSdkSession:
         self.worker_id = worker_id
         self.harness_root = harness_root.resolve()
         self.state_root = state_root.resolve()
-        self.socket_path = self.state_root / f"sdk-{digest}.sock"
+        self.socket_root = (socket_root or managed_socket_root(self.harness_root)).resolve()
+        self.socket_path = self.socket_root / f"sdk-{digest}.sock"
         self.state_path = self.state_root / f"sdk-{digest}.json"
+        self.stderr_path = self.state_root / f"sdk-{digest}.stderr.log"
+        if len(os.fsencode(self.socket_path)) > MAX_UNIX_SOCKET_PATH_BYTES:
+            raise ValueError(
+                f"managed Codex SDK socket path is too long: {self.socket_path}"
+            )
         self.startup_timeout_seconds = startup_timeout_seconds
         self.shutdown_grace_seconds = shutdown_grace_seconds
         self.busy_stale_seconds = busy_stale_seconds
@@ -69,6 +86,8 @@ class ManagedCodexSdkSession:
             return
         self.close()
         self.state_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.socket_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.socket_root, 0o700)
         command = [
             sys.executable,
             str(self.harness_root / "scripts" / "adapters" / "codex_sdk_server.py"),
@@ -77,15 +96,17 @@ class ManagedCodexSdkSession:
             "--state",
             str(self.state_path),
         ]
-        self.process = subprocess.Popen(
-            command,
-            cwd=self.harness_root,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=dict(os.environ),
-            start_new_session=True,
-        )
+        with self.stderr_path.open("ab") as stderr:
+            os.chmod(self.stderr_path, 0o600)
+            self.process = subprocess.Popen(
+                command,
+                cwd=self.harness_root,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=stderr,
+                env=dict(os.environ),
+                start_new_session=True,
+            )
         deadline = time.monotonic() + self.startup_timeout_seconds
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
@@ -94,8 +115,15 @@ class ManagedCodexSdkSession:
                 return
             time.sleep(0.05)
         state = self.state()
+        returncode = self.process.returncode if self.process is not None else None
         self.close()
-        reason = str(state.get("stop_reason", "")) or "sidecar did not answer heartbeat"
+        reason = str(state.get("stop_reason", ""))
+        if not reason or reason in {"recycle", "shutdown"}:
+            reason = (
+                f"sidecar exited with code {returncode}; inspect {self.stderr_path}"
+                if returncode is not None
+                else "sidecar did not answer heartbeat"
+            )
         raise SdkSessionUnavailable(
             f"managed Codex SDK session failed to start: {reason}"
         )

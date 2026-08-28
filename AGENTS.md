@@ -5,6 +5,7 @@ Build safe, reviewable improvements across supported project profiles using a po
 
 ## Agent workspace model
 - Treat this repository as the local home base for agents: prompts, skills, docs, logs, kanban boards, and audit artifacts live here.
+- The control-plane paths in this section apply to this Harness repository. When the Harness operates on another repository, do not require these paths to exist in the target; use the compiled control-plane context plus that target's own `AGENTS.md` and project files.
 - New agents should start with `docs/onboarding.md`, then read `AGENTS.md`, `docs/memory/lessons_learned.md`, and the current `.agent-runs/<run-id>/artifacts/plan.md`.
 - Treat the active Harness home as a private control plane. Do not assume its memory files can be committed to any target project repository.
 - Use git as the history of agent work. Keep changes small, reviewable, and traceable through `.agent-runs/<run-id>/audit-log.jsonl`.

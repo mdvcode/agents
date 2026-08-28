@@ -44,6 +44,7 @@ from .project import (
 from .recovery.checkpoints import RoleCheckpoint, read_checkpoint, write_checkpoint
 from .recovery.models import sanitized_message
 from .recovery.policy import load_recovery_policy
+from .sdk_session import ManagedCodexSdkSession, SdkSessionUnavailable
 from .task_batch import BatchManifestError, parse_batch_manifest
 
 
@@ -97,6 +98,29 @@ def missing_runtime_imports() -> list[str]:
         except ImportError:
             missing.append(name)
     return missing
+
+
+def verify_managed_sdk_session(root: Path) -> str:
+    """Exercise the worker's real sidecar transport before a task is queued."""
+
+    session = ManagedCodexSdkSession(
+        worker_id=f"cli-preflight-{os.getpid()}",
+        harness_root=root,
+        state_root=root / ".agent-queue" / "preflight" / "sdk-sessions",
+        startup_timeout_seconds=5.0,
+    )
+    try:
+        session.ensure()
+        if not session.heartbeat():
+            raise SdkSessionUnavailable("managed Codex SDK session heartbeat was lost")
+        return f"ready; socket={session.socket_path}"
+    except (OSError, ValueError, SdkSessionUnavailable) as exc:
+        raise CLIError(
+            f"managed Codex SDK worker transport is unavailable: {exc}; "
+            f"inspect {session.stderr_path} and run `agent update`"
+        ) from exc
+    finally:
+        session.close()
 
 
 def source_build_comparison(repository: Path, root: Path) -> tuple[Path | None, bool]:
@@ -422,6 +446,8 @@ def handle_task(args: argparse.Namespace) -> int:
     missing = missing_runtime_imports()
     if missing:
         raise CLIError(f"missing runtime dependencies: {', '.join(missing)}; {dependency_repair_hint()}")
+    if config.runtime_provider == "codex-sdk":
+        verify_managed_sdk_session(root)
     task_queue = load_harness_module(root, "task_queue")
     queue_path = root / ".agent-queue" / "tasks.db"
     try:
@@ -1597,15 +1623,45 @@ def handle_failures(args: argparse.Namespace) -> int:
     repository = repository_from_arg(args.repo, require_initialized=True)
     root = harness_home()
     runs = project_runs(root / ".agent-runs", repository)
+    tasks = project_tasks(root / ".agent-queue" / "tasks.db", repository)
+    run_ids = list(dict.fromkeys(run["run_id"] for run in runs))
+    run_ids.extend(
+        item["run_id"]
+        for item in tasks
+        if item["run_id"] and item["run_id"] not in run_ids
+    )
     if args.run_id:
-        runs = [run for run in runs if run["run_id"] == args.run_id]
-    items = [
-        failure
+        run_ids = [run_id for run_id in run_ids if run_id == args.run_id]
+    status_by_run = {
+        str(run["run_id"]): str(run.get("status", ""))
         for run in runs
-        for failure in failure_records(root / ".agent-runs" / run["run_id"])
+    }
+    status_by_run.update(
+        {
+            str(item["run_id"]): str(item.get("status", ""))
+            for item in tasks
+            if item["run_id"]
+        }
+    )
+    history = [
+        {**failure, "resolved": status_by_run.get(run_id) in {"completed", "cancelled"}}
+        for run_id in run_ids
+        for failure in failure_records(root / ".agent-runs" / run_id)
     ]
-    payload = {"count": len(items), "items": items}
-    lines = [f"Failures: {len(items)}"]
+    resolved_count = sum(bool(item["resolved"]) for item in history)
+    items = history if getattr(args, "include_resolved", False) else [
+        item for item in history if not item["resolved"]
+    ]
+    payload = {
+        "count": len(items),
+        "resolved_count": resolved_count,
+        "items": items,
+    }
+    lines = [f"Active failures: {len(items)}"]
+    if resolved_count and not getattr(args, "include_resolved", False):
+        lines.append(
+            f"  recovered history hidden: {resolved_count}; use --include-resolved to inspect it"
+        )
     for item in items[-args.limit :]:
         run_id = str(item.get("run_id", ""))
         lines.append(
@@ -1817,48 +1873,63 @@ def dashboard_port(value: str) -> int:
 def handle_recovery_command(args: argparse.Namespace) -> int:
     repository = repository_from_arg(args.repo, require_initialized=True)
     root = harness_home()
-    matching = [run for run in project_runs(root / ".agent-runs", repository) if run["run_id"] == args.run_id]
-    if not matching:
+    matching_runs = [
+        run
+        for run in project_runs(root / ".agent-runs", repository)
+        if run["run_id"] == args.run_id
+    ]
+    matching_tasks = [
+        item
+        for item in project_tasks(root / ".agent-queue" / "tasks.db", repository)
+        if item["run_id"] == args.run_id
+    ]
+    if not matching_runs and not matching_tasks:
         raise CLIError(f"run {args.run_id!r} was not found for this project")
     run_dir = root / ".agent-runs" / args.run_id
     workflow_path = run_dir / "workflow.json"
     workflow = read_json_object(workflow_path)
+    workflow_exists = bool(workflow)
+    if args.command == "resume" and not workflow_exists:
+        raise CLIError(
+            "this run failed before a workflow checkpoint was created; use `agent retry`"
+        )
     if args.command in {"retry", "resume"} and workflow.get("execution_status") == "awaiting_approval":
         raise CLIError("an awaiting_approval run must be continued with `agent approve`")
     task_queue = load_harness_module(root, "task_queue")
     queue = task_queue.TaskQueue(root / ".agent-queue" / "tasks.db")
     try:
-        write_workflow = True
+        write_workflow = workflow_exists
         if args.command == "abort":
             record = queue.abort_run(args.run_id)
             if record.status in {"claimed", "leased", "running"}:
                 write_workflow = False
-            else:
+            elif workflow_exists:
                 workflow["execution_status"] = "cancelled"
                 workflow["recovery_action"] = ""
         else:
             record = queue.recover_run(args.run_id, action=args.command)
-            workflow["execution_status"] = "retry_wait" if args.command == "retry" else "resuming"
-            workflow["recovery_action"] = args.command
-            if args.command == "retry":
-                reset_role_checkpoint_for_rerun(run_dir, workflow)
-            recovery = workflow.get("recovery", {})
-            if not isinstance(recovery, dict):
-                recovery = {}
-            recovery.update(
-                {
-                    "attempts": 0,
-                    "consecutive_failures": 0,
-                    "resume_attempts": 0,
-                    "elapsed_seconds": 0,
-                    "started_at": datetime.now(timezone.utc).timestamp(),
-                    "attempts_by_kind": {},
-                }
-            )
-            workflow["recovery"] = recovery
-            workflow["manual_recovery_count"] = int(workflow.get("manual_recovery_count", 0) or 0) + 1
-            if args.command == "resume" and not workflow.get("resume_role"):
-                workflow["resume_role"] = workflow.get("current_role", "")
+            if workflow_exists:
+                workflow["execution_status"] = "retry_wait" if args.command == "retry" else "resuming"
+                workflow["recovery_action"] = args.command
+                if args.command == "retry":
+                    reset_role_checkpoint_for_rerun(run_dir, workflow)
+                recovery = workflow.get("recovery", {})
+                if not isinstance(recovery, dict):
+                    recovery = {}
+                recovery.update(
+                    {
+                        "attempts": 0,
+                        "consecutive_failures": 0,
+                        "resume_attempts": 0,
+                        "elapsed_seconds": 0,
+                        "started_at": datetime.now(timezone.utc).timestamp(),
+                        "attempts_by_kind": {},
+                    }
+                )
+                workflow["recovery"] = recovery
+                workflow["manual_recovery_count"] = int(workflow.get("manual_recovery_count", 0) or 0) + 1
+                if args.command == "resume" and not workflow.get("resume_role"):
+                    workflow["resume_role"] = workflow.get("current_role", "")
         if write_workflow:
             temporary = workflow_path.with_suffix(".json.tmp")
             temporary.write_text(json.dumps(workflow, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -2287,6 +2358,13 @@ def handle_doctor(args: argparse.Namespace) -> int:
             checks.append(
                 DoctorCheck("runtime_preflight", "pass" if probe.returncode == 0 else "fail", detail)
             )
+            if probe.returncode == 0:
+                try:
+                    session_detail = verify_managed_sdk_session(root)
+                    checks.append(DoctorCheck("managed_sdk_session", "pass", session_detail))
+                except CLIError as exc:
+                    checks.append(DoctorCheck("managed_sdk_session", "fail", str(exc)))
+                    next_actions.append("agent update")
         except subprocess.TimeoutExpired:
             checks.append(DoctorCheck("runtime_preflight", "fail", "runtime preflight timed out after 90s"))
     if root is not None:
@@ -2493,6 +2571,11 @@ def build_parser() -> argparse.ArgumentParser:
     failures_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")
     failures_parser.add_argument("--run-id", default="")
     failures_parser.add_argument("--limit", type=int, choices=range(1, 501), default=50)
+    failures_parser.add_argument(
+        "--include-resolved",
+        action="store_true",
+        help="include historical failures from completed or cancelled runs",
+    )
     failures_parser.add_argument("--json", action="store_true")
     failures_parser.set_defaults(handler=handle_failures)
 

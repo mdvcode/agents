@@ -131,19 +131,20 @@ def _file_document(
     document_type: DocumentType,
     priority: int,
     title: str = "",
+    display_path: str = "",
     metadata: dict[str, str] | None = None,
 ) -> KnowledgeDocument | None:
     content = _safe_text(path, root)
     if content is None:
         return None
-    display_path = _relative_or_absolute(path, root)
+    selected_path = display_path or _relative_or_absolute(path, root)
     selected_title = title or path.stem.replace("-", " ").replace("_", " ").strip()
     return KnowledgeDocument(
-        id=_document_id(source, display_path, selected_title),
+        id=_document_id(source, selected_path, selected_title),
         title=selected_title,
         content=content,
         source=source,
-        path=display_path,
+        path=selected_path,
         knowledge_type=knowledge_type,
         document_type=document_type,
         priority=priority,
@@ -286,22 +287,61 @@ class PolicySource:
 
     def collect(self, request: KnowledgeRequest) -> tuple[KnowledgeDocument, ...]:
         control_root = self.control_root.resolve()
-        candidates: list[tuple[Path, Path, DocumentType, int]] = [
-            (control_root / "AGENTS.md", control_root, DocumentType.AGENTS, 85),
-            (control_root / ".agent-policy.yaml", control_root, DocumentType.POLICY, 100),
-            (control_root / ".agent-tool-policy.yaml", control_root, DocumentType.POLICY, 88),
+        candidates: list[tuple[Path, Path, DocumentType, int, str, str]] = [
+            (
+                control_root / "AGENTS.md",
+                control_root,
+                DocumentType.AGENTS,
+                85,
+                "Harness control-plane instructions",
+                "control-plane/AGENTS.md",
+            ),
+            (
+                control_root / ".agent-policy.yaml",
+                control_root,
+                DocumentType.POLICY,
+                100,
+                "Harness autonomy policy",
+                "control-plane/.agent-policy.yaml",
+            ),
+            (
+                control_root / ".agent-tool-policy.yaml",
+                control_root,
+                DocumentType.POLICY,
+                88,
+                "Harness tool policy",
+                "control-plane/.agent-tool-policy.yaml",
+            ),
         ]
         repository = request.repository.resolve()
         if repository != control_root:
-            candidates.append((repository / "AGENTS.md", repository, DocumentType.AGENTS, 85))
+            candidates.append(
+                (
+                    repository / "AGENTS.md",
+                    repository,
+                    DocumentType.AGENTS,
+                    90,
+                    "Target repository instructions",
+                    "repository/AGENTS.md",
+                )
+            )
         if request.project_profile != "agent_workspace" and request.project:
             projects = control_root / "docs" / "projects"
             privacy = projects / request.project / "privacy.md"
             if _within(privacy, projects):
-                candidates.append((privacy, projects, DocumentType.POLICY, 82))
+                candidates.append(
+                    (
+                        privacy,
+                        projects,
+                        DocumentType.POLICY,
+                        82,
+                        "Target project privacy policy",
+                        f"control-plane/projects/{request.project}/privacy.md",
+                    )
+                )
         documents: list[KnowledgeDocument] = []
         seen: set[Path] = set()
-        for path, root, document_type, priority in candidates:
+        for path, root, document_type, priority, title, display_path in candidates:
             resolved = path.resolve()
             if resolved in seen:
                 continue
@@ -313,6 +353,13 @@ class PolicySource:
                 knowledge_type=KnowledgeType.POLICY,
                 document_type=document_type,
                 priority=priority,
+                title=title,
+                display_path=display_path,
+                metadata={
+                    "scope": "target_repository"
+                    if display_path.startswith("repository/")
+                    else "control_plane"
+                },
             )
             if document is not None:
                 documents.append(document)

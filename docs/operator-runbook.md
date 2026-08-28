@@ -113,3 +113,40 @@ agent stop
 ```
 
 Do not edit queue rows or workflow status files by hand. Approval, retry, resume, abort, and worker commands preserve the authoritative run identity and recovery checkpoint.
+
+## Which files to keep
+
+The Harness has three distinct file classes. Treating them as one is a common source of broken runs and accidental cleanup.
+
+### Required source and policy
+
+Keep these files in the Harness repository and under version control:
+
+- `ai_harness/`, `scripts/`, `schemas/`, `.agents/`, and `tests/`
+- `AGENTS.md`, `Makefile`, `pyproject.toml`, `install.sh`, and `requirements-dev.txt`
+- `.agent-*.yaml` policy, routing, workflow, profile, ownership, runtime, and registry files
+- `docs/` and `evals/` when they contain reviewed policy, operating guidance, memory, or acceptance data
+
+In a target project, `.agent/project.yaml` is local execution identity and `AGENTS.md` is target-specific guidance. They may be intentionally ignored by Git. A target project does not need copies of Harness-only paths such as `docs/memory/lessons_learned.md`, `.agent-runs/`, or the Harness policy YAML files.
+
+### Generated operational state
+
+These directories are required while their tasks are active or may need recovery, but must not be committed:
+
+- `.agent-queue/`: scheduler database, leases, retries, worker logs, and managed SDK session state
+- `.agent-runs/`: workflow state, checkpoints, evidence, errors, and audit records
+- `.agent-worktrees/`: isolated task checkouts
+- `.agent-cache/`: reusable task caches
+
+The installed Harness owns the production queue and run state. Same-named directories in a source checkout are development/test state unless that checkout is itself the active Harness home. Do not delete active run or queue data manually. Finish or abort tasks first, stop the worker, confirm `agent status`, and use supported cleanup commands when available.
+
+### Re-creatable and disposable
+
+These files are not authoritative and may be regenerated after confirming no process uses them:
+
+- `.venv/`, `build/`, `dist/`, and `*.egg-info/`
+- `__pycache__/`, `*.pyc`, `.pytest_cache/`, and tool caches
+- `tmp/` and `output/` investigation or generated outputs after useful evidence is summarized
+- `.DS_Store` and editor-local state such as `.idea/`
+
+Deleting these saves space but does not repair workflow state. Never treat `.agent-runs/`, `.agent-queue/`, or `.agent-worktrees/` as ordinary caches merely because they are ignored by Git.

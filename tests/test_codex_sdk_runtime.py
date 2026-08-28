@@ -13,6 +13,7 @@ if str(SCRIPTS / "adapters") not in sys.path:
     sys.path.insert(0, str(SCRIPTS / "adapters"))
 
 from check_codex_sdk_runtime import check_sdk
+from ai_harness.sdk_session import MAX_UNIX_SOCKET_PATH_BYTES, ManagedCodexSdkSession
 import codex_sdk_server
 from codex_sdk_executor import ProgressWriter, execute_via_session, sdk_settings, usage_fields
 
@@ -119,7 +120,8 @@ def test_progress_writer_records_sdk_event_tool_budget_and_stop_reason(tmp_path:
     )
     final = writer.update(phase="role_completed", stop_reason="completed", tokens_used=321)
 
-    assert live["tokens_used"] == 123
+    assert live["tokens_used"] == 0
+    assert live["sdk_thread_tokens"] == 123
     assert final["phase"] == "role_completed"
     assert final["active_tool"] == ""
     assert final["tokens_used"] == 321
@@ -183,3 +185,28 @@ def test_sdk_session_rejects_non_socket_transport(tmp_path: Path) -> None:
 
     assert result["status"] == "blocked"
     assert result["_failure"]["error_type"] == "UnsafeSdkSessionSocket"
+
+
+def test_managed_sdk_session_uses_short_private_socket_for_long_install_path(
+    tmp_path: Path,
+) -> None:
+    state_root = tmp_path / ("installed-harness-" * 5) / ".agent-queue" / "sdk-sessions"
+    session = ManagedCodexSdkSession(
+        worker_id="worker-service-long-install-1",
+        harness_root=ROOT,
+        state_root=state_root,
+        startup_timeout_seconds=5.0,
+    )
+
+    assert len(bytes(str(state_root / "sdk-placeholder.sock"), "utf-8")) > MAX_UNIX_SOCKET_PATH_BYTES
+    assert len(bytes(str(session.socket_path), "utf-8")) <= MAX_UNIX_SOCKET_PATH_BYTES
+    assert session.socket_path.parent != state_root
+
+    try:
+        session.ensure()
+        assert session.heartbeat() is True
+        assert session.state_path.parent == state_root.resolve()
+        assert session.state()["socket_path"] == str(session.socket_path)
+        assert session.socket_path.parent.stat().st_mode & 0o077 == 0
+    finally:
+        session.close()

@@ -159,6 +159,46 @@ def test_failures_retry_then_enter_dead_letter(tmp_path: Path) -> None:
     assert dead.attempts == 2
 
 
+def test_success_after_recovery_clears_active_failure_display(tmp_path: Path) -> None:
+    queue = TaskQueue(tmp_path / "queue.db")
+    task = queue.enqueue(
+        task_key="recovered",
+        payload={"task_id": "recovered", "repository": "/tmp/repo"},
+    )
+    claimed = queue.claim(worker_id="worker-1")
+    assert claimed is not None
+    queue.mark_running(task.id, "worker-1")
+    queue.mark_repairing(
+        task_id=task.id,
+        worker_id="worker-1",
+        run_id="run-recovered",
+        available_after=time.time(),
+        failure_kind="invalid_output",
+        recovery_action="repair",
+        resume_checkpoint="before-reviewer",
+        failure_id="failure-1",
+        error="temporary validation failure",
+    )
+    recovered = queue.claim(worker_id="worker-2")
+    assert recovered is not None
+    queue.mark_running(task.id, "worker-2")
+
+    completed = queue.finish(
+        task_id=task.id,
+        worker_id="worker-2",
+        status="completed",
+        run_id="run-recovered",
+    )
+
+    assert completed.status == "completed"
+    assert completed.failure_kind == ""
+    assert completed.recovery_action == ""
+    assert completed.resume_checkpoint == ""
+    assert completed.last_error == ""
+    assert completed.exception_reason == ""
+    assert completed.recovery_attempts == 1
+
+
 def test_expired_lease_is_reclaimed(tmp_path: Path) -> None:
     queue = TaskQueue(tmp_path / "queue.db")
     task = queue.enqueue(task_key="expired", payload={"task_id": "a", "repository": "/tmp/repo"})

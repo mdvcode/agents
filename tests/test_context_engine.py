@@ -25,7 +25,7 @@ from ai_harness.context import (
     estimate_tokens,
 )
 from ai_harness.context.cache import repository_fingerprints
-from ai_harness.context.sources import ObsidianSource
+from ai_harness.context.sources import ObsidianSource, PolicySource
 from ai_harness.context.deduplication import deduplicate_documents
 from scripts.context_compiler import create_context_manifest
 
@@ -95,6 +95,31 @@ def test_context_engine_routes_oauth_to_adr_security_skill_and_obsidian(tmp_path
         "obsidian",
         "policies",
     }
+
+
+def test_policy_source_keeps_control_plane_and_target_agents_distinct(tmp_path: Path) -> None:
+    control = tmp_path / "control"
+    repository = tmp_path / "repository"
+    prepare_control_root(control)
+    write(repository / "AGENTS.md", "# Target rules\nUse target conventions.\n")
+    request = KnowledgeRequest(
+        "Update target code",
+        repository,
+        "implementation-agent",
+        "runtime",
+        "target",
+        "agent_workspace",
+    )
+
+    documents = PolicySource(control).collect(request)
+    by_path = {document.path: document for document in documents}
+
+    assert "control-plane/AGENTS.md" in by_path
+    assert "repository/AGENTS.md" in by_path
+    assert "Follow repository policy" in by_path["control-plane/AGENTS.md"].content
+    assert "Use target conventions" in by_path["repository/AGENTS.md"].content
+    assert by_path["control-plane/AGENTS.md"].metadata["scope"] == "control_plane"
+    assert by_path["repository/AGENTS.md"].metadata["scope"] == "target_repository"
 
 
 def test_context_builder_enforces_total_and_category_budgets() -> None:

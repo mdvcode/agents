@@ -52,6 +52,7 @@ def configure_temporary_harness(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     )
     monkeypatch.setattr(cli, "harness_home", lambda: state_root)
     monkeypatch.setattr(cli, "missing_runtime_imports", lambda: [])
+    monkeypatch.setattr(cli, "verify_managed_sdk_session", lambda _root: "ready")
     monkeypatch.setattr(
         cli,
         "run_worker_command",
@@ -63,6 +64,222 @@ def configure_temporary_harness(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
         },
     )
     return state_root
+
+
+def test_agent_task_checks_managed_sdk_transport_before_git_or_queue_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    commit_all(repository)
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+
+    def fail_transport(_root: Path) -> str:
+        raise cli.CLIError("managed Codex SDK worker transport is unavailable: socket failed")
+
+    monkeypatch.setattr(cli, "verify_managed_sdk_session", fail_transport)
+
+    result = cli.main(
+        ["task", "Implement safely", "--repo", str(repository), "--task-id", "safe-transport"]
+    )
+
+    assert result == 2
+    assert "worker transport is unavailable" in capsys.readouterr().err
+    assert subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() in {"main", "master"}
+    assert not (state_root / ".agent-queue" / "tasks.db").exists()
+
+
+def test_agent_failures_shows_worker_failure_before_workflow_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    task_queue = cli.load_harness_module(state_root, "task_queue")
+    queue = task_queue.TaskQueue(state_root / ".agent-queue" / "tasks.db")
+    queued = queue.enqueue(
+        task_key="pre-workflow-failure",
+        payload={"task_id": "pre-workflow-failure", "repository": str(repository)},
+        run_id="run-pre-workflow-failure",
+    )
+    claimed = queue.claim(worker_id="worker-1", lease_seconds=30)
+    assert claimed is not None and claimed.id == queued.id
+    assert queue.mark_running(queued.id, "worker-1")
+    queue.move_to_dead_letter(
+        task_id=queued.id,
+        worker_id="worker-1",
+        run_id="run-pre-workflow-failure",
+        error="managed session failed",
+        failure_kind="internal_error",
+        failure_id="failure-before-workflow",
+    )
+    failures_dir = (
+        state_root
+        / ".agent-runs"
+        / "run-pre-workflow-failure"
+        / "failures"
+    )
+    failures_dir.mkdir(parents=True)
+    (failures_dir / "failure-before-workflow.json").write_text(
+        json.dumps(
+            {
+                "failure_id": "failure-before-workflow",
+                "run_id": "run-pre-workflow-failure",
+                "kind": "internal_error",
+                "error_type": "SdkSessionUnavailable",
+                "attempt": 1,
+                "max_attempts": 1,
+                "role": "worker",
+                "message": "managed session failed",
+                "retryable": False,
+                "checkpoint": "before_worker_execute",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert cli.main(
+        [
+            "failures",
+            "--repo",
+            str(repository),
+            "--run-id",
+            "run-pre-workflow-failure",
+            "--json",
+        ]
+    ) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["count"] == 1
+    assert result["items"][0]["error_type"] == "SdkSessionUnavailable"
+
+
+def test_agent_retry_requeues_failure_that_happened_before_workflow_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    task_queue = cli.load_harness_module(state_root, "task_queue")
+    queue = task_queue.TaskQueue(state_root / ".agent-queue" / "tasks.db")
+    queued = queue.enqueue(
+        task_key="retry-pre-workflow",
+        payload={"task_id": "retry-pre-workflow", "repository": str(repository)},
+        run_id="run-retry-pre-workflow",
+    )
+    claimed = queue.claim(worker_id="worker-1", lease_seconds=30)
+    assert claimed is not None and claimed.id == queued.id
+    assert queue.mark_running(queued.id, "worker-1")
+    queue.move_to_dead_letter(
+        task_id=queued.id,
+        worker_id="worker-1",
+        run_id="run-retry-pre-workflow",
+        error="managed session failed",
+        failure_kind="internal_error",
+        failure_id="failure-before-workflow",
+    )
+
+    assert cli.main(
+        ["retry", "run-retry-pre-workflow", "--repo", str(repository), "--json"]
+    ) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "retry_wait"
+    assert queue.get(queued.id).status == "retry_wait"
+    assert not (
+        state_root / ".agent-runs" / "run-retry-pre-workflow" / "workflow.json"
+    ).exists()
+
+
+def test_agent_failures_hides_recovered_history_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    task_queue = cli.load_harness_module(state_root, "task_queue")
+    queue = task_queue.TaskQueue(state_root / ".agent-queue" / "tasks.db")
+    queued = queue.enqueue(
+        task_key="recovered-history",
+        payload={"task_id": "recovered-history", "repository": str(repository)},
+        run_id="run-recovered-history",
+    )
+    claimed = queue.claim(worker_id="worker-1", lease_seconds=30)
+    assert claimed is not None and claimed.id == queued.id
+    assert queue.mark_running(queued.id, "worker-1")
+    queue.finish(
+        task_id=queued.id,
+        worker_id="worker-1",
+        status="completed",
+        run_id="run-recovered-history",
+    )
+    failures_dir = state_root / ".agent-runs" / "run-recovered-history" / "failures"
+    failures_dir.mkdir(parents=True)
+    (failures_dir / "failure-recovered.json").write_text(
+        json.dumps(
+            {
+                "failure_id": "failure-recovered",
+                "run_id": "run-recovered-history",
+                "kind": "invalid_output",
+                "error_type": "InvalidArtifactOutput",
+                "attempt": 1,
+                "max_attempts": 2,
+                "role": "reviewer",
+                "message": "repaired",
+                "retryable": True,
+                "checkpoint": "before_reviewer",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert cli.main(
+        ["failures", "--repo", str(repository), "--run-id", "run-recovered-history", "--json"]
+    ) == 0
+    current = json.loads(capsys.readouterr().out)
+    assert current["count"] == 0
+    assert current["resolved_count"] == 1
+
+    assert cli.main(
+        [
+            "failures",
+            "--repo",
+            str(repository),
+            "--run-id",
+            "run-recovered-history",
+            "--include-resolved",
+            "--json",
+        ]
+    ) == 0
+    history = json.loads(capsys.readouterr().out)
+    assert history["count"] == 1
+    assert history["items"][0]["resolved"] is True
 
 
 def test_agent_init_creates_local_config_and_preserves_existing_agents_file(

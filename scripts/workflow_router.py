@@ -1244,8 +1244,13 @@ def decide_next_role(
                     ],
                 )
 
-    if result.get("status") in {"blocked", "failed", "awaiting_approval"}:
+    if result.get("status") == "awaiting_approval":
         return _approval(
+            str(result.get("summary", f"Role {current_role} did not complete successfully.")),
+            warnings + _list_values(result.get("blockers")),
+        )
+    if result.get("status") in {"blocked", "failed"}:
+        return _blocked(
             str(result.get("summary", f"Role {current_role} did not complete successfully.")),
             warnings + _list_values(result.get("blockers")),
         )

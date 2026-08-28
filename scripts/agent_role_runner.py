@@ -951,7 +951,7 @@ def role_attention_action(result: dict[str, Any]) -> str:
         result.get("question")
     ):
         return "answer"
-    return "approve"
+    return "fix_then_retry"
 
 
 def validate_role_result(result: dict[str, Any], role: str) -> list[str]:
@@ -1395,6 +1395,35 @@ def git_remote(repo: Path) -> str:
         check=False,
     )
     return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def publication_requested(goal: str, repository: Path) -> bool:
+    """Return whether this task may enter the publication workflow.
+
+    A local project file grants execution identity only. Publication additionally
+    requires a central repository registration, and an explicit local-only user
+    instruction always wins over that grant.
+    """
+
+    remote = git_remote(repository)
+    if not remote or find_by_remote(remote) is None:
+        return False
+    normalized_goal = " ".join(goal.casefold().split())
+    local_only_markers = (
+        "без публикац",
+        "не публиков",
+        "не создавай pr",
+        "не создавать pr",
+        "только локально",
+        "do not publish",
+        "don't publish",
+        "without publication",
+        "no publication",
+        "do not create a pr",
+        "don't create a pr",
+        "local only",
+    )
+    return not any(marker in normalized_goal for marker in local_only_markers)
 
 
 def git_ref_sha(repo: Path, ref: str) -> str:
@@ -1875,8 +1904,11 @@ def run_deterministic_orchestrator(
     elif not paths:
         decision = "no_changes"
         execution_status = "completed"
-    else:
+    elif publication_requested(goal, repository):
         decision = "publish_pr"
+        execution_status = "completed"
+    else:
+        decision = "local_complete"
         execution_status = "completed"
     visual_required = project_profile == "nextjs_web" and any(
         Path(path).suffix.lower() in {".css", ".js", ".jsx", ".ts", ".tsx"} for path in paths
@@ -1887,6 +1919,10 @@ def run_deterministic_orchestrator(
         *[str(item) for item in quality.get("warnings", [])],
         *[str(item) for item in security.get("warnings", [])],
     ]
+    if decision == "local_complete":
+        warnings.append(
+            "Publication was skipped because it was not requested or the repository has no central publication grant."
+        )
     if visual_required and not visual_provided:
         warnings.append("Visual evidence was not collected; publication must remain draft.")
     write_json(
@@ -1923,7 +1959,7 @@ def run_publication(
     timeout_seconds: int,
 ) -> dict[str, Any]:
     command = [
-        "python3",
+        sys.executable,
         "scripts/publish_pr.py",
         "--artifacts-dir",
         str(artifacts_dir.resolve()),

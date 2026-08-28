@@ -406,7 +406,7 @@ def test_publication_role_invokes_publish_pr_with_run_context(
     assert result["status"] == "completed"
     assert calls == [
         [
-            "python3",
+            sys.executable,
             "scripts/publish_pr.py",
             "--artifacts-dir",
             str((tmp_path / ".agent-runs" / "run-123" / "artifacts").resolve()),
@@ -556,11 +556,11 @@ print(json.dumps({
         create_task_worktree=True,
     )
 
-    assert state["execution_status"] == "awaiting_approval"
-    assert state["failure_kind"] == "human_input_required"
+    assert state["execution_status"] == "completed"
+    assert state.get("failure_kind", "") == ""
     assert state["runtime"]["provider"] == "codex-cli"
     assert state["runtime"]["api_required"] is False
-    assert [item["role"] for item in state["roles"]][:10] == [
+    assert [item["role"] for item in state["roles"]] == [
         "issue-intake",
         "context-compiler",
         "planner",
@@ -570,7 +570,6 @@ print(json.dumps({
         "security-agent",
         "reviewer",
         "orchestrator",
-        "publication-prepare",
     ]
     assert (Path(state["worktree"]) / "impl.txt").read_text(encoding="utf-8") == "implemented\n"
     assert not (tmp_path / "impl.txt").exists()

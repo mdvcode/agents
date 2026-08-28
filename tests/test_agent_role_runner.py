@@ -25,6 +25,39 @@ sys.modules[SPEC.name] = agent_role_runner
 SPEC.loader.exec_module(agent_role_runner)
 
 
+def test_publication_requires_central_registration(monkeypatch: object, tmp_path: Path) -> None:
+    monkeypatch.setattr(agent_role_runner, "git_remote", lambda _repository: "local-origin")
+    monkeypatch.setattr(agent_role_runner, "find_by_remote", lambda _remote: None)
+
+    assert agent_role_runner.publication_requested("Implement the change", tmp_path) is False
+
+
+@pytest.mark.parametrize(
+    "goal",
+    [
+        "Исправь проблему без публикации",
+        "Implement the change, but do not publish",
+        "Make this change local only",
+    ],
+)
+def test_explicit_local_only_goal_disables_publication(
+    monkeypatch: object, tmp_path: Path, goal: str
+) -> None:
+    monkeypatch.setattr(agent_role_runner, "git_remote", lambda _repository: "registered-origin")
+    monkeypatch.setattr(agent_role_runner, "find_by_remote", lambda _remote: object())
+
+    assert agent_role_runner.publication_requested(goal, tmp_path) is False
+
+
+def test_registered_repository_keeps_publication_enabled(
+    monkeypatch: object, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(agent_role_runner, "git_remote", lambda _repository: "registered-origin")
+    monkeypatch.setattr(agent_role_runner, "find_by_remote", lambda _remote: object())
+
+    assert agent_role_runner.publication_requested("Implement the change", tmp_path) is True
+
+
 def test_nextjs_required_typecheck_uses_package_manager_neutral_node_runtime() -> None:
     commands = agent_role_runner.profile_required_commands("nextjs_web", "quality_commands")
 
@@ -188,8 +221,8 @@ def test_answer_continuation_is_not_classified_as_prior_role_failure() -> None:
 
 
 def test_technical_failures_are_not_classified_as_answerable_questions() -> None:
-    assert agent_role_runner.role_attention_action({"status": "blocked"}) == "approve"
-    assert agent_role_runner.role_attention_action({"status": "failed"}) == "approve"
+    assert agent_role_runner.role_attention_action({"status": "blocked"}) == "fix_then_retry"
+    assert agent_role_runner.role_attention_action({"status": "failed"}) == "fix_then_retry"
     assert agent_role_runner.role_attention_action({"status": "awaiting_approval"}) == "answer"
 
 
@@ -218,13 +251,13 @@ def test_blocked_role_with_structured_question_remains_answerable() -> None:
     assert agent_role_runner.role_attention_action(result) == "answer"
 
 
-def test_blocked_role_with_malformed_question_still_requires_approval() -> None:
+def test_blocked_role_with_malformed_question_requires_a_technical_fix() -> None:
     result = {
         "status": "blocked",
         "question": {"id": "backend_signal_format", "options": []},
     }
 
-    assert agent_role_runner.role_attention_action(result) == "approve"
+    assert agent_role_runner.role_attention_action(result) == "fix_then_retry"
 
 
 def fake_adapter_script(path: Path) -> str:
@@ -626,7 +659,7 @@ def test_agent_role_runner_invokes_adapter_for_core_roles(tmp_path: Path, monkey
         dry_run=True,
     )
 
-    assert state["execution_status"] == "awaiting_approval"
+    assert state["execution_status"] == "blocked"
     assert [item["role"] for item in state["roles"]][:9] == [
         "issue-intake",
         "context-compiler",
@@ -653,33 +686,25 @@ def test_agent_role_runner_invokes_adapter_for_core_roles(tmp_path: Path, monkey
     assert request["allowed_tools"] == ["filesystem_read", "repository_search"]
 
 
-def test_approved_run_resumes_same_worktree_from_checkpoint(tmp_path: Path, monkeypatch: object) -> None:
+def test_technical_publication_failure_does_not_create_approval_gate(
+    tmp_path: Path, monkeypatch: object
+) -> None:
     runs = tmp_path / ".agent-runs"
     monkeypatch.setattr(agent_role_runner, "RUNS", runs)
     command = fake_adapter_script(tmp_path / "fake_adapter.py")
-    first = agent_role_runner.run_roles(
+    state = agent_role_runner.run_roles(
         run_id="resume-checkpoint",
         repository=tmp_path,
         adapter_command=command,
         dry_run=True,
     )
     run_dir = runs / "resume-checkpoint"
-    approval = json.loads((run_dir / "artifacts" / "approval.json").read_text(encoding="utf-8"))
-    approve_run(run_dir, actor="human-reviewer")
-    prepare_resume(run_dir)
 
-    resumed = agent_role_runner.run_roles(run_id="resume-checkpoint", resume=True, dry_run=True)
-
-    assert first["execution_status"] == "awaiting_approval"
-    assert resumed["worktree"] == first["worktree"]
-    assert resumed["resume_count"] == 1
-    checkpoint_role = approval["checkpoint_role"]
-    assert (run_dir / "role-results" / f"{checkpoint_role}-1.json").exists()
-    assert (run_dir / "role-results" / f"{checkpoint_role}-2.json").exists()
-    renewed = json.loads((run_dir / "artifacts" / "approval.json").read_text(encoding="utf-8"))
-    assert renewed["approval_id"] != approval["approval_id"]
-    assert renewed["reason"] == "Publication executor blocked or failed."
-    assert resumed["attention"]["summary"] == renewed["reason"]
+    assert state["execution_status"] == "blocked"
+    assert state["current_role"] == "publication"
+    assert state["attention"]["action"] == "fix_then_retry"
+    assert state["attention"]["summary"] == "Publication executor blocked or failed."
+    assert not (run_dir / "artifacts" / "approval.json").exists()
 
 
 def test_resumed_run_stops_instead_of_reopening_the_same_question(
@@ -778,6 +803,18 @@ def test_approval_request_failure_replaces_stale_question_with_actionable_attent
         raise agent_role_runner.ApprovalError("approval store unavailable")
 
     monkeypatch.setattr(agent_role_runner, "request_approval", reject_approval)
+    monkeypatch.setattr(
+        agent_role_runner,
+        "decide_next_role",
+        lambda **_kwargs: {
+            "next_role": "approval-gate",
+            "reason": "Explicit approval required.",
+            "stop": True,
+            "publication_allowed": False,
+            "loop": None,
+            "warnings": [],
+        },
+    )
 
     state = agent_role_runner.run_roles(
         run_id="approval-request-failure",
@@ -797,6 +834,18 @@ def test_approval_request_failure_replaces_stale_question_with_actionable_attent
 def test_unfinished_run_cannot_be_restarted_without_resume(tmp_path: Path, monkeypatch: object) -> None:
     runs = tmp_path / ".agent-runs"
     monkeypatch.setattr(agent_role_runner, "RUNS", runs)
+    monkeypatch.setattr(
+        agent_role_runner,
+        "decide_next_role",
+        lambda **_kwargs: {
+            "next_role": "approval-gate",
+            "reason": "Explicit approval required.",
+            "stop": True,
+            "publication_allowed": False,
+            "loop": None,
+            "warnings": [],
+        },
+    )
     command = fake_adapter_script(tmp_path / "fake_adapter.py")
     first = agent_role_runner.run_roles(
         run_id="must-resume",
@@ -909,12 +958,14 @@ print(json.dumps({
         adapter_command=f"{sys.executable} {adapter} {adapter_status}",
         dry_run=True,
     )
-    assert state["execution_status"] == "awaiting_approval"
+    assert state["execution_status"] == "blocked"
     planner = next(item for item in state["roles"] if item["role"] == "planner")
     assert planner["result"]["summary"] == "Role artifact ownership validation failed."
     assert not (tmp_path / ".agent-runs" / "ownership-run" / "artifacts" / "verdict.json").exists()
     errors_path = tmp_path / ".agent-runs" / "ownership-run" / "errors.jsonl"
-    assert "ROLE_NOT_COMPLETED" in errors_path.read_text(encoding="utf-8")
+    errors = errors_path.read_text(encoding="utf-8")
+    assert "ROLE_NOT_COMPLETED" in errors
+    assert "ROUTER_BLOCKED" in errors
 
 
 def test_frontend_qa_preflight_marks_evidence_unavailable(tmp_path: Path, monkeypatch: object) -> None:

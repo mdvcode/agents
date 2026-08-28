@@ -500,6 +500,28 @@ def test_orchestrator_local_complete_finishes_without_publication_gate(tmp_path:
     assert result["warnings"] == ["Publication was not requested."]
 
 
+def test_technical_publication_failure_is_blocked_not_approval(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    state = completed_state()
+
+    result = decide_next_role(
+        current_role="publication",
+        role_result={
+            "status": "blocked",
+            "next_action": "blocked",
+            "summary": "Publication executor blocked or failed.",
+            "blockers": ["ModuleNotFoundError: ai_harness"],
+        },
+        run_dir=tmp_path,
+        artifacts_dir=artifacts_dir,
+        workflow_state=state,
+    )
+
+    assert result["next_role"] == "blocked"
+    assert result["stop"] is True
+    assert result["reason"] == "Publication executor blocked or failed."
+
+
 def test_scoped_high_risk_grant_allows_patch_but_not_publication(tmp_path: Path) -> None:
     setup_artifacts(tmp_path, "high")
     state = completed_state(

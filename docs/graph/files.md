@@ -6,6 +6,7 @@
 - `docs/index.md` -> documentation map.
 
 ## Active Work
+- The installed Harness home is authoritative for production execution. Matching directories in a source checkout are development state unless that checkout is the active installed home.
 - `.agent-runs/<run-id>/workflow.json` -> authoritative workflow state.
 - `.agent-runs/<run-id>/artifacts/plan.md` -> current plan, owned by Planner.
 - `.agent-runs/<run-id>/artifacts/risk.json` -> autonomy gates, owned by Risk Classifier.
@@ -19,6 +20,13 @@
 - `.agent-queue/tasks.db` -> scheduler-only leases, heartbeats, retries, and dead-letter state; never task artifact state.
 - `.agent-routing.yaml` -> deterministic gate and bounded-loop policy.
 - `.agent-tool-policy.yaml` -> role/action/domain/credential/timeout tool authority.
+
+## File Lifecycle
+- Required and tracked: `ai_harness/`, `scripts/`, `schemas/`, `.agents/`, tests, policy YAML, packaging files, and reviewed docs/evals.
+- Target-local identity: `.agent/project.yaml`; it grants execution identity only and may remain ignored.
+- Recoverable operational state: `.agent-runs/`, `.agent-queue/`, `.agent-worktrees/`, and `.agent-cache/`; ignored, never publication input, retained while active or needed for recovery.
+- Re-creatable output: `.venv/`, build/dist/egg-info, Python/test caches, `tmp/`, and `output/` after evidence is summarized.
+- Unneeded metadata: `.DS_Store` and editor-local state.
 
 ## Durable Memory
 - `docs/projects/<project>/issues/` -> private per-project issue histories.

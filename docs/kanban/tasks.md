@@ -15,6 +15,7 @@
 - Milestone PR1 production runtime: every locally verifiable requirement, all 20 chaos scenarios, runtime preflight, and real Codex smoke are complete; only the user-excluded real 30-task multi-hour soak remains the production-readiness gate.
 
 ## Done
+- Full execution reliability audit: managed SDK startup, cross-scope context, technical blocker routing, pre-workflow recovery, local-only completion, truthful recovery/token status, file lifecycle, 504 repository tests, real SDK smoke, and two installed end-to-end completions.
 - Task execution reliability: fixed strict SDK response-schema rejection, stale source/install task intake, unverified worker startup/shutdown, pre-supersession runtime validation, and virtualenv selection; installed worker, real SDK smoke, runtime chaos, and full repository checks pass.
 - Parallel orchestration: bounded YAML/UI/API batch intake, visual auto-worktree selection, per-repository worker limits, shared worktree caches, branch-overlap ordering, cross-repository dashboard filters, and safe parent/child fan-out with parent-only join/publication.
 - P1 execution efficiency: deterministic Sol/Terra/Luna profiles, failure-only escalation, changed-file/risk-driven role activation, local quality/security/orchestration gates, and semantic missing-requirement deduplication with same-thread answer continuation.
