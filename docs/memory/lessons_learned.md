@@ -168,3 +168,30 @@
   Example bad pattern: unit-test local schema parsing and account preflight while never submitting the exact response schema used by production roles.
   Example good pattern: assert every declared object property is required, run the production response schema through a real SDK smoke, and block release when that turn is rejected before inference.
   Scope: provider-neutral runtime adapters, structured role output, and production readiness
+
+- Date: 2026-08-28
+  Agent: Codex
+  Failure: The installed SDK worker passed readiness but its first managed session exited as `recycle`, hiding the real startup failure.
+  Root cause: The Unix socket path was created below the long pipx installation path and exceeded the platform's `AF_UNIX` path limit; discarded sidecar stderr and unconditional close-state writing then replaced the useful error.
+  Prevention rule: Put managed Unix sockets under a short, private, per-user temporary root; preserve sidecar stderr and the first terminal reason; and make full readiness open a real managed SDK session through the installed path.
+  Example bad pattern: derive a Unix socket from the full package path, discard stderr, and report only the shutdown cleanup reason.
+  Example good pattern: validate socket path bytes, store the socket under a mode-0700 short root, retain a mode-0600 stderr log, and exercise the transport in `agent doctor --full` before task mutation.
+  Scope: installed Codex SDK session lifecycle and readiness diagnostics
+
+- Date: 2026-08-28
+  Agent: Codex
+  Failure: An ordinary target task stopped because a role demanded a Harness-private lessons file inside the target repository, and a later technical publication crash was presented as an approval decision.
+  Root cause: Compiled control-plane instructions and target-repository requirements shared ambiguous paths and identities, while routing treated broad `blocked` results as human authority gates; the deterministic orchestrator also attempted publication for locally initialized repositories without a central publication grant.
+  Prevention rule: Label compiled context by scope, never require control-plane paths in target repositories, distinguish technical failure from explicit questions or approvals, and finish locally unless central registration plus user intent authorizes publication.
+  Example bad pattern: require `docs/memory/lessons_learned.md` in every target, deduplicate two `AGENTS.md` documents by the same identifier, and convert a subprocess import error into `agent approve`.
+  Example good pattern: identify `control-plane/AGENTS.md` and `repository/AGENTS.md` separately, treat target lessons as optional, route technical failures to repair/retry, and emit `local_complete` for unregistered or explicitly local-only work.
+  Scope: context compilation, role prompts, routing, and publication authorization
+
+- Date: 2026-08-28
+  Agent: Codex
+  Failure: Long but progressing tasks repeatedly paused for human approval after cumulative token or model-call totals crossed configured cost ceilings.
+  Root cause: Economic telemetry and hard execution-safety bounds shared one exhaustion path, so a cost threshold was treated as missing human authority.
+  Prevention rule: Treat cumulative token and model-call ceilings as soft pressure that selects economy profiles and sheds only optional work; keep mandatory gates running, and reserve approval or blocking for hard time/repair/escalation bounds, no progress, security, protected actions, or genuine provider failures.
+  Example bad pattern: route `tokens_used >= max_tokens` directly to `approval-gate`.
+  Example good pattern: persist an `economy` budget action, continue the next mandatory role, and report the soft ceiling as a warning rather than a blocker.
+  Scope: task economics, deterministic routing, adaptive execution, repair loops, and operator UX

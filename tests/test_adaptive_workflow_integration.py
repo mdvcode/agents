@@ -105,7 +105,7 @@ def test_adaptive_router_uses_dag_instead_of_fixed_chain(tmp_path: Path) -> None
     assert "Adaptive execution plan" in route["reason"]
 
 
-def test_adaptive_budget_exhaustion_requires_approval_before_next_node(tmp_path: Path) -> None:
+def test_adaptive_soft_budget_exhaustion_continues_mandatory_next_node(tmp_path: Path) -> None:
     plan_path = tmp_path / "execution-plan.json"
     plan(plan_path, max_model_calls=1)
     artifacts = tmp_path / "artifacts"
@@ -123,8 +123,10 @@ def test_adaptive_budget_exhaustion_requires_approval_before_next_node(tmp_path:
         workflow_state=workflow,
     )
 
-    assert route["next_role"] == "approval-gate"
-    assert "budget exhausted" in route["reason"].lower()
+    assert route["next_role"] == "quality-runner"
+    assert route["stop"] is False
+    assert workflow["budget_action"]["action"] == "economy"
+    assert workflow["budget_action"]["exhausted_dimensions"] == ["model_calls"]
 
 
 def test_adaptive_router_ignores_historical_repair_counters(tmp_path: Path) -> None:

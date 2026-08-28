@@ -836,16 +836,41 @@ def _elapsed_seconds(state: dict[str, Any]) -> float:
     return 0.0
 
 
+def _token_count(state: dict[str, Any]) -> int:
+    token_count = state.get("tokens_used")
+    if isinstance(token_count, (int, float)):
+        return max(0, int(token_count))
+    return sum(
+        int(entry.get("result", {}).get("tokens_used", 0))
+        for entry in _role_entries(state)
+        if isinstance(entry.get("result"), dict)
+        and isinstance(entry.get("result", {}).get("tokens_used", 0), (int, float))
+    )
+
+
+def _token_budget_warning(state: dict[str, Any], workflows: dict[str, Any]) -> str:
+    max_tokens = _budgets(state, workflows)["max_tokens"]
+    token_count = _token_count(state)
+    if token_count < max_tokens:
+        return ""
+    state["budget_action"] = {
+        "action": BudgetAction.ECONOMY.value,
+        "reason": (
+            "The soft workflow token ceiling was exceeded; mandatory execution "
+            "continues in economy mode."
+        ),
+        "pressure": round(token_count / max_tokens, 6),
+        "exhausted_dimensions": ["tokens_used"],
+    }
+    return (
+        f"soft max_tokens exceeded: {token_count} >= {max_tokens}; "
+        "mandatory execution continues in economy mode"
+    )
+
+
 def _budget_blockers(state: dict[str, Any], workflows: dict[str, Any]) -> list[str]:
     budgets = _budgets(state, workflows)
     role_count = state.get("role_count", len(_role_entries(state)))
-    token_count = state.get("tokens_used")
-    if not isinstance(token_count, (int, float)):
-        token_count = sum(
-            int(entry.get("result", {}).get("tokens_used", 0))
-            for entry in _role_entries(state)
-            if isinstance(entry.get("result"), dict) and isinstance(entry.get("result", {}).get("tokens_used", 0), (int, float))
-        )
     loop_values = state.get("loops", {})
     if not isinstance(loop_values, dict):
         loop_values = {}
@@ -859,8 +884,6 @@ def _budget_blockers(state: dict[str, Any], workflows: dict[str, Any]) -> list[s
         blockers.append(f"max_roles reached: {int(role_count)} >= {budgets['max_roles']}")
     if _elapsed_seconds(state) >= budgets["max_duration_seconds"]:
         blockers.append(f"max_duration_seconds reached: {int(_elapsed_seconds(state))} >= {budgets['max_duration_seconds']}")
-    if token_count >= budgets["max_tokens"]:
-        blockers.append(f"max_tokens reached: {int(token_count)} >= {budgets['max_tokens']}")
     if repair_iterations >= budgets["max_repair_iterations"]:
         blockers.append(f"max_repair_iterations reached: {repair_iterations} >= {budgets['max_repair_iterations']}")
     return blockers
@@ -1072,11 +1095,26 @@ def _repair_route(
         "tokens_used": loop_tokens,
         "elapsed_seconds": loop_elapsed,
     }
+    token_pressure = loop_tokens >= config["max_tokens"]
     exhausted = (
         iteration >= config["max_iterations"]
-        or loop_tokens >= config["max_tokens"]
         or loop_elapsed >= config["max_duration_seconds"]
     )
+    token_warning = ""
+    if token_pressure:
+        state["budget_action"] = {
+            "action": BudgetAction.ECONOMY.value,
+            "reason": (
+                "The soft repair token ceiling was exceeded; bounded repair "
+                "continues in economy mode."
+            ),
+            "pressure": round(loop_tokens / config["max_tokens"], 6),
+            "exhausted_dimensions": ["repair_tokens_used"],
+        }
+        token_warning = (
+            f"soft repair token ceiling exceeded: {loop_tokens} >= "
+            f"{config['max_tokens']}; this selects economy mode and is not a stop condition"
+        )
     if exhausted or not progress:
         reason = f"{config['name']} stopped after a repeated failure or loop budget exhaustion."
         loop_warnings = [
@@ -1084,6 +1122,8 @@ def _repair_route(
             f"tokens {loop_tokens} of {config['max_tokens']}",
             f"seconds {loop_elapsed} of {config['max_duration_seconds']}",
         ]
+        if token_warning:
+            loop_warnings.append(token_warning)
         if approval_consumed:
             return _blocked(
                 f"{reason} The scoped approval was consumed, but the same checkpoint is still unresolved; repair it before retrying.",
@@ -1094,6 +1134,7 @@ def _repair_route(
         config["to"],
         f"{config['name']} repair iteration {iteration} started.",
         loop=loop,
+        warnings=[token_warning] if token_warning else None,
     )
 
 
@@ -1237,15 +1278,23 @@ def decide_next_role(
                 bypass_approval or budget_approved
             ):
                 return _approval(
-                    "Adaptive task budget exhausted; execution is awaiting approval.",
+                    "Adaptive hard execution bound exhausted; execution is awaiting approval.",
                     warnings + [
                         decision.reason,
                         "exhausted dimensions: " + ", ".join(decision.exhausted_dimensions),
                     ],
                 )
+    token_warning = _token_budget_warning(state, workflows)
+    if token_warning:
+        warnings.append(token_warning)
 
-    if result.get("status") in {"blocked", "failed", "awaiting_approval"}:
+    if result.get("status") == "awaiting_approval":
         return _approval(
+            str(result.get("summary", f"Role {current_role} did not complete successfully.")),
+            warnings + _list_values(result.get("blockers")),
+        )
+    if result.get("status") in {"blocked", "failed"}:
+        return _blocked(
             str(result.get("summary", f"Role {current_role} did not complete successfully.")),
             warnings + _list_values(result.get("blockers")),
         )

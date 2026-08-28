@@ -25,14 +25,29 @@ def test_budget_controller_progresses_from_normal_to_economy_to_optional_skip() 
     assert skip.action == BudgetAction.SKIP_OPTIONAL
 
 
-def test_budget_exhaustion_requires_approval_even_for_mandatory_gate() -> None:
-    decision = BudgetController(LIMITS).assess(
+def test_soft_budget_exhaustion_keeps_mandatory_gate_running_in_economy() -> None:
+    mandatory = BudgetController(LIMITS).assess(
         BudgetUsage(model_calls=8),
+        mandatory_role=True,
+    )
+    optional = BudgetController(LIMITS).assess(
+        BudgetUsage(model_calls=8),
+        mandatory_role=False,
+    )
+
+    assert mandatory.action == BudgetAction.ECONOMY
+    assert mandatory.exhausted_dimensions == ("model_calls",)
+    assert optional.action == BudgetAction.SKIP_OPTIONAL
+
+
+def test_hard_budget_exhaustion_still_requires_approval() -> None:
+    decision = BudgetController(LIMITS).assess(
+        BudgetUsage(elapsed_seconds=1_800),
         mandatory_role=True,
     )
 
     assert decision.action == BudgetAction.REQUIRE_APPROVAL
-    assert decision.exhausted_dimensions == ("model_calls",)
+    assert decision.exhausted_dimensions == ("elapsed_seconds",)
 
 
 def test_usage_counts_uncached_tokens_model_calls_repairs_and_escalations() -> None:

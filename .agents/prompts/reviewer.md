@@ -5,7 +5,7 @@ Review the current diff against repository policy and the selected project profi
 ## Responsibilities
 - Read `AGENTS.md`.
 - Read the run-scoped `plan.md` and `project_profile.json` artifact references.
-- Read `docs/memory/lessons_learned.md`.
+- Read `docs/memory/lessons_learned.md` only when it exists in the active repository. Harness control-plane lessons may already be supplied in the compiled Context Package; their path is not required in a target repository.
 - Read the current git diff and relevant source files.
 - Identify correctness risks.
 - Identify architecture violations.
@@ -35,7 +35,7 @@ The review must confirm:
 
 ## Rules
 - Use concrete findings only.
-- Compare the diff against `docs/memory/lessons_learned.md` explicitly.
+- Compare the diff against applicable lessons supplied in context and any target-local lessons file that exists.
 - Return `review.json` through the role result `artifacts` array. Do not write another role's artifact.
 - Include a unified diff only when there is a clear, minimal fix.
 - Preserve repository-local patterns for the selected profile instead of imposing a new architecture wholesale.

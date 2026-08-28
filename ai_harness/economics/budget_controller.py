@@ -101,6 +101,9 @@ class BudgetController:
         "repair_attempts": "max_repair_attempts",
         "model_escalations": "max_model_escalations",
     }
+    SOFT_FIELDS = frozenset(
+        {"model_calls", "uncached_input_tokens", "output_tokens"}
+    )
 
     def __init__(self, limits: Mapping[str, int]) -> None:
         self.limits = {
@@ -126,10 +129,27 @@ class BudgetController:
         }
         pressure = max(ratios.values(), default=0.0)
         exhausted = tuple(sorted(field for field, ratio in ratios.items() if ratio >= 1.0))
-        if exhausted:
+        hard_exhausted = tuple(
+            field for field in exhausted if field not in self.SOFT_FIELDS
+        )
+        if hard_exhausted:
             return BudgetDecision(
                 BudgetAction.REQUIRE_APPROVAL,
-                "Task budget exhausted; mandatory gates remain pending and require explicit approval to continue.",
+                "A hard execution bound is exhausted; mandatory gates remain pending and require explicit approval to continue.",
+                pressure,
+                hard_exhausted,
+            )
+        if exhausted and not mandatory_role:
+            return BudgetDecision(
+                BudgetAction.SKIP_OPTIONAL,
+                "A soft task cost ceiling is exceeded; omit this optional role.",
+                pressure,
+                exhausted,
+            )
+        if exhausted:
+            return BudgetDecision(
+                BudgetAction.ECONOMY,
+                "A soft task cost ceiling is exceeded; mandatory completion continues with the cheapest sufficient configured profile.",
                 pressure,
                 exhausted,
             )

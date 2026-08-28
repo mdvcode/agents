@@ -261,8 +261,14 @@ class CodexSdkServer:
                 self.server.close()
         with suppress(OSError):
             self.socket_path.unlink()
+        prior_reason = str(self.state().get("stop_reason", ""))
         self.write_state(
-            "stopped", stop_reason="shutdown" if self.stop_requested else "recycle"
+            "stopped",
+            stop_reason=(
+                "shutdown"
+                if self.stop_requested
+                else prior_reason or "recycle"
+            ),
         )
 
 
@@ -293,6 +299,11 @@ def main() -> int:
     signal.signal(signal.SIGINT, stop)
     try:
         return server.serve()
+    except Exception as exc:
+        server.write_state(
+            "degraded", stop_reason=f"{type(exc).__name__}: {exc}"
+        )
+        raise
     finally:
         server.close()
 

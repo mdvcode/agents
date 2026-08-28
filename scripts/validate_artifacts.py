@@ -230,6 +230,29 @@ def validate_audit_log(run_dir: Path) -> list[str]:
     return errors
 
 
+def required_artifact_names(artifacts_root: Path, phase: str) -> set[str]:
+    """Select terminal artifacts according to the orchestrator decision."""
+
+    required = {
+        "risk",
+        "quality",
+        "security",
+        "review",
+        "verdict",
+        "project_profile",
+    }
+    verdict_path = artifacts_root / "verdict.json"
+    try:
+        verdict = load_json(verdict_path)
+    except (OSError, json.JSONDecodeError):
+        verdict = {}
+    if isinstance(verdict, dict) and verdict.get("decision") == "publish_pr":
+        required.update({"change_set", "publication_payload"})
+        if phase == "complete":
+            required.add("publication")
+    return required
+
+
 def contains_key(value: Any, forbidden_key: str) -> bool:
     if isinstance(value, dict):
         return forbidden_key in value or any(contains_key(item, forbidden_key) for item in value.values())
@@ -1140,18 +1163,7 @@ def main(artifacts_dir: Path | None = None) -> int:
         if artifacts_root is None:
             errors.append("--run-dir or --artifacts-dir is required; root artifacts/ is forbidden")
         else:
-            required_names = {
-                "risk",
-                "quality",
-                "security",
-                "review",
-                "verdict",
-                "project_profile",
-                "change_set",
-                "publication_payload",
-            }
-            if args.phase == "complete":
-                required_names.add("publication")
+            required_names = required_artifact_names(artifacts_root, args.phase)
             for name, (artifact_path, schema_path) in json_artifacts(artifacts_root).items():
                 if name not in required_names:
                     continue

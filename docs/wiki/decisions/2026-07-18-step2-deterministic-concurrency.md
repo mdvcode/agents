@@ -13,7 +13,7 @@ Model-suggested `next_action` values cannot safely control gates, retries, publi
 - `scripts/workflow_router.py` is authoritative. Role `next_action` values are advisory only. Routing policy lives in `.agent-routing.yaml`, and every decision must validate against `schemas/workflow_route.schema.json`.
 - Security findings are routed by explicit `highest_severity`: `critical` hard-blocks with structured state, while `medium` and `high` require human approval.
 - Issue Intake is declared as a deterministic `harness_stage` with `llm_invocation=false`; its checkpoint records that no model was invoked.
-- Quality, review, CI, and frontend verification repairs have independent iteration, token, and time limits. The router compares both failure and diff fingerprints and stops when the same failure repeats without progress.
+- Quality, review, CI, and frontend verification repairs have independent iteration, token, and time controls. Iteration, time, and repeated no-progress failures are stop conditions; token ceilings are soft economy signals. The router compares both failure and diff fingerprints and stops when the same failure repeats without progress.
 - Security, review, architecture consistency, semantic conflict, and frontend/user-flow verification are read-only roles using the shared `works | broken | unavailable` verifier contract. A UI `works` verdict requires real loopback Playwright evidence.
 - Task Intake creates the task worktree. Implementation, verification, commit, push, and PR all use that exact worktree. Publication refuses a repository or branch that differs from `workflow.json`.
 - `.agent-queue/tasks.db` is scheduler state, not task workflow state. SQLite leases, heartbeats, retries, dead-letter status, and idempotent task keys coordinate 2–3 workers. Each task's authoritative mutable workflow state remains only in `.agent-runs/<run-id>/`.
@@ -27,7 +27,7 @@ Unit and integration tests prove deterministic behavior, but do not close produc
 ## Consequences
 
 - A role cannot bypass a gate by naming publication.
-- Repair loops stop predictably instead of consuming unlimited time or tokens.
+- Repair loops stop predictably on iteration, time, or no-progress bounds, while token pressure automatically selects economy execution.
 - Publication cannot create a second unrelated worktree.
 - Queue failures remain recoverable and visible without weakening per-run state ownership.
 - Step 2 cannot be reported as closed from synthetic fixtures alone.

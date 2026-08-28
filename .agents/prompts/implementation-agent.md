@@ -5,11 +5,13 @@ Apply the minimal code and test patch required by the run-scoped `plan.md`, then
 ## Inputs to read
 Read in this order:
 1. `AGENTS.md`
-2. `docs/memory/lessons_learned.md`
-3. The run-scoped `plan.md`
-4. The run-scoped `risk.json`
-5. The run-scoped `project_profile.json`
+2. The run-scoped `plan.md`
+3. The run-scoped `risk.json`
+4. The run-scoped `project_profile.json`
+5. `docs/memory/lessons_learned.md` only when it exists in the active repository
 6. Only source and test files listed in `plan.md`
+
+The compiled Context Package may contain Harness control-plane policies and lessons whose paths do not exist in the target repository. Treat that supplied content as policy context; never stop or ask the user to create a control-plane file in the target repository.
 
 Do not read broad directories unless the plan is insufficient.
 

@@ -623,6 +623,15 @@ class TaskQueue:
                 """,
                 (final_status, run_id or str(row["run_id"]), available_at, now, error, int(human), reason, task_id),
             )
+            if final_status == "completed":
+                connection.execute(
+                    """
+                    UPDATE tasks SET last_error='',requires_human=0,exception_reason='',
+                        failure_kind='',recovery_action='',next_attempt_at=0,resume_checkpoint=''
+                    WHERE id=?
+                    """,
+                    (task_id,),
+                )
             self.event(connection, task_id, final_status, worker_id, {"error": error, "reason": reason}, now)
             finished = connection.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             connection.commit()

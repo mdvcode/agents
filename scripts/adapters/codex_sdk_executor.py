@@ -175,6 +175,7 @@ class ProgressWriter:
         self.active_tool = ""
         self.last_sdk_event = ""
         self.tokens_used = 0
+        self.sdk_thread_tokens = 0
 
     def update(
         self,
@@ -199,7 +200,10 @@ class ProgressWriter:
                 )
             live_tokens = event_token_usage(event)
             if live_tokens is not None:
-                self.tokens_used = live_tokens
+                # SDK notifications report the cumulative reusable-thread total,
+                # including cached input and earlier roles. It is useful telemetry
+                # but is not comparable to this role's billable token budget.
+                self.sdk_thread_tokens = live_tokens
         if tokens_used is not None:
             self.tokens_used = max(0, tokens_used)
         if stop_reason:
@@ -212,6 +216,7 @@ class ProgressWriter:
             "active_tool": self.active_tool,
             "last_progress_at": now,
             "tokens_used": self.tokens_used,
+            "sdk_thread_tokens": self.sdk_thread_tokens,
             "token_budget": int(self.request.get("token_budget", 0) or 0),
             "stop_reason": stop_reason,
             "thread_id": self.thread_id,

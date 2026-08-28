@@ -370,3 +370,26 @@ def test_json_artifacts_uses_custom_artifacts_dir(tmp_path: Path) -> None:
 
     assert mapping["risk"][0] == tmp_path / "risk.json"
     assert mapping["risk"][1].name == "risk.schema.json"
+
+
+def test_local_complete_does_not_require_publication_artifacts(tmp_path: Path) -> None:
+    (tmp_path / "verdict.json").write_text(
+        '{"decision":"local_complete"}', encoding="utf-8"
+    )
+
+    required = validator.required_artifact_names(tmp_path, "complete")
+
+    assert "verdict" in required
+    assert "change_set" not in required
+    assert "publication_payload" not in required
+    assert "publication" not in required
+
+
+def test_publish_decision_requires_complete_publication_artifacts(tmp_path: Path) -> None:
+    (tmp_path / "verdict.json").write_text(
+        '{"decision":"publish_pr"}', encoding="utf-8"
+    )
+
+    required = validator.required_artifact_names(tmp_path, "complete")
+
+    assert {"change_set", "publication_payload", "publication"} <= required
