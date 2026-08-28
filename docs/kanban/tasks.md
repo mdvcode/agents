@@ -7,7 +7,6 @@
 - Keep `.agents/prompts/` aligned with the docs/onboarding flow.
 
 ## In Progress
-- Token-budget continuity: make cumulative token/model-call ceilings automatic economy signals instead of recurring approval blockers while retaining hard safety and execution bounds.
 - Adaptive Execution & Context Efficiency v1: implementation, deterministic 50-case plan evaluation, and the read-only Adaptive Acceptance dashboard extension are complete; real paired full/adaptive task evidence is still required before changing the default from the previously accepted auto policy.
 - Step 1 evidence series: implementation and real Codex smoke are complete; collect and verify 10-20 real task runs against a disposable publication target.
 - Step 2 production evidence: implementation is complete; run at least three real queued tasks with two overlapping workers, one successful PR, one human exception, and UI evidence in a registered web repository.
@@ -16,6 +15,7 @@
 - Milestone PR1 production runtime: every locally verifiable requirement, all 20 chaos scenarios, runtime preflight, and real Codex smoke are complete; only the user-excluded real 30-task multi-hour soak remains the production-readiness gate.
 
 ## Done
+- Token-budget continuity: cumulative token/model-call ceilings now select automatic economy execution or optional-role shedding without blocking mandatory work; hard safety, duration, retry, escalation, and no-progress bounds remain enforced.
 - Full execution reliability audit: managed SDK startup, cross-scope context, technical blocker routing, pre-workflow recovery, local-only completion, truthful recovery/token status, file lifecycle, 504 repository tests, real SDK smoke, and two installed end-to-end completions.
 - Task execution reliability: fixed strict SDK response-schema rejection, stale source/install task intake, unverified worker startup/shutdown, pre-supersession runtime validation, and virtualenv selection; installed worker, real SDK smoke, runtime chaos, and full repository checks pass.
 - Parallel orchestration: bounded YAML/UI/API batch intake, visual auto-worktree selection, per-repository worker limits, shared worktree caches, branch-overlap ordering, cross-repository dashboard filters, and safe parent/child fan-out with parent-only join/publication.
