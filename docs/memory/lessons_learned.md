@@ -231,3 +231,12 @@
   Example bad pattern: configure two repairs, increment the second repair when routing it, then reject implementation because `2 >= 2`.
   Example good pattern: allow the configured second repair and its verification gates, then stop a requested third repair because `3 > 2`.
   Scope: adaptive hard budgets, bounded repairs, model escalation, and approval UX
+
+- Date: 2026-08-31
+  Agent: Codex
+  Failure: A deterministic hard-budget gate was classified as an informational question, so duplicate-question suppression converted a recoverable boundary defect into a misleading “previously answered” blocker.
+  Root cause: Every `awaiting_approval` role result was assigned the `answer` action even when it contained no structured question, and manual retry retained the stale active attention in workflow blockers.
+  Prevention rule: Only a valid structured question may use `answer`; deterministic authority gates use `approve`, technical stops use `fix_then_retry`, and manual recovery archives only the active technical attention while preserving unrelated blockers.
+  Example bad pattern: apply semantic question deduplication to a policy gate and carry its old attention blockers into the repaired retry.
+  Example good pattern: keep question, approval, and technical recovery lifecycles distinct; archive the resolved technical stop before rerunning its checkpoint.
+  Scope: attention classification, approval UX, duplicate-question suppression, and manual recovery

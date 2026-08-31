@@ -31,6 +31,7 @@
 - Fail-closed verifier coverage proves structured code blockers cannot be mistaken for an unavailable environment by product text such as `read-only API`, and a blocked orchestrator verdict cannot reach publication.
 - False-completion recovery coverage proves ordinary completed tasks stay terminal, publication side effects forbid reconciliation, and a blocked authoritative review can resume the same checkpoint after only stale orchestrator/publication history is invalidated.
 - Hard-count boundary coverage proves the configured number of repair and model-escalation attempts is allowed, while the first excess attempt still requires approval.
+- Attention lifecycle coverage proves approval gates are not deduplicated as informational questions and manual retry archives the resolved technical stop while retaining independent blockers.
 - Step 1 harness: 101 tests passed with one optional smoke skipped in the ordinary suite; the separately enabled real Codex planner smoke passed. Contract validation, focused security, full-repository security, ownership rollback, missing-gate publication blocking, and diff checks passed.
 - Test/fix board created.
 - Verified JSON artifacts, artifact inventory, and `git diff --check`.

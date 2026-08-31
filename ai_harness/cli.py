@@ -1156,6 +1156,36 @@ def reset_role_checkpoint_for_rerun(run_dir: Path, workflow: dict[str, Any]) -> 
     workflow["resume_role"] = role
 
 
+def archive_recovery_attention(workflow: dict[str, Any]) -> None:
+    """Resolve the active technical stop while retaining its audit history."""
+
+    attention = workflow.pop("attention", None)
+    if not isinstance(attention, dict):
+        return
+    active_values = {str(attention.get("summary", "")).strip()}
+    details = attention.get("details", [])
+    if isinstance(details, list):
+        active_values.update(str(item).strip() for item in details)
+    active_values.discard("")
+    history = workflow.get("attention_history", [])
+    if not isinstance(history, list):
+        history = []
+    history.append(
+        {
+            **attention,
+            "required": False,
+            "resolved_at": datetime.now(timezone.utc).isoformat(),
+            "resolution": "manual_recovery",
+        }
+    )
+    workflow["attention_history"] = history[-50:]
+    blockers = workflow.get("blockers", [])
+    if isinstance(blockers, list):
+        workflow["blockers"] = [
+            item for item in blockers if str(item).strip() not in active_values
+        ]
+
+
 def _artifact_blockers(value: Any) -> list[str]:
     if not isinstance(value, dict):
         return []
@@ -2177,6 +2207,7 @@ def handle_recovery_command(args: argparse.Namespace) -> int:
             if workflow_exists:
                 workflow["execution_status"] = "retry_wait" if args.command == "retry" else "resuming"
                 workflow["recovery_action"] = args.command
+                archive_recovery_attention(workflow)
                 if args.command == "retry":
                     reset_role_checkpoint_for_rerun(run_dir, workflow)
                 recovery = workflow.get("recovery", {})

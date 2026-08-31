@@ -247,10 +247,10 @@ def test_answer_continuation_is_not_classified_as_prior_role_failure() -> None:
     assert agent_role_runner.prior_role_failed(state, "planner") is True
 
 
-def test_technical_failures_are_not_classified_as_answerable_questions() -> None:
+def test_technical_failures_and_approval_gates_are_not_answerable_questions() -> None:
     assert agent_role_runner.role_attention_action({"status": "blocked"}) == "fix_then_retry"
     assert agent_role_runner.role_attention_action({"status": "failed"}) == "fix_then_retry"
-    assert agent_role_runner.role_attention_action({"status": "awaiting_approval"}) == "answer"
+    assert agent_role_runner.role_attention_action({"status": "awaiting_approval"}) == "approve"
 
 
 def test_blocked_role_with_structured_question_remains_answerable() -> None:

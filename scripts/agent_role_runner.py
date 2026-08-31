@@ -957,12 +957,12 @@ def question_was_answered(state: dict[str, Any], fingerprints: set[str]) -> bool
 
 
 def role_attention_action(result: dict[str, Any]) -> str:
-    """Route deliberate structured questions to informational input."""
+    """Separate deliberate questions from authority and technical gates."""
 
-    if result.get("status") == "awaiting_approval" or normalize_question(
-        result.get("question")
-    ):
+    if normalize_question(result.get("question")):
         return "answer"
+    if result.get("status") == "awaiting_approval":
+        return "approve"
     return "fix_then_retry"
 
 

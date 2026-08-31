@@ -2108,6 +2108,25 @@ def test_retry_checkpoint_reruns_current_role_instead_of_cached_blocker(tmp_path
     assert checkpoint["artifacts"] == []
 
 
+def test_manual_recovery_archives_active_technical_attention() -> None:
+    workflow = {
+        "attention": {
+            "required": True,
+            "summary": "Repair the local database.",
+            "details": ["Database is unavailable."],
+            "action": "fix_then_retry",
+        },
+        "blockers": ["Database is unavailable.", "Independent security blocker."],
+        "attention_history": [],
+    }
+
+    cli.archive_recovery_attention(workflow)
+
+    assert "attention" not in workflow
+    assert workflow["blockers"] == ["Independent security blocker."]
+    assert workflow["attention_history"][0]["resolution"] == "manual_recovery"
+
+
 def test_retry_reconciles_false_completion_from_blocked_review(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
