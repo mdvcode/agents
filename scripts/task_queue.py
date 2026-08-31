@@ -853,6 +853,62 @@ class TaskQueue:
             updated = connection.execute("SELECT * FROM tasks WHERE id=?", (int(row["id"]),)).fetchone()
             return self.record(updated)
 
+    def reconcile_false_completion(
+        self,
+        run_id: str,
+        *,
+        resume_role: str,
+        evidence_fingerprint: str,
+    ) -> TaskRecord:
+        """Reopen a completed queue record after the CLI proves its verdict was blocked."""
+
+        if not resume_role or Path(resume_role).name != resume_role:
+            raise ValueError("a safe resume role is required for completion reconciliation")
+        if not evidence_fingerprint.startswith("sha256:"):
+            raise ValueError("completion reconciliation requires an evidence fingerprint")
+        now = time.time()
+        with self.connect() as connection:
+            self._begin_immediate(connection)
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE run_id=? ORDER BY id DESC LIMIT 1",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                raise ValueError(f"queue task for run {run_id!r} was not found")
+            current_status = str(row["status"])
+            if current_status != "completed":
+                connection.rollback()
+                raise ValueError(
+                    "false-completion reconciliation requires a completed queue task"
+                )
+            connection.execute(
+                """
+                UPDATE tasks SET status='resuming',available_at=?,next_attempt_at=?,updated_at=?,
+                    requires_human=0,exception_reason='',failure_kind='',
+                    recovery_action='reconcile_false_completion',recovery_attempts=0
+                WHERE id=?
+                """,
+                (now, now, now, int(row["id"])),
+            )
+            self.event(
+                connection,
+                int(row["id"]),
+                "resuming",
+                details={
+                    "manual": True,
+                    "action": "reconcile_false_completion",
+                    "resume_role": resume_role,
+                    "evidence_fingerprint": evidence_fingerprint,
+                },
+                now=now,
+            )
+            updated = connection.execute(
+                "SELECT * FROM tasks WHERE id=?", (int(row["id"]),)
+            ).fetchone()
+            connection.commit()
+            return self.record(updated)
+
     def mark_approval_expired(self, run_id: str) -> TaskRecord | None:
         """Mirror an expired approval into queue state so manual repair can proceed."""
 

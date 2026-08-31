@@ -213,3 +213,12 @@
   Example bad pattern: ignore blocker objects, match `read-only` inside a product description, and infer that all review failures were accepted as unavailable verification.
   Example good pattern: classify the structured `F001` message as a code blocker, route it to bounded repair, and independently reject publication from a blocked verdict.
   Scope: verifier classification, structured findings, deterministic review repair, verdict routing, and publication safety
+
+- Date: 2026-08-31
+  Agent: Codex
+  Failure: After fail-open routing falsely marked a blocked run completed, the governed retry command refused to reopen it, leaving the repaired worker unable to continue the original checkpoint.
+  Root cause: Terminal queue protection correctly rejected every completed task but had no evidence-bound reconciliation path for a workflow whose authoritative verdict still proved failed checks and review blockers.
+  Prevention rule: Keep ordinary completed runs immutable; permit reconciliation only when a blocked verdict, a completed blocking verifier checkpoint, and absence of publication side effects are all proven and fingerprinted, then invalidate only downstream false-success history.
+  Example bad pattern: edit queue/workflow state by hand or make every completed run retryable after discovering a false completion.
+  Example good pattern: atomically prepare the same run at its completed reviewer checkpoint, audit the evidence fingerprint, preserve all earlier history, remove stale orchestrator/publication completions, and let deterministic repair routing continue.
+  Scope: terminal recovery, queue/workflow reconciliation, checkpoint history, and publication idempotency

@@ -2108,6 +2108,169 @@ def test_retry_checkpoint_reruns_current_role_instead_of_cached_blocker(tmp_path
     assert checkpoint["artifacts"] == []
 
 
+def test_retry_reconciles_false_completion_from_blocked_review(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    run_id = "run-false-completion"
+    run_dir = state_root / ".agent-runs" / run_id
+    artifacts = run_dir / "artifacts"
+    checkpoints = run_dir / "checkpoints"
+    artifacts.mkdir(parents=True)
+    checkpoints.mkdir()
+    workflow = {
+        "run_id": run_id,
+        "task_id": "false-completion",
+        "repository": str(repository),
+        "worktree": str(repository),
+        "checkout_path": str(repository),
+        "execution_status": "completed",
+        "current_role": "publication",
+        "resume_role": "publication",
+        "last_route": {"next_role": "", "stop": True, "publication_allowed": True},
+        "blockers": [],
+        "attention": None,
+        "recovery": {},
+        "budget_skipped_roles": ["publication"],
+        "completed_roles": ["reviewer", "orchestrator", "publication"],
+        "roles": [
+            {
+                "role": "reviewer",
+                "result": {
+                    "status": "completed",
+                    "next_action": "repair",
+                    "summary": "Review found a concrete blocker.",
+                    "artifacts_created": ["review.json"],
+                    "blockers": [],
+                    "warnings": [],
+                },
+            },
+            {"role": "orchestrator", "result": {"status": "completed"}},
+            {"role": "publication", "result": {"status": "completed"}},
+        ],
+    }
+    (run_dir / "workflow.json").write_text(json.dumps(workflow), encoding="utf-8")
+    (artifacts / "verdict.json").write_text(
+        json.dumps(
+            {
+                "decision": "await_approval",
+                "execution_status": "blocked",
+                "checks_passed": False,
+                "blockers": ["F001: review blocker"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifacts / "review.json").write_text(
+        json.dumps(
+            {
+                "verdict": "broken",
+                "status": "block",
+                "repair_required": True,
+                "blockers": [
+                    {"id": "F001", "severity": "high", "message": "review blocker"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    for role, role_artifacts in (("reviewer", ["review.json"]), ("publication", [])):
+        (checkpoints / f"{role}.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "role": role,
+                    "state": "role_completed",
+                    "attempt": 1,
+                    "worktree": str(repository),
+                    "artifacts": role_artifacts,
+                    "side_effects": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+    task_queue = cli.load_harness_module(state_root, "task_queue")
+    queue = task_queue.TaskQueue(state_root / ".agent-queue" / "tasks.db")
+    queued = queue.enqueue(
+        task_key="false-completion",
+        payload={"task_id": "false-completion", "repository": str(repository)},
+        run_id=run_id,
+    )
+    claimed = queue.claim(worker_id="worker-1")
+    assert claimed is not None
+    assert queue.mark_running(queued.id, "worker-1")
+    queue.finish(
+        task_id=queued.id,
+        worker_id="worker-1",
+        status="completed",
+        run_id=run_id,
+    )
+
+    assert cli.main(["retry", run_id, "--repo", str(repository), "--json"]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    reconciled = json.loads((run_dir / "workflow.json").read_text(encoding="utf-8"))
+    assert result["status"] == "resuming"
+    assert result["action"] == "reconcile_false_completion"
+    assert queue.get(queued.id).status == "resuming"
+    assert reconciled["execution_status"] == "resuming"
+    assert reconciled["current_role"] == "reviewer"
+    assert reconciled["resume_role"] == "reviewer"
+    assert reconciled["last_route"]["next_role"] == "approval-gate"
+    assert reconciled["recovery_action"] == "reconcile_false_completion"
+    assert reconciled["recovery"]["false_completion_reconciliation"]["resume_role"] == "reviewer"
+    assert [entry["role"] for entry in reconciled["roles"]] == ["reviewer"]
+    assert reconciled["completed_roles"] == ["reviewer"]
+    assert reconciled["budget_skipped_roles"] == []
+    reviewer_checkpoint = json.loads(
+        (checkpoints / "reviewer.json").read_text(encoding="utf-8")
+    )
+    assert reviewer_checkpoint["state"] == "role_completed"
+
+
+def test_false_completion_reconciliation_rejects_publication_side_effects(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    artifacts = run_dir / "artifacts"
+    checkpoints = run_dir / "checkpoints"
+    artifacts.mkdir(parents=True)
+    checkpoints.mkdir()
+    (artifacts / "verdict.json").write_text(
+        json.dumps(
+            {
+                "decision": "await_approval",
+                "execution_status": "blocked",
+                "checks_passed": False,
+                "blockers": ["F001"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifacts / "review.json").write_text(
+        json.dumps(
+            {
+                "verdict": "broken",
+                "repair_required": True,
+                "blockers": [{"id": "F001", "message": "review blocker"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifacts / "publication.json").write_text(
+        json.dumps({"commit_created": True, "commit_sha": "abc123"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(cli.CLIError, match="publication side effects"):
+        cli.false_completion_recovery_evidence(run_dir)
+
+
 @pytest.mark.parametrize("worker_command", ["status", "start", "restart", "stop"])
 def test_parser_exposes_worker_service_commands(worker_command: str) -> None:
     args = cli.build_parser().parse_args(["worker", worker_command])
