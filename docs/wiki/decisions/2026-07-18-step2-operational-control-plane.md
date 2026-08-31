@@ -22,6 +22,7 @@ Step 2 uses one supervised operational control plane around the authoritative ru
 - Approval cannot authorize merge, deployment, another gate, or broader paths by implication.
 - Resume preserves a completed role checkpoint and applies its one-time approval to deterministic routing from that result; unfinished execution and validation checkpoints retain their existing recovery behavior.
 - A hard execution-bound approval opens a fresh bounded window only for the exhausted dimensions. Risk, security, protected-path, verification, and publication gates remain independent.
+- Elapsed-time ceilings stop at equality. Repair and model-escalation budgets are inclusive allowances: the configured count may execute and exhaustion begins only when a new count exceeds it.
 - A terminal `completed` queue record remains immutable unless the same run has a blocked authoritative verdict, a completed blocking verifier checkpoint, and no publication side effects. Evidence-bound reconciliation resumes that verifier checkpoint and invalidates only downstream false-success history.
 - Structured verifier blockers take precedence over environmental keyword heuristics, and an orchestrator verdict with failed checks or blockers cannot route to publication.
 - A second blocker after resume creates a new approval request; the consumed decision is not reusable.

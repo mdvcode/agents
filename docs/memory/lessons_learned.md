@@ -222,3 +222,12 @@
   Example bad pattern: edit queue/workflow state by hand or make every completed run retryable after discovering a false completion.
   Example good pattern: atomically prepare the same run at its completed reviewer checkpoint, audit the evidence fingerprint, preserve all earlier history, remove stale orchestrator/publication completions, and let deterministic repair routing continue.
   Scope: terminal recovery, queue/workflow reconciliation, checkpoint history, and publication idempotency
+
+- Date: 2026-08-31
+  Agent: Codex
+  Failure: The first in-policy repair at the aggregate repair limit was stopped before implementation and surfaced as another exhausted-bound question.
+  Root cause: Count allowances used the same `usage >= limit` exhaustion rule as elapsed time even though repair iterations are incremented when dispatched; equality therefore represented the last allowed attempt, not an excess attempt.
+  Prevention rule: Treat duration ceilings as exhausted at equality, but treat bounded count allowances such as repairs and model escalations as exhausted only above the allowed count; keep their own dispatch/escalation guards authoritative.
+  Example bad pattern: configure two repairs, increment the second repair when routing it, then reject implementation because `2 >= 2`.
+  Example good pattern: allow the configured second repair and its verification gates, then stop a requested third repair because `3 > 2`.
+  Scope: adaptive hard budgets, bounded repairs, model escalation, and approval UX

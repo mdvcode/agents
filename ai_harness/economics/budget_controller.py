@@ -10,6 +10,9 @@ from typing import Any, Mapping, Sequence
 HARD_BUDGET_DIMENSIONS = frozenset(
     {"elapsed_seconds", "repair_attempts", "model_escalations"}
 )
+INCLUSIVE_ALLOWANCE_DIMENSIONS = frozenset(
+    {"repair_attempts", "model_escalations"}
+)
 
 
 class BudgetAction(StrEnum):
@@ -170,7 +173,17 @@ class BudgetController:
             for field, limit in self.limits.items()
         }
         pressure = max(ratios.values(), default=0.0)
-        exhausted = tuple(sorted(field for field, ratio in ratios.items() if ratio >= 1.0))
+        exhausted = tuple(
+            sorted(
+                field
+                for field, ratio in ratios.items()
+                if (
+                    ratio > 1.0
+                    if field in INCLUSIVE_ALLOWANCE_DIMENSIONS
+                    else ratio >= 1.0
+                )
+            )
+        )
         hard_exhausted = tuple(
             field for field in exhausted if field not in self.SOFT_FIELDS
         )

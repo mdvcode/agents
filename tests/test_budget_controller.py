@@ -50,6 +50,34 @@ def test_hard_budget_exhaustion_still_requires_approval() -> None:
     assert decision.exhausted_dimensions == ("elapsed_seconds",)
 
 
+def test_hard_count_budgets_allow_the_configured_number_before_stopping() -> None:
+    controller = BudgetController(LIMITS)
+
+    last_allowed_repair = controller.assess(
+        BudgetUsage(repair_attempts=LIMITS["max_repair_attempts"]),
+        mandatory_role=True,
+    )
+    excess_repair = controller.assess(
+        BudgetUsage(repair_attempts=LIMITS["max_repair_attempts"] + 1),
+        mandatory_role=True,
+    )
+    last_allowed_escalation = controller.assess(
+        BudgetUsage(model_escalations=LIMITS["max_model_escalations"]),
+        mandatory_role=True,
+    )
+    excess_escalation = controller.assess(
+        BudgetUsage(model_escalations=LIMITS["max_model_escalations"] + 1),
+        mandatory_role=True,
+    )
+
+    assert last_allowed_repair.action != BudgetAction.REQUIRE_APPROVAL
+    assert last_allowed_escalation.action != BudgetAction.REQUIRE_APPROVAL
+    assert excess_repair.action == BudgetAction.REQUIRE_APPROVAL
+    assert excess_repair.exhausted_dimensions == ("repair_attempts",)
+    assert excess_escalation.action == BudgetAction.REQUIRE_APPROVAL
+    assert excess_escalation.exhausted_dimensions == ("model_escalations",)
+
+
 def test_usage_counts_uncached_tokens_model_calls_repairs_and_escalations() -> None:
     state = {
         "elapsed_seconds": 42,
