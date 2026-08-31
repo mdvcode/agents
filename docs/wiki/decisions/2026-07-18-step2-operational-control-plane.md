@@ -27,6 +27,8 @@ Step 2 uses one supervised operational control plane around the authoritative ru
 - Structured verifier blockers take precedence over environmental keyword heuristics, and an orchestrator verdict with failed checks or blockers cannot route to publication.
 - A second blocker after resume creates a new approval request; the consumed decision is not reusable.
 - Informational questions, authority approvals, and technical retry stops have separate actions. Duplicate-question suppression applies only to valid structured questions; manual recovery archives the active technical attention without discarding unrelated blockers.
+- Adaptive node completion is dependency-relative: a successful role becomes stale when any dependency succeeds later. Repair must therefore rerun stale quality, security, review, and orchestration gates before completion or publication.
+- A verdict with failed checks or concrete blockers is a technical block, not approvable authority. Rejecting an obsolete approval synchronizes workflow and queue state so the same run can be retried.
 - CI delivery without a valid signature or configured secret is rejected before logs or queue state are touched.
 - Worker recovery continues from recorded state but still passes all deterministic gates and budgets.
 - Engineering completion does not replace production acceptance evidence required by `make step2-verify`.

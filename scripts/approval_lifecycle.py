@@ -377,6 +377,12 @@ def reject_run(run_dir: Path, *, actor: str, reason: str) -> dict[str, Any]:
         workflow["execution_status"] = "blocked"
         workflow["blockers"] = [f"approval rejected: {reason}"]
         write_json_atomic(run_dir / "workflow.json", workflow)
+        queue_path = run_dir.parent.parent / ".agent-queue" / "tasks.db"
+        if queue_path.is_file():
+            TaskQueue(queue_path).mark_approval_rejected(
+                str(workflow.get("run_id", run_dir.name)),
+                reason=reason,
+            )
         write_approval(run_dir, approval)
         append_event(run_dir, "approval.rejected", approval)
         append_error(run_dir, code="APPROVAL_REJECTED", message=f"The scoped approval was rejected: {reason}")

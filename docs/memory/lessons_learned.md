@@ -240,3 +240,12 @@
   Example bad pattern: apply semantic question deduplication to a policy gate and carry its old attention blockers into the repaired retry.
   Example good pattern: keep question, approval, and technical recovery lifecycles distinct; archive the resolved technical stop before rerunning its checkpoint.
   Scope: attention classification, approval UX, duplicate-question suppression, and manual recovery
+
+- Date: 2026-08-31
+  Agent: Codex
+  Failure: A successful repair implementation was followed directly by orchestration, which reused review and quality evidence produced before the repair and opened an unresolvable approval gate from the stale verdict.
+  Root cause: Adaptive completion was a timeless set of role names, so a historical verifier remained “completed” after its dependency ran again; rejection also updated workflow state without synchronizing the queue.
+  Prevention rule: A DAG node is complete only when its latest successful visit is at least as new as every dependency; blocked verification verdicts are technical stops, and approval rejection must atomically mirror into recoverable queue state.
+  Example bad pattern: mark `reviewer` complete forever, patch code afterward, and let old review authorize or block orchestration.
+  Example good pattern: after implementation repair, invalidate stale dependent gates by visit order, rerun quality/security/review, block rather than request authority for failed checks, and make a rejected stale approval retryable in both workflow and queue.
+  Scope: adaptive DAG freshness, post-repair verification, verdict routing, and approval rejection recovery

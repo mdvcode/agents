@@ -243,6 +243,22 @@ def test_approval_wait_does_not_exhaust_recovery_budget(
 
 def test_rejection_blocks_workflow(tmp_path: Path) -> None:
     run = awaiting_run(tmp_path)
+    queue = TaskQueue(tmp_path / ".agent-queue" / "tasks.db")
+    queued = queue.enqueue(
+        task_key="approval-rejection",
+        payload={"task_id": "approval-rejection", "repository": str(tmp_path)},
+        run_id="run-approval",
+    )
+    claimed = queue.claim(worker_id="worker-1")
+    assert claimed is not None
+    assert queue.mark_running(queued.id, "worker-1")
+    queue.finish(
+        task_id=queued.id,
+        worker_id="worker-1",
+        status="awaiting_approval",
+        run_id="run-approval",
+        requires_human=True,
+    )
     request_approval(run, reason="review required")
 
     rejected = reject_run(run, actor="reviewer", reason="scope is unsafe")
@@ -251,6 +267,10 @@ def test_rejection_blocks_workflow(tmp_path: Path) -> None:
     assert rejected["status"] == "rejected"
     assert workflow["execution_status"] == "blocked"
     assert workflow["blockers"] == ["approval rejected: scope is unsafe"]
+    rejected_task = queue.get(queued.id)
+    assert rejected_task is not None
+    assert rejected_task.status == "blocked"
+    assert rejected_task.exception_reason == "approval rejected: scope is unsafe"
 
 
 def test_expired_approval_cannot_resume(tmp_path: Path) -> None:

@@ -256,5 +256,67 @@ def test_approved_hard_bound_window_runs_one_complete_review_repair_iteration(
         workflow_state=workflow,
     )
 
-    assert verify_repair["next_role"] == "reviewer"
+    assert verify_repair["next_role"] == "quality-runner"
     assert verify_repair["stop"] is False
+
+
+def test_adaptive_blocked_verdict_reruns_stale_gates_after_repair(tmp_path: Path) -> None:
+    plan_path = tmp_path / "execution-plan.json"
+    plan(plan_path)
+    artifacts = tmp_path / "artifacts"
+    write_json(
+        artifacts / "risk.json",
+        {
+            "risk_class": "low",
+            "changed_areas": [],
+            "high_risk_triggers": [],
+            "protected_paths_touched": [],
+            "protected_actions_required": [],
+            "reasons": [],
+            "autonomy_allowed": {},
+        },
+    )
+    write_json(
+        artifacts / "review.json",
+        {
+            "verdict": "broken",
+            "status": "block",
+            "blockers": ["F001: stale review"],
+            "repair_required": True,
+        },
+    )
+    write_json(
+        artifacts / "verdict.json",
+        {
+            "decision": "await_approval",
+            "execution_status": "blocked",
+            "checks_passed": False,
+            "blockers": ["F001: stale review"],
+        },
+    )
+    workflow = state(
+        plan_path,
+        [
+            "issue-intake",
+            "context-compiler",
+            "implementation-agent",
+            "quality-runner",
+            "security-agent",
+            "reviewer",
+            "orchestrator",
+            "implementation-agent",
+            "orchestrator",
+        ],
+    )
+    workflow["loops"]["review_repair"] = {"iterations": 1}  # type: ignore[index]
+
+    reroute = decide_next_role(
+        current_role="orchestrator",
+        role_result={"status": "completed"},
+        run_dir=tmp_path,
+        artifacts_dir=artifacts,
+        workflow_state=workflow,
+    )
+
+    assert reroute["next_role"] == "quality-runner"
+    assert reroute["stop"] is False

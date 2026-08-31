@@ -32,6 +32,7 @@
 - False-completion recovery coverage proves ordinary completed tasks stay terminal, publication side effects forbid reconciliation, and a blocked authoritative review can resume the same checkpoint after only stale orchestrator/publication history is invalidated.
 - Hard-count boundary coverage proves the configured number of repair and model-escalation attempts is allowed, while the first excess attempt still requires approval.
 - Attention lifecycle coverage proves approval gates are not deduplicated as informational questions and manual retry archives the resolved technical stop while retaining independent blockers.
+- Adaptive freshness coverage proves post-repair implementation invalidates older dependent gates, stale blocked verdicts route back through verification, and rejected approvals become retryable in both workflow and queue state.
 - Step 1 harness: 101 tests passed with one optional smoke skipped in the ordinary suite; the separately enabled real Codex planner smoke passed. Contract validation, focused security, full-repository security, ownership rollback, missing-gate publication blocking, and diff checks passed.
 - Test/fix board created.
 - Verified JSON artifacts, artifact inventory, and `git diff --check`.

@@ -942,6 +942,44 @@ class TaskQueue:
             connection.commit()
             return self.record(updated)
 
+    def mark_approval_rejected(self, run_id: str, *, reason: str) -> TaskRecord | None:
+        """Mirror a rejected approval into queue state so technical retry is possible."""
+
+        if not reason.strip():
+            raise ValueError("approval rejection reason is required")
+        now = time.time()
+        with self.connect() as connection:
+            self._begin_immediate(connection)
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE run_id=? ORDER BY id DESC LIMIT 1",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return None
+            if str(row["status"]) == "awaiting_approval":
+                message = f"approval rejected: {reason}"
+                connection.execute(
+                    """
+                    UPDATE tasks SET status='blocked',updated_at=?,requires_human=1,
+                        exception_reason=?,recovery_action='retry'
+                    WHERE id=?
+                    """,
+                    (now, message, int(row["id"])),
+                )
+                self.event(
+                    connection,
+                    int(row["id"]),
+                    "approval_rejected",
+                    details={"run_id": run_id, "reason": reason},
+                    now=now,
+                )
+            updated = connection.execute(
+                "SELECT * FROM tasks WHERE id=?", (int(row["id"]),)
+            ).fetchone()
+            connection.commit()
+            return self.record(updated)
+
     def abort_run(self, run_id: str) -> TaskRecord:
         now = time.time()
         with self.connect() as connection:

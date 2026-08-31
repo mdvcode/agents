@@ -102,26 +102,7 @@ def adaptive_next_role(
     nodes = plan.get("nodes", [])
     if not isinstance(nodes, list) or not nodes:
         return None
-    if current_role == "implementation-agent":
-        # Only the route that immediately dispatched this implementation run may
-        # request a verifier re-run. Historical loop counters remain non-zero for
-        # audit purposes and must not keep pulling the DAG back into an old loop.
-        last_route = state.get("last_route", {})
-        active_loop = last_route.get("loop", {}) if isinstance(last_route, dict) else {}
-        loop_name = str(active_loop.get("name", "")) if isinstance(active_loop, dict) else ""
-        repair_targets = {
-            "security_repair": "security-agent",
-            "quality_repair": "quality-runner",
-            "review_repair": "reviewer",
-            "frontend_verification_repair": "frontend-qa-agent",
-        }
-        target = repair_targets.get(loop_name)
-        if target:
-            return target, f"Adaptive {loop_name} requires re-running {target}."
-    completed = completed_roles(state)
-    skipped = state.get("budget_skipped_roles", [])
-    if isinstance(skipped, list):
-        completed.update(str(role) for role in skipped if isinstance(role, str))
+    completed = adaptive_completed_roles(state, nodes)
     controller = BudgetController.from_plan(plan)
     usage = BudgetUsage.for_enforcement(state)
     for raw in nodes:
@@ -241,6 +222,46 @@ def completed_roles(state: dict[str, Any]) -> set[str]:
         if isinstance(result, dict) and result.get("status") == "completed":
             completed.add(str(entry["role"]))
     return completed
+
+
+def adaptive_completed_roles(state: dict[str, Any], nodes: list[Any]) -> set[str]:
+    """Return DAG nodes whose latest success is newer than every dependency."""
+
+    latest_positions: dict[str, int] = {}
+    for index, entry in enumerate(_role_entries(state)):
+        result = entry.get("result", {})
+        if isinstance(result, dict) and result.get("status") == "completed":
+            latest_positions[str(entry["role"])] = index
+    skipped = state.get("budget_skipped_roles", [])
+    skipped_roles = (
+        {str(role) for role in skipped if isinstance(role, str)}
+        if isinstance(skipped, list)
+        else set()
+    )
+    fresh: set[str] = set()
+    for raw in nodes:
+        if not isinstance(raw, dict):
+            continue
+        role = str(raw.get("role", raw.get("id", "")))
+        dependencies = {
+            str(value)
+            for value in raw.get("dependencies", [])
+            if isinstance(value, str)
+        }
+        if not role or not dependencies <= fresh:
+            continue
+        if role in skipped_roles:
+            fresh.add(role)
+            continue
+        position = latest_positions.get(role, -1)
+        if position < 0:
+            continue
+        if all(
+            position >= latest_positions.get(dependency, -1)
+            for dependency in dependencies
+        ):
+            fresh.add(role)
+    return fresh
 
 
 def _role_result(state: dict[str, Any], role: str) -> dict[str, Any]:
@@ -1443,7 +1464,19 @@ def decide_next_role(
             or bool(verdict_blockers)
         )
         if verdict_blocked:
-            return _approval(
+            if execution_mode(state) == "adaptive":
+                planned = adaptive_next_role(state, current_role=current_role)
+                if planned is not None and planned[0] not in {
+                    "orchestrator",
+                    "publication-prepare",
+                    "publication",
+                }:
+                    return _route(
+                        planned[0],
+                        "A post-repair verification gate is stale; " + planned[1],
+                        warnings=warnings + verdict_blockers,
+                    )
+            return _blocked(
                 "Workflow verdict is blocked; publication is not allowed.",
                 warnings + (
                     verdict_blockers

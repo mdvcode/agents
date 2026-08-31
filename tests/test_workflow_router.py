@@ -1202,7 +1202,7 @@ def test_blocked_orchestrator_verdict_cannot_reach_publication(tmp_path: Path) -
 
     result = route(tmp_path, completed_state(), "orchestrator")
 
-    assert result["next_role"] == "approval-gate"
+    assert result["next_role"] == "blocked"
     assert result["stop"] is True
     assert result["publication_allowed"] is False
     assert any("F001" in warning for warning in result["warnings"])
