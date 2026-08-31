@@ -123,7 +123,7 @@ def adaptive_next_role(
     if isinstance(skipped, list):
         completed.update(str(role) for role in skipped if isinstance(role, str))
     controller = BudgetController.from_plan(plan)
-    usage = BudgetUsage.from_state(state)
+    usage = BudgetUsage.for_enforcement(state)
     for raw in nodes:
         if not isinstance(raw, dict):
             continue
@@ -1270,7 +1270,7 @@ def decide_next_role(
     if execution_mode(state) == "adaptive":
         plan = execution_plan(state)
         if plan:
-            usage = BudgetUsage.from_state(state)
+            usage = BudgetUsage.for_enforcement(state)
             decision = BudgetController.from_plan(plan).assess(usage, mandatory_role=True)
             state["budget_usage"] = usage.as_dict()
             state["budget_action"] = decision.as_dict()

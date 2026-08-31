@@ -195,3 +195,12 @@
   Example bad pattern: route `tokens_used >= max_tokens` directly to `approval-gate`.
   Example good pattern: persist an `economy` budget action, continue the next mandatory role, and report the soft ceiling as a warning rather than a blocker.
   Scope: task economics, deterministic routing, adaptive execution, repair loops, and operator UX
+
+- Date: 2026-08-31
+  Agent: Codex
+  Failure: After an adaptive elapsed-time approval, a completed blocking reviewer was reset and rerun against the unchanged diff; each rerun immediately reopened the same hard-bound approval instead of entering repair.
+  Root cause: Approval resume treated every checkpoint as unfinished, while the runner consumed a one-role budget override before the deterministic router could use the completed result; cumulative hard-budget usage therefore remained exhausted at every identical checkpoint.
+  Prevention rule: Preserve completed checkpoint output on approval resume, route it deterministically without another model invocation, and represent hard-bound approval as a fresh bounded baseline only for the exhausted dimensions while retaining all independent authority gates.
+  Example bad pattern: reset `role_completed` to `role_pending`, rerun the verifier, and re-request the same elapsed-time approval before repair routing.
+  Example good pattern: replay the completed result into the router, record the approved elapsed/repair/escalation baseline, run the bounded repair window, and request new approval only after that window or a genuinely distinct gate is reached.
+  Scope: adaptive budgets, approval lifecycle, checkpoint resume, deterministic repair routing, and operator UX

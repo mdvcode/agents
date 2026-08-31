@@ -35,6 +35,23 @@ def test_workflow_token_ceiling_is_economy_pressure_not_a_blocker() -> None:
     assert action["exhausted_dimensions"] == ["tokens_used"]
 
 
+def test_role_budget_excludes_approval_gates_and_cached_checkpoint_replays() -> None:
+    state = {
+        "roles": [
+            {"role": "implementation-agent", "result": {"status": "completed"}},
+            {"role": "approval-gate", "result": {"status": "awaiting_approval"}},
+            {
+                "role": "reviewer",
+                "checkpoint_replayed": True,
+                "result": {"status": "completed"},
+            },
+            {"role": "quality-runner", "result": {"status": "completed"}},
+        ]
+    }
+
+    assert agent_role_runner.executed_role_count(state) == 2
+
+
 def test_publication_requires_central_registration(monkeypatch: object, tmp_path: Path) -> None:
     monkeypatch.setattr(agent_role_runner, "git_remote", lambda _repository: "local-origin")
     monkeypatch.setattr(agent_role_runner, "find_by_remote", lambda _remote: None)

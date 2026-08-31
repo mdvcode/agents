@@ -16,6 +16,7 @@ from typing import Any
 from runtime_contracts import load_json as load_schema, validate_contract
 from security_approval import security_scope
 from task_queue import DEFAULT_DB, TaskQueue, TaskRecord
+from ai_harness.economics import HARD_BUDGET_DIMENSIONS, BudgetUsage
 from ai_harness.recovery.checkpoints import RoleCheckpoint, read_checkpoint, write_checkpoint
 from ai_harness.recovery.policy import load_recovery_policy
 
@@ -167,7 +168,42 @@ def checkpoint_fingerprint(workflow: dict[str, Any], role: str, reason: str) -> 
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def default_scope(workflow: dict[str, Any], role: str) -> dict[str, Any]:
+def adaptive_budget_dimensions(workflow: dict[str, Any]) -> list[str]:
+    action = workflow.get("budget_action")
+    if not isinstance(action, dict) or action.get("action") != "require_approval":
+        return []
+    exhausted = action.get("exhausted_dimensions", [])
+    if not isinstance(exhausted, list):
+        return []
+    return sorted(
+        {
+            str(dimension)
+            for dimension in exhausted
+            if isinstance(dimension, str) and dimension in HARD_BUDGET_DIMENSIONS
+        }
+    )
+
+
+def adaptive_budget_approval(
+    workflow: dict[str, Any],
+    *,
+    reason: str,
+    scope: dict[str, Any],
+) -> bool:
+    actions = scope.get("actions", [])
+    if isinstance(actions, list) and "extend_execution_budget" in actions:
+        return True
+    return bool(adaptive_budget_dimensions(workflow)) and (
+        "hard execution bound" in reason.casefold()
+    )
+
+
+def default_scope(
+    workflow: dict[str, Any],
+    role: str,
+    *,
+    reason: str = "",
+) -> dict[str, Any]:
     changed = workflow.get("changed_files", [])
     paths = [str(item) for item in changed if isinstance(item, str)] if isinstance(changed, list) else []
     risk_class = str(workflow.get("risk_class", ""))
@@ -175,6 +211,8 @@ def default_scope(workflow: dict[str, Any], role: str) -> dict[str, Any]:
     if not risk_class and risk_path.is_file():
         risk_class = str(read_json(risk_path).get("risk_class", ""))
     actions = ["resume_workflow"]
+    if adaptive_budget_dimensions(workflow) and "hard execution bound" in reason.casefold():
+        actions.append("extend_execution_budget")
     if role == "risk-classifier" and risk_class == "high":
         actions.append("patch_high_risk")
     security_path = Path(str(workflow.get("artifacts_dir", ""))) / "security.json"
@@ -235,7 +273,9 @@ def request_approval(
         if not role:
             raise ApprovalError("approval checkpoint role is missing")
         now = utc_now()
-        requested_scope = canonical_scope(scope or default_scope(workflow, role))
+        requested_scope = canonical_scope(
+            scope or default_scope(workflow, role, reason=reason)
+        )
         fingerprint = checkpoint_fingerprint(workflow, role, reason)
         approval_path = run_dir / "artifacts" / "approval.json"
         if approval_path.exists():
@@ -382,10 +422,14 @@ def _resolve_approved_attention(workflow: dict[str, Any]) -> None:
 
 
 def _reset_checkpoint_for_resume(run_dir: Path, role: str) -> None:
-    """Rerun a paused role after its blocking condition was approved or repaired."""
+    """Rerun an unfinished role; preserve completed output for deterministic routing."""
 
     checkpoint = read_checkpoint(run_dir, role)
-    if checkpoint is None or checkpoint.state in {"role_pending", "role_running"}:
+    if checkpoint is None or checkpoint.state in {
+        "role_pending",
+        "role_running",
+        "role_completed",
+    }:
         return
     write_checkpoint(
         run_dir,
@@ -428,6 +472,46 @@ def _exclude_approval_wait_from_recovery(
     )
 
 
+def _record_adaptive_budget_extension(
+    workflow: dict[str, Any],
+    approval: dict[str, Any],
+) -> None:
+    scope = approval.get("approved_scope", {})
+    if not isinstance(scope, dict) or not adaptive_budget_approval(
+        workflow,
+        reason=str(approval.get("reason", "")),
+        scope=scope,
+    ):
+        return
+    dimensions = adaptive_budget_dimensions(workflow)
+    if not dimensions:
+        return
+    usage = BudgetUsage.from_state(workflow)
+    approval_id = str(approval.get("approval_id", ""))
+    extensions = workflow.get("adaptive_budget_extensions", [])
+    if not isinstance(extensions, list):
+        extensions = []
+    if any(
+        isinstance(extension, dict)
+        and extension.get("approval_id") == approval_id
+        for extension in extensions
+    ):
+        return
+    extensions.append(
+        {
+            "approval_id": approval_id,
+            "checkpoint_role": str(approval.get("checkpoint_role", "")),
+            "dimensions": dimensions,
+            "baselines": {
+                dimension: getattr(usage, dimension)
+                for dimension in dimensions
+            },
+            "granted_at": str(approval.get("decided_at", "")),
+        }
+    )
+    workflow["adaptive_budget_extensions"] = extensions[-50:]
+
+
 def _prepare_resume_locked(run_dir: Path) -> dict[str, Any]:
     approval = expire_if_needed(run_dir, read_json(run_dir / "artifacts" / "approval.json"))
     workflow = read_json(run_dir / "workflow.json")
@@ -456,6 +540,7 @@ def _prepare_resume_locked(run_dir: Path) -> dict[str, Any]:
             approval,
             resumed_at=resumed_at,
         )
+        _record_adaptive_budget_extension(workflow, approval)
         workflow["approval_override"] = {
             "approval_id": approval["approval_id"],
             "gate": role,

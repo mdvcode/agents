@@ -75,3 +75,49 @@ def test_usage_counts_uncached_tokens_model_calls_repairs_and_escalations() -> N
     assert usage.output_tokens == 200
     assert usage.repair_attempts == 2
     assert usage.model_escalations == 1
+
+
+def test_enforcement_usage_applies_only_approved_hard_budget_extensions() -> None:
+    state = {
+        "elapsed_seconds": 2_100,
+        "loops": {"review_repair": {"iterations": 3}},
+        "roles": [
+            {
+                "llm_invoked": True,
+                "result": {"input_tokens": 1000, "cached_input_tokens": 250},
+            }
+        ],
+        "adaptive_budget_extensions": [
+            {
+                "approval_id": "duration-extension",
+                "dimensions": ["elapsed_seconds", "repair_attempts"],
+                "baselines": {"elapsed_seconds": 1_800, "repair_attempts": 2},
+            }
+        ],
+    }
+
+    usage = BudgetUsage.for_enforcement(state)
+
+    assert usage.elapsed_seconds == 300
+    assert usage.repair_attempts == 1
+    assert usage.model_calls == 1
+    assert usage.uncached_input_tokens == 750
+
+
+def test_enforcement_usage_does_not_extend_an_unapproved_dimension() -> None:
+    state = {
+        "elapsed_seconds": 2_100,
+        "loops": {"review_repair": {"iterations": 3}},
+        "adaptive_budget_extensions": [
+            {
+                "approval_id": "duration-only",
+                "dimensions": ["elapsed_seconds"],
+                "baselines": {"elapsed_seconds": 1_800, "repair_attempts": 2},
+            }
+        ],
+    }
+
+    usage = BudgetUsage.for_enforcement(state)
+
+    assert usage.elapsed_seconds == 300
+    assert usage.repair_attempts == 3
