@@ -28,6 +28,7 @@
 - Regression coverage proves CRITICAL security hard-blocks with structured state, MEDIUM security requests approval, and Issue Intake never invokes an LLM adapter.
 - Operational regression coverage proves exact approval scope and one-time consumption, API approve/resume, normalized multi-source intake, signed/redacted CI repair ingestion, worker registration/stall detection, and expired-lease checkpoint resume.
 - Adaptive hard-bound regression coverage proves a completed blocking verifier is not rerun after approval, the approved window applies only to exhausted hard dimensions, and one complete repair iteration can proceed without reopening the same approval.
+- Fail-closed verifier coverage proves structured code blockers cannot be mistaken for an unavailable environment by product text such as `read-only API`, and a blocked orchestrator verdict cannot reach publication.
 - Step 1 harness: 101 tests passed with one optional smoke skipped in the ordinary suite; the separately enabled real Codex planner smoke passed. Contract validation, focused security, full-repository security, ownership rollback, missing-gate publication blocking, and diff checks passed.
 - Test/fix board created.
 - Verified JSON artifacts, artifact inventory, and `git diff --check`.

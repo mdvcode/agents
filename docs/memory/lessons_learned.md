@@ -204,3 +204,12 @@
   Example bad pattern: reset `role_completed` to `role_pending`, rerun the verifier, and re-request the same elapsed-time approval before repair routing.
   Example good pattern: replay the completed result into the router, record the approved elapsed/repair/escalation baseline, run the bounded repair window, and request new approval only after that window or a genuinely distinct gate is reached.
   Scope: adaptive budgets, approval lifecycle, checkpoint resume, deterministic repair routing, and operator UX
+
+- Date: 2026-08-31
+  Agent: Codex
+  Failure: A review with structured code blockers was treated as environmentally unavailable because fallback text mentioned a `read-only API`; accepting the unrelated verifier scope then let a blocked orchestrator verdict reach publication routing.
+  Root cause: Blocker normalization ignored object-shaped findings, environmental classification fell back to broad substring markers, and the router had no explicit fail-closed branch for an orchestrator verdict with failed checks or blockers.
+  Prevention rule: Normalize structured blocker ids/messages before classification, let concrete blockers outrank environmental keyword heuristics, and stop publication whenever the authoritative verdict is blocked, failed, awaiting approval, or has failed checks.
+  Example bad pattern: ignore blocker objects, match `read-only` inside a product description, and infer that all review failures were accepted as unavailable verification.
+  Example good pattern: classify the structured `F001` message as a code blocker, route it to bounded repair, and independently reject publication from a blocked verdict.
+  Scope: verifier classification, structured findings, deterministic review repair, verdict routing, and publication safety

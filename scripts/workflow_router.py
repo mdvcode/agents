@@ -405,7 +405,25 @@ def _blocker_values(value: Any) -> list[str]:
     if isinstance(value, dict):
         for key in ("blocker_ids", "security_blocker_ids", "review_blocker_ids", "blockers", "errors"):
             if key in value:
-                return _list_values(value[key])
+                raw = value[key]
+                if not isinstance(raw, list):
+                    return _list_values(raw)
+                normalized: list[str] = []
+                for item in raw:
+                    if isinstance(item, (str, int)):
+                        normalized.append(str(item))
+                        continue
+                    if not isinstance(item, dict):
+                        continue
+                    finding_id = str(item.get("id", "")).strip()
+                    message = str(
+                        item.get("message", item.get("description", ""))
+                    ).strip()
+                    if finding_id and message:
+                        normalized.append(f"{finding_id}: {message}")
+                    elif message or finding_id:
+                        normalized.append(message or finding_id)
+                return normalized
     return _list_values(value)
 
 
@@ -656,11 +674,7 @@ def verifier_environment_unavailable(artifacts_dir: Path, artifact_name: str) ->
     )
     if str(artifact.get("verdict", "")).lower() == "unavailable":
         return True
-    blockers = [
-        str(item).lower()
-        for item in artifact.get("blockers", [])
-        if isinstance(item, (str, int)) and str(item).strip()
-    ]
+    blockers = [item.lower() for item in _blocker_values(artifact)]
     if blockers:
         return all(any(marker in blocker for marker in markers) for blocker in blockers)
     fallback = " ".join(
@@ -1420,6 +1434,22 @@ def decide_next_role(
         return _route("quality-runner", "CI repair completed; quality must be re-run.", warnings=warnings)
 
     verdict = _artifact(artifacts_dir, "verdict.json")
+    if current_role == "orchestrator" and isinstance(verdict, dict):
+        verdict_blockers = _blocker_values(verdict)
+        verdict_blocked = (
+            verdict.get("decision") in {"await_approval", "blocked"}
+            or verdict.get("execution_status") in {"awaiting_approval", "blocked", "failed"}
+            or verdict.get("checks_passed") is False
+            or bool(verdict_blockers)
+        )
+        if verdict_blocked:
+            return _approval(
+                "Workflow verdict is blocked; publication is not allowed.",
+                warnings + (
+                    verdict_blockers
+                    or ["The orchestrator verdict did not satisfy completion gates."]
+                ),
+            )
     if (
         current_role == "orchestrator"
         and isinstance(verdict, dict)

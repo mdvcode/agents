@@ -423,6 +423,49 @@ def test_active_verifier_acceptance_does_not_cover_code_blockers(tmp_path: Path)
     )
 
 
+def test_structured_code_blockers_are_not_misclassified_by_read_only_api_text(
+    tmp_path: Path,
+) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    artifact(
+        artifacts_dir / "review.json",
+        {
+            "verdict": "broken",
+            "status": "block",
+            "blockers": [
+                {
+                    "id": "F001",
+                    "severity": "high",
+                    "message": "The version endpoint returns 200 for a missing version.",
+                }
+            ],
+            "observed": ["The diff adds read-only API routes."],
+            "repair_required": True,
+        },
+    )
+    state = completed_state(
+        approval_override={
+            "approval_id": "duration-extension",
+            "gate": "reviewer",
+            "scope": {
+                "actions": ["accept_unavailable_verification", "resume_workflow"],
+                "gate": "reviewer",
+            },
+        }
+    )
+
+    result = route(
+        tmp_path,
+        state,
+        "reviewer",
+        {"status": "completed", "next_action": "repair"},
+    )
+
+    assert result["next_role"] == "implementation-agent"
+    assert result["stop"] is False
+    assert result["loop"]["name"] == "review_repair"
+
+
 def test_legacy_environmental_verifier_approval_advances_current_run(tmp_path: Path) -> None:
     artifacts_dir = setup_artifacts(tmp_path)
     artifact(
@@ -1137,6 +1180,32 @@ def test_workflow_blockers_prevent_publication(tmp_path: Path) -> None:
     result = route(tmp_path, completed_state(blockers=["orchestrator blocker"]), "orchestrator")
     assert result["next_role"] == "approval-gate"
     assert result["publication_allowed"] is False
+
+
+def test_blocked_orchestrator_verdict_cannot_reach_publication(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    artifact(
+        artifacts_dir / "verdict.json",
+        {
+            "decision": "await_approval",
+            "execution_status": "blocked",
+            "checks_passed": False,
+            "blockers": [
+                {
+                    "id": "F001",
+                    "severity": "high",
+                    "message": "The version endpoint is incorrect.",
+                }
+            ],
+        },
+    )
+
+    result = route(tmp_path, completed_state(), "orchestrator")
+
+    assert result["next_role"] == "approval-gate"
+    assert result["stop"] is True
+    assert result["publication_allowed"] is False
+    assert any("F001" in warning for warning in result["warnings"])
 
 
 def test_resumed_role_ignores_historical_approval_and_superseded_blockers(tmp_path: Path) -> None:
