@@ -1182,7 +1182,10 @@ def archive_recovery_attention(workflow: dict[str, Any]) -> None:
     blockers = workflow.get("blockers", [])
     if isinstance(blockers, list):
         workflow["blockers"] = [
-            item for item in blockers if str(item).strip() not in active_values
+            item
+            for item in blockers
+            if str(item).strip() not in active_values
+            and not str(item).strip().startswith("approval rejected:")
         ]
 
 

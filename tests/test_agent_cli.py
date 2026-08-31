@@ -2116,7 +2116,11 @@ def test_manual_recovery_archives_active_technical_attention() -> None:
             "details": ["Database is unavailable."],
             "action": "fix_then_retry",
         },
-        "blockers": ["Database is unavailable.", "Independent security blocker."],
+        "blockers": [
+            "Database is unavailable.",
+            "approval rejected: obsolete technical gate",
+            "Independent security blocker.",
+        ],
         "attention_history": [],
     }
 
