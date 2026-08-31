@@ -906,19 +906,14 @@ def _token_budget_warning(state: dict[str, Any], workflows: dict[str, Any]) -> s
 def _budget_blockers(state: dict[str, Any], workflows: dict[str, Any]) -> list[str]:
     budgets = _budgets(state, workflows)
     role_count = state.get("role_count", len(_role_entries(state)))
-    loop_values = state.get("loops", {})
-    if not isinstance(loop_values, dict):
-        loop_values = {}
-    repair_iterations = sum(
-        int(value.get("iterations", 0))
-        for value in loop_values.values()
-        if isinstance(value, dict) and isinstance(value.get("iterations", 0), (int, float))
-    )
+    effective_usage = BudgetUsage.for_enforcement(state)
+    elapsed_seconds = effective_usage.elapsed_seconds
+    repair_iterations = effective_usage.repair_attempts
     blockers: list[str] = []
     if isinstance(role_count, (int, float)) and role_count >= budgets["max_roles"]:
         blockers.append(f"max_roles reached: {int(role_count)} >= {budgets['max_roles']}")
-    if _elapsed_seconds(state) >= budgets["max_duration_seconds"]:
-        blockers.append(f"max_duration_seconds reached: {int(_elapsed_seconds(state))} >= {budgets['max_duration_seconds']}")
+    if elapsed_seconds >= budgets["max_duration_seconds"]:
+        blockers.append(f"max_duration_seconds reached: {elapsed_seconds} >= {budgets['max_duration_seconds']}")
     if repair_iterations >= budgets["max_repair_iterations"]:
         blockers.append(f"max_repair_iterations reached: {repair_iterations} >= {budgets['max_repair_iterations']}")
     return blockers

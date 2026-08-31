@@ -1175,6 +1175,26 @@ def test_budget_approval_grant_remains_valid_after_checkpoint(tmp_path: Path) ->
     assert result["stop"] is False
 
 
+def test_workflow_elapsed_bound_honors_approved_adaptive_window(tmp_path: Path) -> None:
+    setup_artifacts(tmp_path)
+    state = completed_state(
+        elapsed_seconds=1_801,
+        budgets={"max_duration_seconds": 1_800},
+        adaptive_budget_extensions=[
+            {
+                "approval_id": "elapsed-extension",
+                "dimensions": ["elapsed_seconds"],
+                "baselines": {"elapsed_seconds": 1_656},
+            }
+        ],
+    )
+
+    result = route(tmp_path, state, "security-agent")
+
+    assert result["next_role"] == "reviewer"
+    assert result["stop"] is False
+
+
 def test_workflow_blockers_prevent_publication(tmp_path: Path) -> None:
     artifacts_dir = setup_artifacts(tmp_path)
     result = route(tmp_path, completed_state(blockers=["orchestrator blocker"]), "orchestrator")
