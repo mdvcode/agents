@@ -111,6 +111,28 @@ def test_metrics_expose_bounded_structured_question(tmp_path: Path) -> None:
     assert attention["question"]["options"][1]["requires_input"] is False
 
 
+def test_metrics_suppress_stale_attention_for_running_workflow(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    run = runs / "active-run"
+    write_json(
+        run / "workflow.json",
+        {
+            "run_id": "active-run",
+            "task_id": "active-task",
+            "repository": str(tmp_path),
+            "execution_status": "running",
+            "attention": {
+                "required": True,
+                "summary": "An earlier question was already answered.",
+            },
+        },
+    )
+
+    metrics = collect_metrics(runs_dir=runs, db_path=tmp_path / "queue.db")
+
+    assert metrics["runs"]["items"][0]["attention"]["required"] is False
+
+
 def api_request(url: str, token: str, *, method: str = "GET", body: dict[str, object] | None = None) -> dict[str, object]:
     data = json.dumps(body).encode() if body is not None else None
     request = Request(

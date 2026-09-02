@@ -1150,6 +1150,72 @@ def test_attention_items_collapse_queue_history_by_run() -> None:
     assert items[0]["summary"] == "latest approval"
 
 
+@pytest.mark.parametrize(
+    "status",
+    [
+        "running",
+        "resuming",
+        "retry_wait",
+        "waiting_children",
+        "planned",
+        "completed",
+        "cancelled",
+    ],
+)
+def test_workflow_attention_suppresses_stale_raw_attention(status: str) -> None:
+    attention = cli.workflow_attention(
+        {
+            "execution_status": status,
+            "attention": {
+                "required": True,
+                "summary": "An earlier question was already answered.",
+            },
+        }
+    )
+
+    assert attention["required"] is False
+
+
+@pytest.mark.parametrize("status", ["awaiting_approval", "blocked"])
+def test_workflow_attention_preserves_current_raw_attention(status: str) -> None:
+    attention = cli.workflow_attention(
+        {
+            "execution_status": status,
+            "attention": {
+                "required": True,
+                "summary": "Current action is required.",
+            },
+        }
+    )
+
+    assert attention["required"] is True
+    assert attention["summary"] == "Current action is required."
+
+
+def test_running_project_run_with_stale_attention_is_not_actionable(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / "active-run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "workflow.json").write_text(
+        json.dumps(
+            {
+                "task_id": "active-task",
+                "repository": str(tmp_path),
+                "execution_status": "running",
+                "attention": {
+                    "required": True,
+                    "summary": "An earlier question was already answered.",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    runs = cli.project_runs(run_dir.parent, tmp_path)
+
+    assert runs[0]["attention"]["required"] is False
+    assert cli.attention_items([], runs) == []
+
+
 def test_agent_approve_resumes_the_only_pending_project_run(
     tmp_path: Path,
     monkeypatch: object,

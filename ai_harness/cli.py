@@ -853,6 +853,19 @@ def project_tasks(db_path: Path, repository: Path) -> list[dict[str, Any]]:
 
 
 def workflow_attention(workflow: dict[str, Any]) -> dict[str, Any]:
+    status = str(workflow.get("execution_status", ""))
+    attention_statuses = {"awaiting_approval", "blocked", "dead_letter", "failed"}
+    if status and status not in attention_statuses:
+        return {
+            "required": False,
+            "summary": "",
+            "details": [],
+            "role": "",
+            "action": "",
+            "question": {},
+            "repeated_question": False,
+            "repeated_requirement": False,
+        }
     raw = workflow.get("attention")
     if isinstance(raw, dict) and raw.get("required") is True:
         details = raw.get("details", [])
@@ -866,8 +879,7 @@ def workflow_attention(workflow: dict[str, Any]) -> dict[str, Any]:
             "repeated_question": raw.get("repeated_question") is True,
             "repeated_requirement": raw.get("repeated_requirement") is True,
         }
-    status = str(workflow.get("execution_status", ""))
-    if status not in {"awaiting_approval", "blocked", "dead_letter", "failed"}:
+    if status not in attention_statuses:
         return {
             "required": False,
             "summary": "",

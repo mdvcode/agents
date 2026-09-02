@@ -170,6 +170,8 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
     if isinstance(metrics.get("duration_ms"), (int, float)):
         elapsed_seconds = float(metrics["duration_ms"]) / 1000
     publication = read_json(run_dir / "artifacts" / "publication.json") or read_json(run_dir / "publication.json")
+    execution_status = str(workflow.get("execution_status", ""))
+    attention_statuses = {"awaiting_approval", "blocked", "dead_letter", "failed"}
     raw_attention = workflow.get("attention")
     attention = {
         "required": False,
@@ -180,7 +182,11 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
         "fingerprint": "",
         "repeated_question": False,
     }
-    if isinstance(raw_attention, dict) and raw_attention.get("required") is True:
+    if (
+        (not execution_status or execution_status in attention_statuses)
+        and isinstance(raw_attention, dict)
+        and raw_attention.get("required") is True
+    ):
         details = raw_attention.get("details", [])
         attention = {
             "required": True,
