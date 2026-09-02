@@ -2174,6 +2174,30 @@ def test_retry_checkpoint_reruns_current_role_instead_of_cached_blocker(tmp_path
     assert checkpoint["artifacts"] == []
 
 
+def test_retry_archives_repaired_attention_and_removes_its_blockers() -> None:
+    workflow = {
+        "attention": {
+            "required": True,
+            "summary": "The repaired check needs a retry.",
+            "details": ["Retry after fixing the local dependency."],
+            "role": "implementation-agent",
+            "action": "fix_then_retry",
+        },
+        "blockers": [
+            "The repaired check needs a retry.",
+            "Retry after fixing the local dependency.",
+            "An unrelated blocker remains active.",
+        ],
+    }
+
+    cli.resolve_retry_attention(workflow)
+
+    assert "attention" not in workflow
+    assert workflow["blockers"] == ["An unrelated blocker remains active."]
+    assert workflow["attention_history"][-1]["resolution"] == "retry_requested"
+    assert workflow["attention_history"][-1]["required"] is False
+
+
 @pytest.mark.parametrize("worker_command", ["status", "start", "restart", "stop"])
 def test_parser_exposes_worker_service_commands(worker_command: str) -> None:
     args = cli.build_parser().parse_args(["worker", worker_command])

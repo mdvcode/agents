@@ -1168,6 +1168,37 @@ def reset_role_checkpoint_for_rerun(run_dir: Path, workflow: dict[str, Any]) -> 
     workflow["resume_role"] = role
 
 
+def resolve_retry_attention(workflow: dict[str, Any]) -> None:
+    """Archive a repaired attention item before explicitly retrying its role."""
+
+    attention = workflow.get("attention")
+    if not isinstance(attention, dict) or attention.get("action") != "fix_then_retry":
+        return
+    details = attention.get("details", [])
+    active_values = {str(attention.get("summary", "")).strip()}
+    if isinstance(details, list):
+        active_values.update(str(item).strip() for item in details)
+    active_values.discard("")
+    workflow.pop("attention", None)
+    history = workflow.get("attention_history", [])
+    if not isinstance(history, list):
+        history = []
+    history.append(
+        {
+            **attention,
+            "required": False,
+            "resolved_at": datetime.now(timezone.utc).isoformat(),
+            "resolution": "retry_requested",
+        }
+    )
+    workflow["attention_history"] = history[-50:]
+    blockers = workflow.get("blockers", [])
+    if isinstance(blockers, list):
+        workflow["blockers"] = [
+            item for item in blockers if str(item).strip() not in active_values
+        ]
+
+
 def resolve_answer_attention(run_dir: Path) -> None:
     """Archive the answer and rerun the paused role with the new information."""
     path = run_dir / "workflow.json"
@@ -1924,6 +1955,7 @@ def handle_recovery_command(args: argparse.Namespace) -> int:
                 workflow["execution_status"] = "retry_wait" if args.command == "retry" else "resuming"
                 workflow["recovery_action"] = args.command
                 if args.command == "retry":
+                    resolve_retry_attention(workflow)
                     reset_role_checkpoint_for_rerun(run_dir, workflow)
                 recovery = workflow.get("recovery", {})
                 if not isinstance(recovery, dict):
