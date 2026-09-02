@@ -119,6 +119,69 @@ def exhausted_reviewer_run(tmp_path: Path) -> Path:
     return run
 
 
+def exhausted_model_run(tmp_path: Path) -> Path:
+    run = awaiting_run(tmp_path)
+    workflow_path = run / "workflow.json"
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    prior_profile = {
+        "execution_profile": "complex",
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "xhigh",
+        "service_tier": "fast",
+        "terminal_action": "",
+    }
+    terminal_profile = {
+        **prior_profile,
+        "reasoning_effort": "high",
+        "terminal_action": "human_or_dead_letter",
+    }
+    terminal_result = {
+        "status": "awaiting_approval",
+        "summary": approval_lifecycle.MODEL_ESCALATION_SUMMARY,
+        "tokens_used": 0,
+    }
+    workflow.update(
+        {
+            "roles": [
+                {
+                    "role": "implementation-agent",
+                    "llm_invoked": True,
+                    "execution_profile": prior_profile,
+                    "result": {"status": "completed", "tokens_used": 20},
+                },
+                {
+                    "role": "implementation-agent",
+                    "llm_invoked": False,
+                    "execution_profile": terminal_profile,
+                    "result": terminal_result,
+                },
+                {"role": "approval-gate", "result": {"status": "awaiting_approval"}},
+            ],
+            "role_count": 2,
+            "tokens_used": 20,
+            "artifacts_dir": str(run / "artifacts"),
+            "diff_hash": "c" * 64,
+            "current_execution_profile": terminal_profile,
+            "attention": {
+                "required": True,
+                "role": "implementation-agent",
+                "action": "answer",
+                "summary": approval_lifecycle.MODEL_ESCALATION_SUMMARY,
+                "requirement": {
+                    "requirement_id": approval_lifecycle.MODEL_ESCALATION_REQUIREMENT,
+                },
+            },
+            "loops": {
+                "review_repair": {
+                    "extension_approval_id": "review-extension-approval",
+                }
+            },
+        }
+    )
+    write_json(workflow_path, workflow)
+    return run
+
+
 def test_approval_scope_is_exact_and_consumed_once(tmp_path: Path) -> None:
     run = awaiting_run(tmp_path)
     worktree = tmp_path / "worktree"
@@ -529,6 +592,87 @@ def test_repeated_exhausted_review_can_request_only_one_explicit_extension(
         "resume_workflow",
     ]
     assert approval["requested_scope"]["additional_attempts"] == 1
+
+
+def test_terminal_model_profile_requests_exact_one_use_escalation_scope(
+    tmp_path: Path,
+) -> None:
+    run = exhausted_model_run(tmp_path)
+
+    approval = request_approval(
+        run,
+        reason=approval_lifecycle.MODEL_ESCALATION_SUMMARY,
+    )
+
+    scope = approval["requested_scope"]
+    assert scope["actions"] == [
+        "allow_one_model_escalation",
+        "resume_workflow",
+    ]
+    assert scope["gate"] == "implementation-agent"
+    assert scope["model_escalation_role"] == "implementation-agent"
+    assert scope["model_escalation_uses"] == 1
+    assert scope["additional_attempts"] == 1
+    assert len(scope["model_escalation_fingerprint"]) == 64
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("summary", "A different model question."),
+        ("action", "fix_then_retry"),
+        ("role", "reviewer"),
+        ("requirement_id", "different_requirement"),
+    ],
+)
+def test_model_escalation_scope_requires_exact_attention(
+    tmp_path: Path,
+    field: str,
+    value: str,
+) -> None:
+    run = exhausted_model_run(tmp_path)
+    workflow_path = run / "workflow.json"
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    if field == "requirement_id":
+        workflow["attention"]["requirement"][field] = value
+    else:
+        workflow["attention"][field] = value
+    write_json(workflow_path, workflow)
+
+    approval = request_approval(run, reason="Exact attention check")
+
+    assert approval["requested_scope"]["actions"] == ["resume_workflow"]
+
+
+def test_explicit_unbound_model_escalation_scope_is_rejected(tmp_path: Path) -> None:
+    run = awaiting_run(tmp_path)
+
+    with pytest.raises(ApprovalError, match="exact exhausted model checkpoint"):
+        request_approval(
+            run,
+            reason=approval_lifecycle.MODEL_ESCALATION_SUMMARY,
+            scope={
+                "actions": ["allow_one_model_escalation", "resume_workflow"],
+                "gate": "implementation-agent",
+                "additional_attempts": 1,
+                "model_escalation_role": "implementation-agent",
+                "model_escalation_uses": 1,
+                "model_escalation_fingerprint": "d" * 64,
+            },
+        )
+
+
+def test_model_escalation_scope_rejects_boolean_use_count(tmp_path: Path) -> None:
+    run = exhausted_model_run(tmp_path)
+    requested = request_approval(
+        run,
+        reason=approval_lifecycle.MODEL_ESCALATION_SUMMARY,
+    )
+    expanded = dict(requested["requested_scope"])
+    expanded["model_escalation_uses"] = True
+
+    with pytest.raises(ApprovalError, match="must be an integer"):
+        approve_run(run, actor="reviewer", scope=expanded)
 
 
 def test_explicit_unbound_review_extension_scope_is_rejected(tmp_path: Path) -> None:

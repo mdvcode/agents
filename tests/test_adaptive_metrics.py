@@ -50,3 +50,55 @@ def test_efficiency_metrics_use_executed_checks_approval_events_and_pr_time(tmp_
     assert metrics["output_tokens_per_task"] == 20
     assert metrics["time_to_accepted_pr"] == 42
     assert metrics["successful_task_token_cost"] == 95
+
+
+def test_metrics_share_terminal_and_replay_accounting_with_workflow(tmp_path: Path) -> None:
+    layout = RunLayout.create(tmp_path, "accounted-run")
+    actual_result = {
+        "status": "completed",
+        "input_tokens": 100,
+        "cached_input_tokens": 20,
+        "output_tokens": 10,
+        "tokens_used": 90,
+    }
+    state = {
+        "execution_status": "running",
+        "roles": [
+            {
+                "role": "implementation-agent",
+                "llm_invoked": True,
+                "execution_profile": {"escalation_level": 1},
+                "result": actual_result,
+            },
+            {
+                "role": "implementation-agent",
+                "llm_invoked": True,
+                "execution_profile": {
+                    "escalation_level": 2,
+                    "terminal_action": "human_or_dead_letter",
+                },
+                "result": {"status": "awaiting_approval", "tokens_used": 0},
+            },
+            {
+                "role": "implementation-agent",
+                "llm_invoked": False,
+                "cache_provenance": "completed_checkpoint_replay",
+                "result": actual_result,
+            },
+            {
+                "role": "approval-gate",
+                "llm_invoked": False,
+                "result": {"status": "awaiting_approval"},
+            },
+        ],
+        "loops": {},
+    }
+
+    write_metrics(layout, state)
+    metrics = json.loads(layout.metrics.read_text(encoding="utf-8"))
+
+    assert metrics["role_count"] == 1
+    assert metrics["roles_executed_per_task"] == 1
+    assert metrics["tokens_used"] == 90
+    assert metrics["model_calls_per_task"] == 1
+    assert metrics["model_escalations_per_task"] == 1

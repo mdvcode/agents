@@ -267,6 +267,45 @@ def bind_review_extension(
     return result
 
 
+def bind_model_escalation(
+    state: dict[str, object],
+    *,
+    role: str = "implementation-agent",
+    approval_id: str = "model-escalation-approval",
+) -> None:
+    scope = {
+        "actions": ["allow_one_model_escalation", "resume_workflow"],
+        "gate": role,
+        "additional_attempts": 1,
+        "model_escalation_role": role,
+        "model_escalation_uses": 1,
+        "model_escalation_fingerprint": "e" * 64,
+    }
+    state["approval_override"] = {
+        "approval_id": approval_id,
+        "gate": role,
+        "scope": scope,
+    }
+    state["approval_grants"] = [
+        {
+            "approval_id": approval_id,
+            "gate": role,
+            "scope": scope,
+            "reason": "Bounded model escalation is exhausted.",
+            "model_escalation_role": role,
+            "model_escalation_started_at": "2026-09-02T12:00:00+00:00",
+        }
+    ]
+    state["approval_action_uses"] = [
+        {
+            "approval_id": approval_id,
+            "action": "allow_one_model_escalation",
+            "role": role,
+            "started_at": "2026-09-02T12:00:00+00:00",
+        }
+    ]
+
+
 def test_high_risk_routes_to_approval_and_cannot_publish(tmp_path: Path) -> None:
     artifacts_dir = setup_artifacts(tmp_path, "high")
     result = decide_next_role(
@@ -1467,6 +1506,116 @@ def test_role_budget_remains_a_hard_approval_bound(tmp_path: Path) -> None:
 
     assert result["next_role"] == "approval-gate"
     assert result["stop"] is True
+
+
+def test_model_escalation_approval_does_not_bypass_high_risk_gate(
+    tmp_path: Path,
+) -> None:
+    setup_artifacts(tmp_path, risk_class="high")
+    state = completed_state()
+    bind_model_escalation(state)
+
+    result = route(
+        tmp_path,
+        state,
+        "implementation-agent",
+        {"status": "completed", "next_action": "continue"},
+    )
+
+    assert result["next_role"] == "approval-gate"
+    assert result["stop"] is True
+    assert result["publication_allowed"] is False
+
+
+def test_model_escalation_approval_does_not_bypass_security_gate(
+    tmp_path: Path,
+) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    security = json.loads((artifacts_dir / "security.json").read_text(encoding="utf-8"))
+    security.update(
+        {
+            "verdict": "broken",
+            "status": "fail",
+            "highest_severity": "high",
+            "blockers": ["SEC-MODEL-SCOPE"],
+        }
+    )
+    artifact(artifacts_dir / "security.json", security)
+    state = completed_state()
+    bind_model_escalation(state)
+
+    result = route(
+        tmp_path,
+        state,
+        "implementation-agent",
+        {"status": "completed", "next_action": "continue"},
+    )
+
+    assert result["next_role"] == "approval-gate"
+    assert result["stop"] is True
+
+
+def test_model_escalation_approval_does_not_bypass_global_role_budget(
+    tmp_path: Path,
+) -> None:
+    setup_artifacts(tmp_path)
+    state = completed_state(role_count=40, budgets={"max_roles": 40})
+    bind_model_escalation(state)
+
+    result = route(
+        tmp_path,
+        state,
+        "implementation-agent",
+        {"status": "completed", "next_action": "continue"},
+    )
+
+    assert result["next_role"] == "approval-gate"
+    assert "budget" in result["reason"].casefold()
+
+
+def test_model_escalation_approval_routes_normally_after_exact_use(
+    tmp_path: Path,
+) -> None:
+    setup_artifacts(tmp_path)
+    state = completed_state()
+    bind_model_escalation(state)
+
+    result = route(
+        tmp_path,
+        state,
+        "implementation-agent",
+        {"status": "completed", "next_action": "continue"},
+    )
+
+    assert result["next_role"] == "quality-runner"
+    assert result["stop"] is False
+
+
+def test_unstarted_or_unknown_model_approval_fails_closed(tmp_path: Path) -> None:
+    setup_artifacts(tmp_path)
+    state = completed_state()
+    bind_model_escalation(state)
+    state["approval_grants"][0].pop("model_escalation_started_at")
+
+    unstarted = route(tmp_path, state, "implementation-agent")
+
+    assert unstarted["next_role"] == "blocked"
+    assert unstarted["stop"] is True
+
+    state = completed_state(
+        approval_override={
+            "approval_id": "unknown-model-action",
+            "gate": "implementation-agent",
+            "scope": {
+                "actions": ["allow_unbounded_model", "resume_workflow"],
+                "gate": "implementation-agent",
+            },
+        }
+    )
+    unknown = route(tmp_path, state, "implementation-agent")
+
+    assert unknown["next_role"] == "blocked"
+    assert unknown["stop"] is True
 
 
 def test_workflow_token_budget_continues_in_economy(tmp_path: Path) -> None:

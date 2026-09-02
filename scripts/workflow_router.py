@@ -45,6 +45,8 @@ VERIFIER_ARTIFACTS = {
     "semantic-conflict-agent": "semantic_conflict.json",
     "reviewer": "review.json",
 }
+MODEL_ESCALATION_SUMMARY = "Bounded model escalation is exhausted."
+MODEL_ESCALATION_ACTION = "allow_one_model_escalation"
 CODE_EXTENSIONS = {
     ".c",
     ".cpp",
@@ -861,6 +863,66 @@ def review_repair_extension_scope_valid(
     )
 
 
+def model_escalation_scope_valid(
+    *,
+    state: dict[str, Any],
+    current_role: str,
+    scope: dict[str, Any],
+    approval_id: str,
+) -> bool:
+    """Validate an already-started one-role model grant before routing onward."""
+
+    if current_role not in {"implementation-agent", "ci-repair-agent"}:
+        return False
+    if scope.get("gate") != current_role or scope.get("model_escalation_role") != current_role:
+        return False
+    if set(_list_values(scope.get("actions"))) != {
+        MODEL_ESCALATION_ACTION,
+        "resume_workflow",
+    }:
+        return False
+    for key in ("additional_attempts", "model_escalation_uses"):
+        value = scope.get(key)
+        if isinstance(value, bool) or value != 1:
+            return False
+    if not re.fullmatch(r"[0-9a-f]{64}", str(scope.get("model_escalation_fingerprint", ""))):
+        return False
+    grants = state.get("approval_grants", [])
+    if not isinstance(grants, list) or not approval_id:
+        return False
+    matches = [
+        grant
+        for grant in grants
+        if isinstance(grant, dict)
+        and grant.get("approval_id") == approval_id
+        and grant.get("gate") == current_role
+        and grant.get("scope") == scope
+        and grant.get("reason") == MODEL_ESCALATION_SUMMARY
+    ]
+    if len(matches) != 1:
+        return False
+    grant = matches[0]
+    started_at = grant.get("model_escalation_started_at")
+    uses = state.get("approval_action_uses", [])
+    if not isinstance(uses, list):
+        return False
+    matching_uses = [
+        item
+        for item in uses
+        if isinstance(item, dict)
+        and item.get("approval_id") == approval_id
+        and item.get("action") == MODEL_ESCALATION_ACTION
+        and item.get("role") == current_role
+        and item.get("started_at") == started_at
+    ]
+    return bool(
+        grant.get("model_escalation_role") == current_role
+        and isinstance(started_at, str)
+        and started_at
+        and len(matching_uses) == 1
+    )
+
+
 def _loop_config(name: str, routing: dict[str, Any]) -> dict[str, Any]:
     routing_key = {
         "security_repair": "security_failed",
@@ -1273,10 +1335,17 @@ def decide_next_role(
         and isinstance(override_scope, dict)
         and "resume_workflow" in override_scope.get("actions", [])
     )
-    extension_actions = {
+    approval_id = (
+        str(approval_override.get("approval_id", ""))
+        if isinstance(approval_override, dict)
+        else ""
+    )
+    grants = state.get("approval_grants", [])
+    valid_grants = [item for item in grants if isinstance(item, dict)] if isinstance(grants, list) else []
+    restricted_actions = {
         action
         for action in _list_values(override_scope.get("actions"))
-        if action.startswith("extend_")
+        if action.startswith(("allow_", "extend_"))
     }
     extension_requested = (
         approval_consumed
@@ -1293,18 +1362,28 @@ def decide_next_role(
             scope=override_scope,
         )
     )
-    extension_like_requested = approval_consumed and bool(extension_actions)
-    bypass_approval = approval_consumed and not extension_like_requested
-    extension_approval_id = (
-        str(approval_override.get("approval_id", ""))
-        if isinstance(approval_override, dict)
-        else ""
+    model_escalation_requested = bool(
+        approval_consumed and MODEL_ESCALATION_ACTION in restricted_actions
     )
+    model_escalation_valid = bool(
+        model_escalation_requested
+        and model_escalation_scope_valid(
+            state=state,
+            current_role=current_role,
+            scope=override_scope,
+            approval_id=approval_id,
+        )
+    )
+    unknown_restricted_actions = restricted_actions - {
+        "extend_review_repair_once",
+        MODEL_ESCALATION_ACTION,
+    }
+    restricted_approval_requested = approval_consumed and bool(restricted_actions)
+    bypass_approval = approval_consumed and not restricted_approval_requested
+    extension_approval_id = approval_id
     if approval_consumed:
         state.pop("approval_override", None)
         warnings.append("Consumed one scoped approval override for this checkpoint.")
-    grants = state.get("approval_grants", [])
-    valid_grants = [item for item in grants if isinstance(item, dict)] if isinstance(grants, list) else []
     active_verifier_acceptance = False
     verifier_artifact = VERIFIER_ARTIFACTS.get(current_role)
     if (
@@ -1349,7 +1428,7 @@ def decide_next_role(
         isinstance(item.get("scope"), dict)
         and "resume_workflow" in item["scope"].get("actions", [])
         and not any(
-            action.startswith("extend_")
+            action.startswith(("allow_", "extend_"))
             for action in _list_values(item["scope"].get("actions"))
         )
         and "budget exceeded" in str(item.get("reason", "")).lower()
@@ -1363,6 +1442,22 @@ def decide_next_role(
     severity = security_severity(state, artifacts_dir)
     if security and severity == "critical":
         return _blocked("A CRITICAL security finding blocks the workflow.", warnings + security)
+
+    if unknown_restricted_actions:
+        return _blocked(
+            "The scoped approval contains an unknown restricted action.",
+            warnings + sorted(unknown_restricted_actions),
+        )
+    if extension_requested and not repair_budget_extended:
+        return _blocked(
+            "The one-time review repair approval no longer matches the live verifier, diff, or exhausted loop checkpoint.",
+            warnings + ["Retry from a fresh checkpoint; this scoped approval cannot be reused or broadened."],
+        )
+    if model_escalation_requested and not model_escalation_valid:
+        return _blocked(
+            "The one-time model escalation approval is invalid, unstarted, or already consumed.",
+            warnings + ["Retry from a fresh exhausted-model checkpoint; this approval cannot be replayed."],
+        )
 
     risk = _artifact(artifacts_dir, "risk.json")
     risk_class = risk.get("risk_class") if isinstance(risk, dict) else state.get("risk_class")
@@ -1420,11 +1515,6 @@ def decide_next_role(
                         "exhausted dimensions: " + ", ".join(decision.exhausted_dimensions),
                     ],
                 )
-    if extension_like_requested and not repair_budget_extended:
-        return _blocked(
-            "The one-time review repair approval no longer matches the live verifier, diff, or exhausted loop checkpoint.",
-            warnings + ["Retry from a fresh checkpoint; this scoped approval cannot be reused or broadened."],
-        )
     token_warning = _token_budget_warning(state, workflows)
     if token_warning:
         warnings.append(token_warning)

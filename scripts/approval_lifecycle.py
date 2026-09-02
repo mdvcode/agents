@@ -18,7 +18,8 @@ from runtime_contracts import load_json as load_schema, validate_contract
 from security_approval import security_scope
 from task_queue import DEFAULT_DB, TaskQueue, TaskRecord
 from verifier_environment import verifier_artifact_unavailable
-from workflow_router import review_repair_extension_scope_valid
+from workflow_router import diff_hash, review_repair_extension_scope_valid
+from ai_harness.execution_accounting import accounted_role_count
 from ai_harness.recovery.checkpoints import RoleCheckpoint, read_checkpoint, write_checkpoint
 from ai_harness.recovery.policy import load_recovery_policy
 
@@ -27,6 +28,8 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNS_DIR = ROOT / ".agent-runs"
 APPROVAL_SCHEMA = ROOT / "schemas" / "approval.schema.json"
 TERMINAL_APPROVAL_STATES = {"rejected", "expired", "consumed"}
+MODEL_ESCALATION_SUMMARY = "Bounded model escalation is exhausted."
+MODEL_ESCALATION_REQUIREMENT = "bounded_escalation_exhausted_model"
 
 
 class ApprovalError(ValueError):
@@ -129,6 +132,9 @@ def canonical_scope(scope: dict[str, Any]) -> dict[str, Any]:
     failure_fingerprint = str(scope.get("failure_fingerprint", ""))
     diff_fingerprint = str(scope.get("diff_fingerprint", ""))
     additional_attempts = _scope_integer(scope, "additional_attempts")
+    model_escalation_role = str(scope.get("model_escalation_role", ""))
+    model_escalation_uses = _scope_integer(scope, "model_escalation_uses")
+    model_escalation_fingerprint = str(scope.get("model_escalation_fingerprint", ""))
     return {
         "actions": actions,
         "paths": paths,
@@ -143,6 +149,9 @@ def canonical_scope(scope: dict[str, Any]) -> dict[str, Any]:
         "failure_fingerprint": failure_fingerprint,
         "diff_fingerprint": diff_fingerprint,
         "additional_attempts": additional_attempts,
+        "model_escalation_role": model_escalation_role,
+        "model_escalation_uses": model_escalation_uses,
+        "model_escalation_fingerprint": model_escalation_fingerprint,
     }
 
 
@@ -241,6 +250,96 @@ def one_time_repair_extension_scope(
     }
 
 
+def bounded_model_escalation_checkpoint(workflow: dict[str, Any], role: str) -> bool:
+    """Recognize only the exact runner checkpoint that exhausted the model ladder."""
+
+    if role not in {"implementation-agent", "ci-repair-agent"}:
+        return False
+    attention = workflow.get("attention", {})
+    requirement = attention.get("requirement", {}) if isinstance(attention, dict) else {}
+    profile = workflow.get("current_execution_profile", {})
+    if not (
+        isinstance(attention, dict)
+        and attention.get("required") is True
+        and attention.get("role") == role
+        and attention.get("action") == "answer"
+        and attention.get("summary") == MODEL_ESCALATION_SUMMARY
+        and isinstance(requirement, dict)
+        and requirement.get("requirement_id") == MODEL_ESCALATION_REQUIREMENT
+        and isinstance(profile, dict)
+        and profile.get("terminal_action") == "human_or_dead_letter"
+    ):
+        return False
+    roles = workflow.get("roles", [])
+    if not isinstance(roles, list):
+        return False
+    latest = next(
+        (
+            item
+            for item in reversed(roles)
+            if isinstance(item, dict) and item.get("role") != "approval-gate"
+        ),
+        {},
+    )
+    result = latest.get("result", {}) if isinstance(latest, dict) else {}
+    return bool(
+        latest.get("role") == role
+        and isinstance(result, dict)
+        and result.get("status") == "awaiting_approval"
+        and result.get("summary") == MODEL_ESCALATION_SUMMARY
+    )
+
+
+def model_escalation_fingerprint(workflow: dict[str, Any], role: str) -> str:
+    """Bind the one-role approval to the exact run, diff, and trusted proposal."""
+
+    prior_profile: dict[str, Any] = {}
+    roles = workflow.get("roles", [])
+    if isinstance(roles, list):
+        for item in reversed(roles):
+            if not isinstance(item, dict) or item.get("role") != role:
+                continue
+            result = item.get("result", {})
+            profile = item.get("execution_profile", {})
+            terminal_without_runtime = bool(
+                isinstance(result, dict)
+                and result.get("status") == "awaiting_approval"
+                and result.get("tokens_used", 0) == 0
+                and isinstance(profile, dict)
+                and profile.get("terminal_action") == "human_or_dead_letter"
+            )
+            if item.get("llm_invoked") is True and not terminal_without_runtime:
+                prior_profile = profile if isinstance(profile, dict) else {}
+                break
+    proposal = workflow.get("current_execution_profile", {})
+    proposal = proposal if isinstance(proposal, dict) else {}
+    artifacts_dir = Path(str(workflow.get("artifacts_dir", "")))
+    loops = workflow.get("loops", {})
+    review_loop = loops.get("review_repair", {}) if isinstance(loops, dict) else {}
+    payload = {
+        "run_id": workflow.get("run_id", ""),
+        "input_fingerprint": workflow.get("input_fingerprint", ""),
+        "role": role,
+        "role_count": accounted_role_count(roles),
+        "diff_fingerprint": diff_hash(workflow, artifacts_dir),
+        "previous_execution_profile": prior_profile.get("execution_profile", ""),
+        "previous_model": prior_profile.get("model", ""),
+        "previous_reasoning_effort": prior_profile.get("reasoning_effort", ""),
+        "proposed_execution_profile": proposal.get("execution_profile", ""),
+        "proposed_model": proposal.get("model", ""),
+        "proposed_reasoning_effort": "xhigh",
+        "proposed_service_tier": proposal.get("service_tier", ""),
+        "review_extension_approval_id": (
+            review_loop.get("extension_approval_id", "")
+            if isinstance(review_loop, dict)
+            else ""
+        ),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def default_scope(workflow: dict[str, Any], role: str) -> dict[str, Any]:
     changed = workflow.get("changed_files", [])
     paths = [str(item) for item in changed if isinstance(item, str)] if isinstance(changed, list) else []
@@ -285,6 +384,16 @@ def default_scope(workflow: dict[str, Any], role: str) -> dict[str, Any]:
         }
     else:
         verifier_details = {}
+    if bounded_model_escalation_checkpoint(workflow, role):
+        actions.append("allow_one_model_escalation")
+        model_escalation_details = {
+            "additional_attempts": 1,
+            "model_escalation_role": role,
+            "model_escalation_uses": 1,
+            "model_escalation_fingerprint": model_escalation_fingerprint(workflow, role),
+        }
+    else:
+        model_escalation_details = {}
     return canonical_scope(
         {
             "actions": actions,
@@ -293,6 +402,7 @@ def default_scope(workflow: dict[str, Any], role: str) -> dict[str, Any]:
             "risk_class": risk_class,
             **security_details,
             **verifier_details,
+            **model_escalation_details,
         }
     )
 
@@ -316,13 +426,21 @@ def request_approval(
         if not role:
             raise ApprovalError("approval checkpoint role is missing")
         now = utc_now()
-        requested_scope = canonical_scope(scope or default_scope(workflow, role))
+        exact_default_scope = default_scope(workflow, role)
+        requested_scope = canonical_scope(scope or exact_default_scope)
         if (
             "extend_review_repair_once" in requested_scope.get("actions", [])
-            and requested_scope != default_scope(workflow, role)
+            and requested_scope != exact_default_scope
         ):
             raise ApprovalError(
                 "one-time review repair must match the exact exhausted verifier scope"
+            )
+        if (
+            "allow_one_model_escalation" in requested_scope.get("actions", [])
+            and requested_scope != exact_default_scope
+        ):
+            raise ApprovalError(
+                "one-time model escalation must match the exact exhausted model checkpoint"
             )
         fingerprint = checkpoint_fingerprint(workflow, role, reason)
         approval_path = run_dir / "artifacts" / "approval.json"
