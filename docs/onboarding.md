@@ -1,6 +1,10 @@
 # Agent Onboarding
 
-For ordinary project use, run `./install.sh` from the downloaded system folder, then run `agent init` inside the project. Update later with `agent update`. See `README.md` and `docs/cli.md`. The lower-level checklist below is for contributors changing the Harness itself.
+For the local, unpublished Tweebit v0.3.0 release candidate, run `./install.sh` only from the exact
+reviewed local checkout, then run `agent init` inside the project. Keep updates pinned with `agent
+update --source /absolute/path/to/reviewed/tweebit-checkout`; a source-less or public
+`mdvcode/agents` install selects the public baseline. See `README.md` and `docs/cli.md`. The
+lower-level checklist below is for contributors changing the Harness itself.
 
 Use this checklist before making changes.
 
@@ -54,7 +58,7 @@ After smoke, Step 1 acceptance requires `make step1-verify RUN_ID=<evidence-run-
 
 Before starting workers, validate `.agent-routing.yaml`, `.agent-tool-policy.yaml`, and role contracts with `make validate-artifacts`. Enqueue idempotent task keys with `scripts/task_queue.py`, run 2–3 workers with `make queue-worker`, and inspect only exceptions with `make list-exceptions` or `scripts/list_runs.py` filters.
 
-For long-lived operation use `make worker-service-start`, verify `make worker-service-health`, and stop with `make worker-service-stop`. Approval is never a direct status edit: use `make approve-run RUN_ID=... ACTOR=...`, then `make resume-run RUN_ID=...`; rejection requires an actor and reason. The loopback control API exposes the same transitions and compact metrics. GitHub Actions webhooks additionally require `AGENT_GITHUB_WEBHOOK_SECRET`; optional API bearer authentication uses `AGENT_CONTROL_PLANE_TOKEN`.
+For long-lived operation use `make worker-service-start`, verify `make worker-service-health`, and stop with `make worker-service-stop`. Approval is never a direct status edit: use `make approve-run RUN_ID=... ACTOR=...`, then `make resume-run RUN_ID=...`; rejection requires an actor and reason. The loopback control API exposes the same transitions and compact metrics. `agent dashboard` always starts it with a fresh ephemeral bearer token. A lower-level server without `AGENT_CONTROL_PLANE_TOKEN` is read-only and rejects every POST mutation; setting the token enables authenticated mutations. GitHub Actions webhooks additionally require `AGENT_GITHUB_WEBHOOK_SECRET`.
 
 Step 2 acceptance requires `make step2-verify RUN_ID=<evidence-run-id> QUEUE_DB=<queue.db>`. The evidence must come from real Codex runs and include concurrent workers, isolated worktrees, governed tools, independent verification, a PR, and a human exception.
 

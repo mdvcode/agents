@@ -1,31 +1,44 @@
-# AI Harness CLI
+# Tweebit AI Harness by Daryna CLI
 
 The Harness is installable as the `ai-harness` Python distribution and exposes one command: `agent`.
 
 ## Install
 
-For an ordinary installation, download and unpack the repository, then run the installer from that folder:
+Tweebit v0.3.0 is currently a local, unpublished release candidate. Install it only from the exact
+reviewed local checkout:
 
 ```sh
+cd /absolute/path/to/reviewed/tweebit-checkout
 ./install.sh
 ```
 
-The installer checks Python 3.11+, installs pipx when necessary without `sudo`, installs the isolated application, verifies `agent`, and prints the first-use commands. It also works as a remote bootstrap:
+The installer checks Python 3.11+, installs pipx when necessary without `sudo`, installs the isolated application, verifies `agent`, and prints the first-use commands. For an existing installation, keep the source explicit while this candidate is unpublished:
+
+```sh
+agent update --source /absolute/path/to/reviewed/tweebit-checkout
+hash -r
+agent doctor --full
+```
+
+The remote bootstrap below installs the public `mdvcode/agents` baseline, not this local Tweebit candidate:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mdvcode/agents/main/install.sh | sh
 ```
 
-Update an existing installation with the product command:
+After Tweebit is published from a reviewed source, ordinary updates may again use the product command:
 
 ```sh
 agent update
 agent doctor --full
 ```
 
-`agent update` uses the installed package source. A clean Git checkout is updated with a fast-forward-only pull; a ZIP/folder installation moves to the official repository source; a remote package installation is upgraded in place. It then verifies the new `agent` command and restarts the background worker. A dirty source checkout is never overwritten. To install a separately downloaded build explicitly, use `agent update --source /path/to/new-folder`.
+`agent update` uses the installed package source. A clean Git checkout is updated with a fast-forward-only pull; a ZIP/folder installation moves to the official public repository source; a remote package installation is upgraded in place. It then verifies the new `agent` command and restarts the background worker. A dirty source checkout is never overwritten. Consequently, this unpublished candidate must continue to use `agent update --source /absolute/path/to/reviewed/tweebit-checkout` rather than a source-less update.
 
-An installation old enough not to recognize `agent update` must be bootstrapped once with the current `install.sh`, either from a fresh download or through the remote installer above. Refresh the shell command cache with `hash -r`; future updates then use `agent update`.
+An installation old enough not to recognize `agent update` must be bootstrapped once. For this
+candidate, use `install.sh` from the reviewed local Tweebit checkout. The remote installer can only
+bootstrap the public baseline; after that, select Tweebit explicitly with `agent update --source
+/absolute/path/to/reviewed/tweebit-checkout`. Refresh the shell command cache with `hash -r`.
 
 Contributors may still use `pip install -e .` or direct pipx commands, but users do not need to manage those environments themselves.
 

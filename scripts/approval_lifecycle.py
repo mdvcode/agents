@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from runtime_contracts import load_json as load_schema, validate_contract
+from run_state import continuation_attachment_payload
 from security_approval import security_scope
 from task_queue import DEFAULT_DB, TaskQueue, TaskRecord
 from verifier_environment import verifier_artifact_unavailable
@@ -781,9 +782,19 @@ def prepare_resume(run_dir: Path) -> dict[str, Any]:
         return _prepare_resume_locked(run_dir)
 
 
+def continuation_attachments_for_run(run_dir: Path) -> dict[str, Any]:
+    """Validate immutable attachment metadata before any continuation mutation."""
+
+    try:
+        return continuation_attachment_payload(read_json(run_dir / "workflow.json"))
+    except ValueError as exc:
+        raise ApprovalError(str(exc)) from exc
+
+
 def resume_run(run_dir: Path, *, queue: TaskQueue) -> tuple[dict[str, Any], TaskRecord]:
     """Consume an approval and enqueue continuation from the same run/worktree."""
     with approval_lock(run_dir):
+        attachment_payload = continuation_attachments_for_run(run_dir)
         result = _prepare_resume_locked(run_dir)
         workflow = result["workflow"]
         approval = result["approval"]
@@ -809,6 +820,7 @@ def resume_run(run_dir: Path, *, queue: TaskQueue) -> tuple[dict[str, Any], Task
                 "run_id": run_dir.name,
                 "source": "approval",
                 "event_id": str(approval["approval_id"]),
+                **attachment_payload,
             },
             priority=100,
             max_retries=2,

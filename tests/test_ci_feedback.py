@@ -80,6 +80,17 @@ def test_signed_ci_failure_queues_repair_for_existing_run(tmp_path: Path) -> Non
 
 def test_ci_feedback_redacts_logs_and_resumes_ci_repair(tmp_path: Path) -> None:
     run, body = ci_fixture(tmp_path)
+    workflow_path = run / "workflow.json"
+    workflow_before = json.loads(workflow_path.read_text(encoding="utf-8"))
+    workflow_before.update(
+        {
+            "input_manifest": str(run / "inputs" / "manifest.json"),
+            "input_manifest_sha256": "c" * 64,
+            "attachment_count": 3,
+            "attachment_runtime_consent": True,
+        }
+    )
+    workflow_path.write_text(json.dumps(workflow_before), encoding="utf-8")
     signing_key = "web" + "hook-key"
     signature = "sha256=" + hmac.new(signing_key.encode(), body, hashlib.sha256).hexdigest()
     queue = TaskQueue(tmp_path / "queue.db")
@@ -101,6 +112,10 @@ def test_ci_feedback_redacts_logs_and_resumes_ci_repair(tmp_path: Path) -> None:
     assert workflow["execution_status"] == "resuming"
     assert workflow["resume_role"] == "ci-repair-agent"
     assert record.payload["branch"] == "codex/ci-task"
+    assert record.payload["input_manifest"] == str(run / "inputs" / "manifest.json")
+    assert record.payload["input_manifest_sha256"] == "c" * 64
+    assert record.payload["attachment_count"] == 3
+    assert record.payload["attachment_runtime_consent"] is True
     assert feedback["existing_pr_url"].endswith("/pull/1")
 
 

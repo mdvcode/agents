@@ -23,6 +23,35 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNS_DIR = ROOT / ".agent-runs"
 
 
+def continuation_attachment_payload(workflow: dict[str, Any]) -> dict[str, Any]:
+    """Return validated attachment metadata for a continuation queue record."""
+
+    manifest = workflow.get("input_manifest", "")
+    digest = workflow.get("input_manifest_sha256", "")
+    count = workflow.get("attachment_count", 0)
+    consent = workflow.get("attachment_runtime_consent", False)
+    if not any((manifest, digest, count, consent)):
+        return {}
+    if not isinstance(manifest, str) or not manifest.strip():
+        raise ValueError("workflow attachment manifest path is missing")
+    if (
+        not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+    ):
+        raise ValueError("workflow attachment manifest digest is invalid")
+    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 5:
+        raise ValueError("workflow attachment count is invalid")
+    if consent is not True:
+        raise ValueError("workflow attachment runtime consent is missing")
+    return {
+        "input_manifest": manifest.strip(),
+        "input_manifest_sha256": digest,
+        "attachment_count": count,
+        "attachment_runtime_consent": True,
+    }
+
+
 @dataclass(frozen=True)
 class RunLayout:
     """All mutable state for one task run."""
@@ -337,6 +366,7 @@ def task_fingerprint(
     base_branch: str,
     workspace_mode: str = "worktree",
     workflow_mode: str = "auto",
+    input_manifest_sha256: str = "",
 ) -> str:
     payload = {
         "task_id": task_id,
@@ -347,6 +377,8 @@ def task_fingerprint(
         "workspace_mode": workspace_mode,
         "workflow_mode": workflow_mode,
     }
+    if input_manifest_sha256:
+        payload["input_manifest_sha256"] = input_manifest_sha256
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     ).hexdigest()

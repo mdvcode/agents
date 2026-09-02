@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -142,6 +143,10 @@ def safe_payload(record: TaskRecord) -> dict[str, Any]:
         "graph_depth",
         "child_budget",
         "spawn_fingerprint",
+        "input_manifest",
+        "input_manifest_sha256",
+        "attachment_count",
+        "attachment_runtime_consent",
     }
     unknown = sorted(set(record.payload) - allowed)
     if unknown:
@@ -269,6 +274,49 @@ class WorkflowWorkerPool:
                 requires_human=True,
                 exception_reason="worker lease lost",
             )
+        input_manifest = str(payload.get("input_manifest", "")).strip()
+        input_manifest_sha256 = str(payload.get("input_manifest_sha256", "")).strip()
+        attachment_count = payload.get("attachment_count", 0)
+        attachment_runtime_consent = payload.get("attachment_runtime_consent", False)
+        if (
+            isinstance(attachment_count, bool)
+            or not isinstance(attachment_count, int)
+            or attachment_count < 0
+            or attachment_count > 5
+            or bool(attachment_count) != bool(input_manifest)
+            or bool(input_manifest) != bool(input_manifest_sha256)
+            or bool(input_manifest) != (attachment_runtime_consent is True)
+        ):
+            return WorkerOutcome(
+                status="failed",
+                run_id=run_id,
+                error="attachment manifest metadata is incomplete",
+                failure_kind="policy_block",
+                recovery_action="approval",
+                requires_human=True,
+                exception_reason="invalid attachment manifest metadata",
+            )
+        if input_manifest:
+            manifest_path = Path(input_manifest).resolve()
+            expected_path = (run_dir / "inputs" / "manifest.json").resolve()
+            try:
+                manifest_bytes = manifest_path.read_bytes()
+            except OSError:
+                manifest_bytes = b""
+            if (
+                manifest_path != expected_path
+                or not manifest_bytes
+                or hashlib.sha256(manifest_bytes).hexdigest() != input_manifest_sha256
+            ):
+                return WorkerOutcome(
+                    status="failed",
+                    run_id=run_id,
+                    error="attachment manifest failed integrity validation",
+                    failure_kind="policy_block",
+                    recovery_action="approval",
+                    requires_human=True,
+                    exception_reason="attachment manifest integrity check failed",
+                )
         command = [
             sys.executable,
             "scripts/run_workflow.py",
@@ -338,6 +386,16 @@ class WorkflowWorkerPool:
         workflow_environment["AGENT_TASK_GRAPH_METADATA"] = json.dumps(
             graph_metadata, ensure_ascii=False
         )
+        if input_manifest:
+            workflow_environment["AGENT_INPUT_MANIFEST"] = input_manifest
+            workflow_environment["AGENT_INPUT_MANIFEST_SHA256"] = input_manifest_sha256
+            workflow_environment["AGENT_ATTACHMENT_COUNT"] = str(attachment_count)
+            workflow_environment["AGENT_ATTACHMENT_RUNTIME_CONSENT"] = "1"
+        else:
+            workflow_environment.pop("AGENT_INPUT_MANIFEST", None)
+            workflow_environment.pop("AGENT_INPUT_MANIFEST_SHA256", None)
+            workflow_environment.pop("AGENT_ATTACHMENT_COUNT", None)
+            workflow_environment.pop("AGENT_ATTACHMENT_RUNTIME_CONSENT", None)
         next_heartbeat_at = 0.0
         next_cancel_check_at = 0.0
         cancellation_seen = False

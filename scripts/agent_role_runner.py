@@ -61,6 +61,7 @@ from runtime_contracts import contract_section, load_json, validate_contract
 from runtimes import RuntimeConfigurationError, create_runtime
 from run_state import (
     RunLayout,
+    continuation_attachment_payload,
     file_contents_snapshot,
     file_snapshot,
     find_completed_run,
@@ -2688,6 +2689,30 @@ def run_roles(
             "blockers": ["mode must be auto, adaptive, fast, full, or goal"],
         }
     graph_metadata = task_graph_metadata()
+    input_manifest = os.environ.get("AGENT_INPUT_MANIFEST", "").strip()
+    input_manifest_sha256 = os.environ.get("AGENT_INPUT_MANIFEST_SHA256", "").strip()
+    try:
+        attachment_count = int(os.environ.get("AGENT_ATTACHMENT_COUNT", "0") or 0)
+    except ValueError:
+        attachment_count = -1
+    raw_attachment_consent = os.environ.get("AGENT_ATTACHMENT_RUNTIME_CONSENT", "").strip()
+    try:
+        attachment_payload = continuation_attachment_payload(
+            {
+                "input_manifest": input_manifest,
+                "input_manifest_sha256": input_manifest_sha256,
+                "attachment_count": attachment_count,
+                "attachment_runtime_consent": raw_attachment_consent == "1",
+            }
+        )
+        if raw_attachment_consent not in {"", "1"}:
+            raise ValueError("attachment runtime consent environment is invalid")
+    except ValueError as exc:
+        return {
+            "run_id": run_id or "invalid-attachments",
+            "execution_status": "blocked",
+            "blockers": [str(exc)],
+        }
     run_id = run_id or make_run_id(workflow)
     existing_workflow = RUNS / run_id / "workflow.json"
     existing: dict[str, Any] = {}
@@ -2713,6 +2738,20 @@ def run_roles(
         base_branch = str(existing.get("base_branch", base_branch))
         workflow = str(existing.get("workflow", workflow))
         mode = str(existing.get("mode", mode))
+        try:
+            existing_attachment_payload = continuation_attachment_payload(existing)
+        except ValueError as exc:
+            return {
+                **existing,
+                "execution_status": "blocked",
+                "blockers": [str(exc)],
+            }
+        if existing_attachment_payload != attachment_payload:
+            return {
+                **existing,
+                "execution_status": "blocked",
+                "blockers": ["attachment manifest changed since this run started"],
+            }
         fingerprint = str(existing.get("input_fingerprint", ""))
     else:
         repository = repository.resolve()
@@ -2725,6 +2764,7 @@ def run_roles(
             base_branch=base_branch,
             workspace_mode="checkout" if current_branch else "worktree",
             workflow_mode=mode,
+            input_manifest_sha256=input_manifest_sha256,
         )
         if existing.get("execution_status") == "completed" and existing.get("input_fingerprint") == fingerprint:
             return existing
@@ -2755,6 +2795,7 @@ def run_roles(
             "tokens_used": 0,
             "blockers": [str(exc)],
             "input_fingerprint": fingerprint,
+            **attachment_payload,
         }
         write_json(layout.workflow, state)
         record_failure(layout, stage="initialization", code="NON_AUTHORITATIVE_STATE", message=str(exc))
@@ -2919,6 +2960,7 @@ def run_roles(
             "role_count": 0,
             "tokens_used": 0,
             "input_fingerprint": fingerprint,
+            **attachment_payload,
             "runtime": runtime.descriptor.as_json() if runtime is not None else {
                 "provider": selected_provider,
                 "kind": "runtime_adapter",

@@ -85,6 +85,7 @@ def normalize_event(
         )
         batch_index = int(payload.get("batch_index", 0) or 0)
         graph_depth = int(payload.get("graph_depth", 0) or 0)
+        attachment_count = int(payload.get("attachment_count", 0) or 0)
     except (TypeError, ValueError) as exc:
         raise EventError("event numeric scheduling fields must be integers") from exc
     if priority < -100 or priority > 100 or max_retries < 0 or max_retries > 10:
@@ -93,6 +94,24 @@ def normalize_event(
         raise EventError("event repository_max_parallel_tasks must be between 0 and 32")
     if batch_index < 0 or graph_depth < 0 or graph_depth > 2:
         raise EventError("event batch_index or graph_depth is outside allowed bounds")
+    if attachment_count < 0 or attachment_count > 5:
+        raise EventError("event attachment_count must be between 0 and 5")
+    attachment_runtime_consent = payload.get("attachment_runtime_consent", False)
+    if not isinstance(attachment_runtime_consent, bool):
+        raise EventError("event attachment_runtime_consent must be a boolean")
+    input_manifest = text(payload.get("input_manifest"))
+    input_manifest_sha256 = text(payload.get("input_manifest_sha256"))
+    if bool(input_manifest) != bool(input_manifest_sha256):
+        raise EventError("event attachment manifest metadata is incomplete")
+    if input_manifest_sha256 and (
+        len(input_manifest_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in input_manifest_sha256)
+    ):
+        raise EventError("event input_manifest_sha256 must be a lowercase SHA-256 digest")
+    if bool(attachment_count) != bool(input_manifest):
+        raise EventError("event attachment_count must match attachment manifest presence")
+    if attachment_count and not attachment_runtime_consent:
+        raise EventError("event attachments require explicit runtime context consent")
     relation = text(payload.get("relation"), "root")
     if relation not in {"root", "repair", "investigation", "test", "implementation"}:
         raise EventError("event relation is invalid")
@@ -113,7 +132,7 @@ def normalize_event(
     if not isinstance(child_budget, dict):
         raise EventError("event child_budget must be an object")
     event_id = event_identity(source, external_id, task_id)
-    return {
+    envelope = {
         "event_id": event_id,
         "source": source,
         "event_type": text(payload.get("event_type") or payload.get("action"), "task"),
@@ -158,6 +177,16 @@ def normalize_event(
             else "",
         },
     }
+    if input_manifest:
+        envelope.update(
+            {
+                "input_manifest": input_manifest,
+                "input_manifest_sha256": input_manifest_sha256,
+                "attachment_count": attachment_count,
+                "attachment_runtime_consent": attachment_runtime_consent,
+            }
+        )
+    return envelope
 
 
 def persist_event(envelope: dict[str, Any], directory: Path = EVENTS_DIR) -> Path:
@@ -183,6 +212,18 @@ def enqueue_envelope(queue: TaskQueue, envelope: dict[str, Any]) -> TaskRecord:
             "allowed_child_repositories", "graph_depth", "child_budget", "spawn_fingerprint"
         )
     }
+    if "input_manifest" in envelope:
+        payload.update(
+            {
+                key: envelope[key]
+                for key in (
+                    "input_manifest",
+                    "input_manifest_sha256",
+                    "attachment_count",
+                    "attachment_runtime_consent",
+                )
+            }
+        )
     return queue.enqueue(
         task_key=str(envelope["task_key"]),
         payload=payload,

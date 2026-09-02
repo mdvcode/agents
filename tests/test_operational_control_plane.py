@@ -437,8 +437,38 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         with urlopen(f"{base}/dashboard", timeout=5) as response:
             dashboard = response.read().decode("utf-8")
             assert response.headers["Content-Security-Policy"]
-        assert "Agent Control" in dashboard
+        with urlopen(f"{base}/assets/tweebit-icon-32.png", timeout=5) as response:
+            icon = response.read()
+            assert response.headers["Content-Type"] == "image/png"
+            assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert icon.startswith(b"\x89PNG\r\n\x1a\n")
+        try:
+            urlopen(f"{base}/assets/not-public.svg", timeout=5)
+        except HTTPError as exc:
+            assert exc.code == 404
+        else:
+            raise AssertionError("unknown dashboard assets must not be served")
+        assert "Tweebit AI Harness by Daryna" in dashboard
+        assert dashboard.count('class="brand-wordmark"') >= 2
         assert "Новая задача" in dashboard
+        assert dashboard.index('id="newTaskPanel"') < dashboard.index('id="historyPanel"')
+        assert dashboard.index('id="newTaskPanel"') < dashboard.index('id="adaptivePanel"')
+        assert 'id="createView"' in dashboard
+        assert 'id="tasksView"' in dashboard
+        assert 'id="statsView"' in dashboard
+        assert 'id="adaptiveView"' in dashboard
+        assert 'data-view-link="create" aria-current="page"' in dashboard
+        assert 'data-view-link="tasks"' in dashboard
+        assert 'data-view-link="stats"' in dashboard
+        assert 'data-view-link="adaptive"' in dashboard
+        assert 'role="tablist"' not in dashboard
+        assert "new Set(['create','tasks','stats','adaptive'])" in dashboard
+        assert "window.addEventListener('popstate'" in dashboard
+        assert 'id="appSidebar"' in dashboard
+        assert 'id="sidebarCollapse" type="button" aria-controls="appSidebar"' in dashboard
+        assert 'id="mobileMenu"' in dashboard
+        assert 'id="navBackdrop"' in dashboard
+        assert "event.key==='Escape'" in dashboard
         assert 'id="executionMode"' in dashboard
         assert '<option value="fast">' in dashboard
         assert '<option value="full">' in dashboard
@@ -448,6 +478,9 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         assert 'id="workspaceModeNote"' in dashboard
         assert 'id="parallelTask"' in dashboard
         assert '<option value="adaptive">' in dashboard
+        assert "Adaptive Beta — до 30 минут" in dashboard
+        assert "function executionModeLabel" in dashboard
+        assert "Авто →" in dashboard
         assert 'id="batchRows"' in dashboard
         assert 'id="addBatchTask"' in dashboard
         assert 'id="batchConcurrency"' in dashboard
@@ -472,7 +505,36 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         assert "historyCanHide(task){return ['completed','cancelled'].includes(task.status)}" in dashboard
         assert "Активные задачи, ошибки, журналы и файлы сохранятся" in dashboard
         assert "localStorage.setItem(historyStorageKey" in dashboard
-        assert "Быстрый старт" in dashboard
+        assert "Быстрый старт" not in dashboard
+        assert 'id="attentionPanel" hidden' in dashboard
+        assert 'id="contextFiles"' in dashboard
+        assert 'id="contextDropzone"' in dashboard
+        assert 'id="contextFileList"' in dashboard
+        assert 'id="attachmentRuntimeConsent"' in dashboard
+        assert (
+            "Передать содержимое этих файлов настроенному "
+            "AI runtime для выполнения задачи"
+            in dashboard
+        )
+        assert (
+            "textContent=`Передать содержимое этих файлов в "
+            "${provider} для выполнения задачи`"
+            in dashboard
+        )
+        assert "attachment_runtime_consent:true" in dashboard
+        assert "function resetAttachmentConsent" in dashboard
+        assert "function addContextFiles" in dashboard
+        assert "maxTaskBytes:500*1024*1024" in dashboard
+        assert "totalBytes+file.size>taskAttachmentApi.maxTaskBytes" in dashboard
+        assert "function uploadTaskAttachments" in dashboard
+        assert "'/ui/attachments'" in dashboard
+        assert "attachment_set_ids" in dashboard
+        assert "if(file.type)headers['Content-Type']=file.type" in dashboard
+        assert "repository=${encodeURIComponent(uploadRepository)}" in dashboard
+        assert "files=[...state.contextFiles]" in dashboard
+        assert "uploadTaskAttachments(files,{repository})" in dashboard
+        assert "$('repository').disabled=true" in dashboard
+        assert "refreshAttachmentConfiguration" in dashboard
         assert "Другой ответ" in dashboard
         assert "question.options" in dashboard
         assert "item.requires_input" in dashboard

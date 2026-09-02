@@ -15,7 +15,14 @@ if str(SCRIPTS / "adapters") not in sys.path:
 from check_codex_sdk_runtime import check_sdk
 from ai_harness.sdk_session import MAX_UNIX_SOCKET_PATH_BYTES, ManagedCodexSdkSession
 import codex_sdk_server
-from codex_sdk_executor import ProgressWriter, execute_via_session, sdk_settings, usage_fields
+import codex_sdk_executor
+from codex_sdk_executor import (
+    ProgressWriter,
+    execute_via_session,
+    sdk_run_input,
+    sdk_settings,
+    usage_fields,
+)
 
 
 class FakeCodex:
@@ -39,6 +46,16 @@ class FakeCodex:
 class FakeConfig:
     def __init__(self, **_kwargs: object) -> None:
         pass
+
+
+class FakeTextInput:
+    def __init__(self, *, text: str) -> None:
+        self.text = text
+
+
+class FakeLocalImageInput:
+    def __init__(self, *, path: str) -> None:
+        self.path = path
 
 
 def test_sdk_preflight_requires_and_reports_chatgpt_subscription(
@@ -69,6 +86,32 @@ def test_sdk_runtime_settings_default_to_balanced_profile(monkeypatch: object) -
         "reasoning_effort": "medium",
         "service_tier": "fast",
     }
+
+
+def test_sdk_run_input_keeps_text_only_turn_compatible(monkeypatch: object) -> None:
+    monkeypatch.setattr(codex_sdk_executor, "attachment_image_paths", lambda _manifest: [])
+
+    assert sdk_run_input("task prompt", {}) == "task prompt"
+
+
+def test_sdk_run_input_adds_only_revalidated_local_images(monkeypatch: object) -> None:
+    module = ModuleType("openai_codex")
+    module.TextInput = FakeTextInput  # type: ignore[attr-defined]
+    module.LocalImageInput = FakeLocalImageInput  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "openai_codex", module)
+    monkeypatch.setattr(
+        codex_sdk_executor,
+        "attachment_image_paths",
+        lambda _manifest: ["/private/run/inputs/derived/page-1.png"],
+    )
+
+    value = sdk_run_input("task prompt", {"attachment_context": {}})
+
+    assert len(value) == 2
+    assert isinstance(value[0], FakeTextInput)
+    assert value[0].text == "task prompt"
+    assert isinstance(value[1], FakeLocalImageInput)
+    assert value[1].path == "/private/run/inputs/derived/page-1.png"
 
 
 def test_sdk_usage_uses_last_turn_and_preserves_cached_tokens() -> None:

@@ -10,7 +10,26 @@ For ordinary use, open the task-control dashboard from an initialized project:
 agent dashboard
 ```
 
-This opens an authenticated local page that can launch tasks through the same worker as `agent task`, show live queue/worker/run state, surface bounded questions with recommended dropdown choices and a custom-answer fallback, and answer, approve, retry, or abort a run through the same product CLI policy boundary. Dashboard history cleanup is a reversible browser-local presentation preference: it hides only completed/cancelled rows and never deletes queue records, task events, run artifacts, active work, or tasks needing attention. It binds only to loopback. The generated token stays in the browser session and is removed from the visible URL after startup.
+This opens an authenticated local page with four product sections: **Создать** for the focused
+task composer, **Задачи** for attention, active work, history, and batch controls, **Статистика**
+for operational counters, service health, and worker state, and **Adaptive Lab** for efficiency
+evidence. Navigation uses a lightweight collapsible desktop sidebar and an off-canvas mobile menu.
+The execution mode remains named **Adaptive**; **Adaptive Lab** is only the analytics-section name.
+**Auto** selects Fast or Full from task risk and cannot select Adaptive until authoritative
+acceptance is `PASS`; **Adaptive** is a manual Beta opt-in until then. Auto and Adaptive are
+mutually exclusive values of the execution-mode selector, not a mode plus a checkbox.
+Attention is a filter over authoritative tasks, not a separate lifecycle or data model. The project
+control selects the current initialized repository and does not create a project catalog or another
+source of project truth.
+
+The page launches tasks through the same worker as `agent task`, shows live queue/worker/run state,
+surfaces bounded questions with recommended dropdown choices and a custom-answer fallback, and can
+answer, approve, retry, or abort a run through the same product CLI policy boundary. Dashboard
+history cleanup is a reversible browser-local presentation preference: it hides only
+completed/cancelled rows and never deletes queue records, task events, run artifacts, active work,
+or tasks needing attention. It binds only to loopback. `agent dashboard` always generates a fresh
+ephemeral bearer token; the token stays in browser session storage and is removed from the visible
+URL after startup.
 
 The lower-level contributor command remains available:
 
@@ -19,7 +38,13 @@ make control-plane
 open http://127.0.0.1:8765/dashboard
 ```
 
-`make dashboard` is an alias for the same loopback server. If `AGENT_CONTROL_PLANE_TOKEN` is set, enter it in the dashboard; the token stays in browser session storage. The public HTML shell contains no run data. `/metrics`, `/traces`, and the other operational JSON endpoints retain bearer-token enforcement.
+`make dashboard` is an alias for this lower-level contributor server, not for the token-generating
+`agent dashboard` launcher. Without `AGENT_CONTROL_PLANE_TOKEN`, the lower-level server is strictly
+read-only: GET/HEAD inspection remains available, but every POST mutation is rejected. To enable its
+task, upload, answer, approval, retry, abort, batch, event, or webhook mutation routes, set
+`AGENT_CONTROL_PLANE_TOKEN` and send the exact bearer token; the dashboard keeps it only in browser
+session storage. A missing token is never an unauthenticated mutation mode. The public HTML shell
+contains no run data.
 
 For a machine-readable snapshot:
 
@@ -30,7 +55,10 @@ python3 scripts/operational_metrics.py --output /tmp/harness-observability.json
 
 ## Signals
 
-The snapshot and dashboard expose:
+The snapshot exposes all of the following signals. The dashboard gives counters, service health,
+and worker state their own full **Статистика** section instead of crowding **Создать** or
+duplicating task details from **Задачи**. **Adaptive Lab** remains dedicated to efficiency analysis
+and its evidence:
 
 - worker health, stalled workers, current assignments, and restarts;
 - queued, active, completed, blocked, and dead-letter tasks;

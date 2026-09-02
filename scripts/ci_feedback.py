@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from runtime_contracts import load_json as load_schema, validate_contract
+from run_state import continuation_attachment_payload
 from task_queue import DEFAULT_DB, TaskQueue, TaskRecord
 from tool_governance import audit_tool_call, authorize_tool_call
 
@@ -153,6 +154,10 @@ def ingest_ci_failure(
     workflow = read_json(run_dir / "workflow.json")
     if workflow.get("execution_status") == "awaiting_approval":
         raise CIIngestionError("run is awaiting approval and cannot accept CI repair")
+    try:
+        attachment_payload = continuation_attachment_payload(workflow)
+    except ValueError as exc:
+        raise CIIngestionError(str(exc)) from exc
     external_run_id = str(workflow_run.get("id", ""))
     if not external_run_id:
         raise CIIngestionError("GitHub Actions run id is missing")
@@ -197,6 +202,7 @@ def ingest_ci_failure(
             "run_id": run_dir.name,
             "source": "ci",
             "event_id": external_run_id,
+            **attachment_payload,
         },
         priority=100,
         max_retries=2,

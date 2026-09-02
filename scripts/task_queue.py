@@ -922,6 +922,60 @@ class TaskQueue:
             updated = connection.execute("SELECT * FROM tasks WHERE id=?", (int(row["id"]),)).fetchone()
             return self.record(updated)
 
+    def restore_cancelled_replacement(
+        self,
+        original: TaskRecord,
+        *,
+        expected_cancelled_updated_at: float,
+    ) -> TaskRecord:
+        """Restore an exact pre-replacement queue state after successor intake fails."""
+
+        if original.status in {"completed", "cancelled"}:
+            raise ValueError("replacement rollback requires a non-terminal original task")
+        now = time.time()
+        with self.connect() as connection:
+            self._begin_immediate(connection)
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE id=?", (original.id,)
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                raise RuntimeError("replaced queue task no longer exists")
+            if (
+                str(row["task_key"]) != original.task_key
+                or str(row["run_id"]) != original.run_id
+                or str(row["status"]) != "cancelled"
+                or float(row["updated_at"]) != expected_cancelled_updated_at
+            ):
+                connection.rollback()
+                raise RuntimeError("replaced queue task changed before rollback")
+            connection.execute(
+                """
+                UPDATE tasks SET status=?,updated_at=?,requires_human=?,recovery_action=?,
+                    cancellation_requested_at=? WHERE id=?
+                """,
+                (
+                    original.status,
+                    original.updated_at,
+                    int(original.requires_human),
+                    original.recovery_action,
+                    original.cancellation_requested_at,
+                    original.id,
+                ),
+            )
+            self.event(
+                connection,
+                original.id,
+                "replacement_rolled_back",
+                details={"run_id": original.run_id},
+                now=now,
+            )
+            restored = connection.execute(
+                "SELECT * FROM tasks WHERE id=?", (original.id,)
+            ).fetchone()
+            connection.commit()
+            return self.record(restored)
+
     def cancellation_requested(self, task_id: int, worker_id: str) -> bool:
         with self.connect() as connection:
             row = connection.execute(

@@ -17,6 +17,7 @@
     "root_run_id": "str", "parent_run_id": "str", "relation": "str", "dependency_mode": "str",
     "spawn_reason": "str", "allowed_paths": "list", "allowed_child_repositories": "list",
     "graph_depth": "int", "child_budget": "dict", "spawn_fingerprint": "str",
+    "input_manifest": "str", "input_manifest_sha256": "str", "attachment_count": "int", "attachment_runtime_consent": "bool",
     "external_id": "str", "received_at": "str", "metadata": "dict"
   },
   "enums": {

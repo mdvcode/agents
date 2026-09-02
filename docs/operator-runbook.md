@@ -4,14 +4,16 @@ This is the shortest supported path from a repository to autonomous execution.
 
 ## First start
 
-Download and unpack the system, then install it from that folder:
+For the local, unpublished Tweebit v0.3.0 release candidate, use the exact reviewed checkout rather
+than the public `mdvcode/agents` installer, which installs the baseline:
 
 ```sh
-cd /path/to/downloaded-agents
+cd /absolute/path/to/reviewed/tweebit-checkout
 ./install.sh
 ```
 
-For future updates, run `agent update`; direct pipx commands are not part of the ordinary user flow.
+Keep updates pinned with `agent update --source /absolute/path/to/reviewed/tweebit-checkout` until
+Tweebit is published; direct pipx commands are not part of the ordinary user flow.
 
 Initialize the target project and validate the complete runtime:
 
@@ -97,7 +99,11 @@ The first failing doctor check is the prerequisite to repair. Common actions are
 
 - Missing Python runtime module: `agent update`, then `agent doctor --full`.
 - Installed build differs from its local source checkout: run the exact `agent update --source <path>` command reported by `agent doctor`, then retry the same task.
-- `agent update` is an invalid command: the installed CLI predates self-update. Run the current `install.sh` once from a fresh download (or use the documented `curl ... | sh` installer), open a new terminal or run `hash -r`, then use `agent update` normally.
+- `agent update` is an invalid command: the installed CLI predates self-update. Bootstrap with
+  `install.sh` from the reviewed local Tweebit checkout, open a new terminal or run `hash -r`, then
+  keep this candidate pinned with `agent update --source
+  /absolute/path/to/reviewed/tweebit-checkout`. The public `curl ... | sh` installer provides only
+  the public baseline.
 - Missing or wrong base branch: fetch it, or run `agent init --force --base-branch <existing-branch>`.
 - Worker not running: `agent start`.
 - Worker unhealthy after an upgrade: `agent worker restart`, then inspect the log path printed by the command.

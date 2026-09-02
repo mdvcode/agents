@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import sqlite3
 import subprocess
@@ -17,6 +18,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from ai_harness import cli
+from ai_harness.attachments import AttachmentStore, IncomingAttachment
 from ai_harness.build import harness_build_fingerprint
 from ai_harness.project import load_project_config, safe_branch
 import agent_role_runner
@@ -807,6 +809,109 @@ def test_agent_task_replaces_paused_checkout_owner_and_preserves_run(
     ).stdout.strip() == "feat/kc-432"
 
 
+def test_agent_task_restores_paused_owner_when_successor_enqueue_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    commit_all(repository)
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    assert cli.main(
+        ["task", "Old task", "--repo", str(repository), "--task-id", "old-task"]
+    ) == 0
+    capsys.readouterr()
+    task_queue = cli.load_harness_module(state_root, "task_queue")
+    queue = task_queue.TaskQueue(state_root / ".agent-queue" / "tasks.db")
+    old = queue.claim(worker_id="worker-old")
+    assert old is not None
+    assert queue.mark_running(old.id, "worker-old")
+    original = queue.finish(
+        task_id=old.id,
+        worker_id="worker-old",
+        status="awaiting_approval",
+        run_id="run-old",
+        requires_human=True,
+        exception_reason="Choose a timeout policy",
+    )
+    run_dir = state_root / ".agent-runs" / "run-old"
+    run_dir.mkdir(parents=True)
+    workflow_path = run_dir / "workflow.json"
+    workflow_path.write_text(
+        json.dumps(
+            {
+                "run_id": "run-old",
+                "execution_status": "awaiting_approval",
+                "marker": "preserve-exactly",
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    original_workflow = workflow_path.read_bytes()
+    original_branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    staged = AttachmentStore(state_root / ".agent-uploads").stage(
+        [
+            IncomingAttachment(
+                filename="brief.txt",
+                stream=io.BytesIO(b"private project context"),
+                declared_mime="text/plain",
+            )
+        ]
+    )
+    event_ingestion = cli.load_harness_module(state_root, "event_ingestion")
+
+    def fail_enqueue(*_args: object, **_kwargs: object) -> object:
+        raise sqlite3.OperationalError("simulated replacement queue failure")
+
+    monkeypatch.setattr(event_ingestion, "enqueue_envelope", fail_enqueue)
+
+    result = cli.main(
+        [
+            "task",
+            "Replacement task",
+            "--repo",
+            str(repository),
+            "--task-id",
+            "replacement-task",
+            "--attachment-set",
+            staged.set_id,
+            "--attachment-runtime-consent",
+        ]
+    )
+
+    assert result == 2
+    assert "simulated replacement queue failure" in capsys.readouterr().err
+    restored = queue.get(original.id)
+    assert restored is not None
+    assert restored.status == original.status == "awaiting_approval"
+    assert restored.requires_human is original.requires_human is True
+    assert restored.exception_reason == original.exception_reason
+    assert restored.recovery_action == original.recovery_action
+    assert restored.cancellation_requested_at == original.cancellation_requested_at
+    assert workflow_path.read_bytes() == original_workflow
+    assert (state_root / ".agent-uploads" / staged.set_id).is_dir()
+    assert not any((state_root / ".agent-runs").glob("*/inputs"))
+    assert subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == original_branch
+
+
 def test_agent_task_checks_runtime_before_superseding_paused_checkout_owner(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -951,6 +1056,121 @@ def test_agent_task_preserves_queued_run_when_worker_startup_fails(
     assert len(records) == 1
     assert records[0].status == "queued"
     assert records[0].payload["task_id"] == "safe-queue"
+
+
+def test_agent_task_restores_attachment_and_branch_when_queueing_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    original_branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    commit_all(repository)
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    staged = AttachmentStore(state_root / ".agent-uploads").stage(
+        [
+            IncomingAttachment(
+                filename="brief.txt",
+                stream=io.BytesIO(b"private project context"),
+                declared_mime="text/plain",
+            )
+        ]
+    )
+    event_ingestion = cli.load_harness_module(state_root, "event_ingestion")
+
+    def fail_enqueue(*_args: object, **_kwargs: object) -> object:
+        raise sqlite3.OperationalError("simulated queue failure")
+
+    monkeypatch.setattr(event_ingestion, "enqueue_envelope", fail_enqueue)
+
+    result = cli.main(
+        [
+            "task",
+            "Use the attached brief",
+            "--repo",
+            str(repository),
+            "--task-id",
+            "attachment-rollback",
+            "--attachment-set",
+            staged.set_id,
+            "--attachment-runtime-consent",
+        ]
+    )
+
+    assert result == 2
+    assert "simulated queue failure" in capsys.readouterr().err
+    assert (state_root / ".agent-uploads" / staged.set_id).is_dir()
+    assert not any((state_root / ".agent-runs").glob("*/inputs"))
+    assert subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == original_branch
+    branches = subprocess.run(
+        ["git", "branch", "--format=%(refname:short)"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    assert "feat/attachment-rollback" not in branches
+
+
+def test_agent_task_rejects_attachments_for_existing_task_without_consuming_them(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    commit_all(repository)
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    assert cli.main(
+        ["task", "First intake", "--repo", str(repository), "--task-id", "same-task"]
+    ) == 0
+    capsys.readouterr()
+    staged = AttachmentStore(state_root / ".agent-uploads").stage(
+        [
+            IncomingAttachment(
+                filename="new.txt",
+                stream=io.BytesIO(b"new context"),
+                declared_mime="text/plain",
+            )
+        ]
+    )
+
+    result = cli.main(
+        [
+            "task",
+            "First intake",
+            "--repo",
+            str(repository),
+            "--task-id",
+            "same-task",
+            "--attachment-set",
+            staged.set_id,
+            "--attachment-runtime-consent",
+        ]
+    )
+
+    assert result == 2
+    assert "already exists" in capsys.readouterr().err
+    assert (state_root / ".agent-uploads" / staged.set_id).is_dir()
 
 
 def test_ensure_worker_service_restarts_stale_live_worker(
@@ -1289,6 +1509,10 @@ def test_agent_answer_records_requested_input_and_resumes_same_run(
         "execution_status": "awaiting_approval",
         "current_role": "planner",
         "resume_role": "planner",
+        "input_manifest": str(run_dir / "inputs" / "manifest.json"),
+        "input_manifest_sha256": "b" * 64,
+        "attachment_count": 1,
+        "attachment_runtime_consent": True,
         "attention": {
             "required": True,
             "summary": "Which export format should be used?",
@@ -1377,10 +1601,103 @@ def test_agent_answer_records_requested_input_and_resumes_same_run(
     assert resumed["attention_history"][-1]["resolution"] == "answer_recorded"
     assert resumed["closed_requirements"][-1]["requirement_id"] == "export_format"
     assert resumed["closed_requirements"][-1]["resolution"] == "answer_recorded"
+    task_queue = cli.load_harness_module(state_root, "task_queue")
+    continuation = next(
+        item
+        for item in task_queue.TaskQueue(
+            state_root / ".agent-queue" / "tasks.db"
+        ).list()
+        if item.run_id == "run-question"
+    )
+    assert continuation.payload["input_manifest"] == str(
+        run_dir / "inputs" / "manifest.json"
+    )
+    assert continuation.payload["input_manifest_sha256"] == "b" * 64
+    assert continuation.payload["attachment_count"] == 1
+    assert continuation.payload["attachment_runtime_consent"] is True
     checkpoint = json.loads((checkpoints / "planner.json").read_text(encoding="utf-8"))
     assert checkpoint["state"] == "role_pending"
     assert checkpoint["output_fingerprint"] == ""
     assert checkpoint["artifacts"] == []
+
+
+def test_agent_answer_rejects_corrupt_attachment_state_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    approval_lifecycle = cli.load_harness_module(state_root, "approval_lifecycle")
+    run_dir = state_root / ".agent-runs" / "run-corrupt-attachment-question"
+    (run_dir / "artifacts").mkdir(parents=True)
+    workflow_path = run_dir / "workflow.json"
+    workflow_path.write_text(
+        json.dumps(
+            {
+                "run_id": run_dir.name,
+                "task_id": "choose-format",
+                "goal": "Choose export format",
+                "project": "agent_workspace",
+                "repository": str(repository),
+                "branch": "feat/choose-format",
+                "base_branch": "main",
+                "execution_status": "awaiting_approval",
+                "current_role": "planner",
+                "input_manifest": str(run_dir / "inputs" / "manifest.json"),
+                "input_manifest_sha256": "not-a-digest",
+                "attachment_count": 1,
+                "attachment_runtime_consent": True,
+                "attention": {
+                    "required": True,
+                    "summary": "Which export format should be used?",
+                    "details": ["Choose CSV or JSON."],
+                    "role": "planner",
+                    "action": "answer",
+                    "question": {"id": "export_format", "options": []},
+                },
+                "roles": [
+                    {
+                        "role": "planner",
+                        "result": {
+                            "status": "awaiting_approval",
+                            "summary": "Which export format should be used?",
+                            "blockers": ["Choose CSV or JSON."],
+                        },
+                    }
+                ],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    approval_lifecycle.request_approval(
+        run_dir, reason="Which export format should be used?"
+    )
+    approval_path = run_dir / "artifacts" / "approval.json"
+    original_workflow = workflow_path.read_bytes()
+    original_approval = approval_path.read_bytes()
+
+    result = cli.main(
+        [
+            "answer",
+            run_dir.name,
+            "Use JSON",
+            "--repo",
+            str(repository),
+        ]
+    )
+
+    assert result == 2
+    assert "attachment manifest digest is invalid" in capsys.readouterr().err
+    assert workflow_path.read_bytes() == original_workflow
+    assert approval_path.read_bytes() == original_approval
+    assert not (run_dir / "human-input.json").exists()
 
 
 def test_agent_answer_rejects_a_choice_that_requires_missing_details(
@@ -1861,6 +2178,46 @@ def test_agent_update_refreshes_clean_git_source_and_restarts_worker(
     assert ["/tools/agent", "worker", "restart", "--json"] in commands
 
 
+def test_agent_update_installs_explicit_clean_local_git_source_without_pull(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    source = tmp_path / "reviewed-release"
+    source.mkdir()
+    (source / ".git").mkdir()
+    (source / "pyproject.toml").write_text(
+        '[project]\nname = "ai-harness"\n',
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+
+    def run(command: object, *, label: str, timeout: int = 180) -> subprocess.CompletedProcess[str]:
+        values = [str(item) for item in command]
+        commands.append(values)
+        stdout = "agent 0.1.0\n" if values[-1:] == ["--version"] else ""
+        return subprocess.CompletedProcess(values, 0, stdout, "")
+
+    monkeypatch.setattr(cli, "pipx_executable", lambda: "/tools/pipx")
+    monkeypatch.setattr(
+        cli,
+        "pipx_installed_source",
+        lambda _pipx: "git+https://example.invalid/agents.git",
+    )
+    monkeypatch.setattr(cli, "installed_agent_executable", lambda: "/tools/agent")
+    monkeypatch.setattr(cli, "pause_worker_for_update", lambda: (None, False))
+    monkeypatch.setattr(cli, "update_process", run)
+
+    assert cli.main(["update", "--source", str(source), "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["source"] == "downloaded folder"
+    assert result["git_updated"] is False
+    assert ["git", "-C", str(source), "status", "--porcelain=v1", "--untracked-files=normal"] in commands
+    assert ["/tools/pipx", "install", "--force", str(source)] in commands
+    assert not any(command[:3] == ["git", "-C", str(source)] and "pull" in command for command in commands)
+
+
 def test_agent_update_refuses_dirty_downloaded_system(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2047,7 +2404,7 @@ def test_agent_start_validates_project_and_starts_workers(
     assert cli.main(["start", "--repo", str(repository), "--workers", "2"]) == 0
     output = capsys.readouterr().out
 
-    assert "AI Harness started" in output
+    assert "Tweebit AI Harness by Daryna started" in output
     assert 'Next: agent task "Describe the change"' in output
 
 
@@ -2116,7 +2473,7 @@ def test_python_module_exposes_agent_version() -> None:
     )
 
     assert completed.returncode == 0
-    assert completed.stdout.strip() == "agent 0.2.0"
+    assert completed.stdout.strip() == "agent 0.3.0"
 
 
 @pytest.mark.parametrize(

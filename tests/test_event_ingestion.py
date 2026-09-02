@@ -32,6 +32,10 @@ def test_all_sources_normalize_to_one_task_envelope(tmp_path: Path, source: str)
     assert envelope["branch_owner_run_id"] == ""
     assert envelope["mode"] == "auto"
     assert envelope["event_id"]
+    assert "input_manifest" not in envelope
+    assert "input_manifest_sha256" not in envelope
+    assert "attachment_count" not in envelope
+    assert "attachment_runtime_consent" not in envelope
 
 
 def test_event_delivery_is_idempotent_in_queue(tmp_path: Path) -> None:
@@ -47,7 +51,34 @@ def test_event_delivery_is_idempotent_in_queue(tmp_path: Path) -> None:
 
     assert first.id == second.id
     assert first.payload["goal"] == "Fix it\n\nDetails"
+    assert "input_manifest" not in first.payload
     assert len(list((tmp_path / "events").glob("*.json"))) == 1
+
+
+def test_attachment_metadata_is_preserved_only_when_present(tmp_path: Path) -> None:
+    queue = TaskQueue(tmp_path / "queue.db")
+    manifest = tmp_path / ".agent-runs" / "run-input" / "inputs" / "manifest.json"
+    digest = "a" * 64
+    envelope = normalize_event(
+        source="api",
+        payload={
+            "external_id": "attachment-event",
+            "task_id": "attachment-event",
+            "run_id": "run-input",
+            "input_manifest": str(manifest),
+            "input_manifest_sha256": digest,
+            "attachment_count": 2,
+            "attachment_runtime_consent": True,
+        },
+        repository=tmp_path,
+    )
+
+    record = enqueue_envelope(queue, envelope)
+
+    assert record.payload["input_manifest"] == str(manifest)
+    assert record.payload["input_manifest_sha256"] == digest
+    assert record.payload["attachment_count"] == 2
+    assert record.payload["attachment_runtime_consent"] is True
 
 
 def test_event_rejects_non_numeric_queue_controls(tmp_path: Path) -> None:
