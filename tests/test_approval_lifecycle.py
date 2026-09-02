@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from ai_harness.project import trust_key
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -331,6 +332,8 @@ def test_resume_enqueues_same_run_and_checkpoint(tmp_path: Path) -> None:
             "task_id": "approval-task",
             "goal": "continue safely",
             "project": "agent_workspace",
+            "project_id": "approval-project",
+            "project_key": trust_key(tmp_path),
             "repository": str(tmp_path),
             "base_branch": "main",
             "workspace_mode": "checkout",
@@ -371,6 +374,8 @@ def test_resume_enqueues_same_run_and_checkpoint(tmp_path: Path) -> None:
     assert transition["workflow"]["execution_status"] == "resuming"
     assert record.run_id == "run-approval"
     assert record.payload["run_id"] == "run-approval"
+    assert record.payload["project_id"] == "approval-project"
+    assert record.payload["project_key"] == trust_key(tmp_path)
     assert record.payload["repository"] == str(tmp_path)
     assert record.payload["workspace_mode"] == "checkout"
     assert record.payload["checkout_path"] == str(tmp_path)

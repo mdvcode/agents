@@ -11,7 +11,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -298,6 +298,8 @@ class TaskQueue:
         max_retries: int = 2,
         run_id: str = "",
         supersede_awaiting_approval: bool = False,
+        idempotency_aliases: Sequence[str] = (),
+        idempotency_repository: str = "",
     ) -> TaskRecord:
         if not task_key.strip():
             raise ValueError("task_key is required")
@@ -307,19 +309,79 @@ class TaskQueue:
         now = time.time()
         with self.connect() as connection:
             self._begin_immediate(connection)
-            cursor = connection.execute(
-                """
-                INSERT OR IGNORE INTO tasks(
-                    task_key,payload_json,status,priority,run_id,max_retries,available_at,created_at,updated_at
-                ) VALUES(?,?,'queued',?,?,?,?,?,?)
-                """,
-                (task_key, payload_json, priority, run_id, max_retries, now, now, now),
-            )
             row = connection.execute("SELECT * FROM tasks WHERE task_key=?", (task_key,)).fetchone()
+            if row is not None and idempotency_repository:
+                expected_repository = str(
+                    Path(idempotency_repository).expanduser().resolve()
+                )
+                try:
+                    existing_payload = json.loads(str(row["payload_json"]))
+                except (json.JSONDecodeError, TypeError) as exc:
+                    connection.rollback()
+                    raise ValueError(
+                        "existing idempotency record has an invalid payload"
+                    ) from exc
+                existing_repository = (
+                    existing_payload.get("repository")
+                    if isinstance(existing_payload, dict)
+                    else ""
+                )
+                if (
+                    not isinstance(existing_repository, str)
+                    or not existing_repository
+                    or str(Path(existing_repository).expanduser().resolve())
+                    != expected_repository
+                ):
+                    connection.rollback()
+                    raise ValueError(
+                        "task_key already belongs to another repository"
+                    )
+            if row is None and idempotency_repository:
+                expected_repository = str(
+                    Path(idempotency_repository).expanduser().resolve()
+                )
+                for alias in dict.fromkeys(
+                    value.strip()
+                    for value in idempotency_aliases
+                    if isinstance(value, str) and value.strip() and value.strip() != task_key
+                ):
+                    candidate = connection.execute(
+                        "SELECT * FROM tasks WHERE task_key=?", (alias,)
+                    ).fetchone()
+                    if candidate is None:
+                        continue
+                    try:
+                        candidate_payload = json.loads(str(candidate["payload_json"]))
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    candidate_repository = (
+                        candidate_payload.get("repository")
+                        if isinstance(candidate_payload, dict)
+                        else ""
+                    )
+                    if not isinstance(candidate_repository, str) or not candidate_repository:
+                        continue
+                    if str(Path(candidate_repository).expanduser().resolve()) == expected_repository:
+                        row = candidate
+                        break
+            inserted = False
+            if row is None:
+                cursor = connection.execute(
+                    """
+                    INSERT OR IGNORE INTO tasks(
+                        task_key,payload_json,status,priority,run_id,max_retries,available_at,created_at,updated_at
+                    ) VALUES(?,?,'queued',?,?,?,?,?,?)
+                    """,
+                    (task_key, payload_json, priority, run_id, max_retries, now, now, now),
+                )
+                inserted = cursor.rowcount == 1
+                row = connection.execute(
+                    "SELECT * FROM tasks WHERE task_key=?", (task_key,)
+                ).fetchone()
             if row is None:
                 connection.rollback()
                 raise RuntimeError("failed to enqueue task")
-            if cursor.rowcount == 1:
+            if inserted:
                 self.event(connection, int(row["id"]), "enqueued", details={"priority": priority}, now=now)
             if supersede_awaiting_approval and run_id:
                 superseded = connection.execute(

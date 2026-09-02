@@ -12,6 +12,8 @@ from typing import Iterable, Protocol, Sequence
 
 import yaml
 
+from ai_harness.project import trust_key
+
 from .models import DocumentType, KnowledgeDocument, KnowledgeRequest, KnowledgeType
 
 
@@ -93,6 +95,36 @@ def _within(path: Path, root: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _private_project_root(
+    control_root: Path, request: KnowledgeRequest
+) -> tuple[Path, Path] | None:
+    """Resolve private knowledge without trusting a non-unique display id.
+
+    New project-aware runs may read only a directory bound to their opaque
+    repository key. Legacy runs retain the historical slug layout so existing
+    unkeyed workflows remain compatible.
+    """
+
+    projects_root = control_root.resolve() / "docs" / "projects"
+    if request.project_key:
+        project_key = request.project_key.strip()
+        if len(project_key) != 64 or any(
+            character not in "0123456789abcdef" for character in project_key
+        ):
+            return None
+        if project_key != trust_key(request.repository):
+            return None
+        project_root = projects_root / "by-key" / project_key
+    elif request.project:
+        project_root = projects_root / request.project
+    else:
+        return None
+    resolved = project_root.resolve()
+    if not _within(resolved, projects_root):
+        return None
+    return resolved, projects_root
 
 
 def _document_id(source: str, path: str, title: str) -> str:
@@ -325,9 +357,10 @@ class PolicySource:
                     "repository/AGENTS.md",
                 )
             )
-        if request.project_profile != "agent_workspace" and request.project:
-            projects = control_root / "docs" / "projects"
-            privacy = projects / request.project / "privacy.md"
+        private_root = _private_project_root(control_root, request)
+        if request.project_profile != "agent_workspace" and private_root is not None:
+            project_root, projects = private_root
+            privacy = project_root / "privacy.md"
             if _within(privacy, projects):
                 candidates.append(
                     (
@@ -336,7 +369,8 @@ class PolicySource:
                         DocumentType.POLICY,
                         82,
                         "Target project privacy policy",
-                        f"control-plane/projects/{request.project}/privacy.md",
+                        "control-plane/projects/"
+                        f"{_relative_or_absolute(project_root, projects)}/privacy.md",
                     )
                 )
         documents: list[KnowledgeDocument] = []
@@ -502,11 +536,13 @@ class PrivateProjectKnowledgeSource:
     name: str = "private_project_knowledge"
 
     def collect(self, request: KnowledgeRequest) -> tuple[KnowledgeDocument, ...]:
-        if request.project_profile == "agent_workspace" or not request.project:
+        if request.project_profile == "agent_workspace":
             return ()
-        projects_root = self.control_root.resolve() / "docs" / "projects"
-        project_root = (projects_root / request.project).resolve()
-        if not _within(project_root, projects_root) or not (project_root / "privacy.md").is_file():
+        private_root = _private_project_root(self.control_root, request)
+        if private_root is None:
+            return ()
+        project_root, projects_root = private_root
+        if not (project_root / "privacy.md").is_file():
             return ()
         documents: list[KnowledgeDocument] = []
         for path, root in _iter_bounded_files((project_root / "wiki", project_root / "graph")):

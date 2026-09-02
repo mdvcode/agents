@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from ai_harness.project import trust_key
 from ai_harness import cli as agent_cli
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -990,6 +991,8 @@ def test_fast_workflow_uses_only_implementation_model_for_non_code_change(
     state = agent_role_runner.run_roles(
         run_id="fast-role-bound",
         repository=tmp_path,
+        project_id="fast-project",
+        project_key=trust_key(tmp_path),
         adapter_command=command,
         dry_run=True,
         mode="auto",
@@ -1003,6 +1006,31 @@ def test_fast_workflow_uses_only_implementation_model_for_non_code_change(
     }
     assert state["budgets"]["max_duration_seconds"] == 900
     assert state["effective_mode"] == "fast"
+    assert state["project_id"] == "fast-project"
+    assert state["project_key"] == trust_key(tmp_path)
+    issue = json.loads(
+        (
+            tmp_path
+            / ".agent-runs"
+            / "fast-role-bound"
+            / "artifacts"
+            / "issue.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert issue["project_id"] == "fast-project"
+    assert issue["project_key"] == trust_key(tmp_path)
+    implementation_context = json.loads(
+        (
+            tmp_path
+            / ".agent-runs"
+            / "fast-role-bound"
+            / "context-manifests"
+            / "implementation-agent.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert implementation_context["project"] == "fast-project"
+    assert implementation_context["project_key"] == trust_key(tmp_path)
+    assert implementation_context["project_profile"] == "agent_workspace"
 
 
 def test_resume_production_runtime_reloads_trusted_command() -> None:
@@ -1023,6 +1051,37 @@ def test_resume_fixture_runtime_reuses_stored_command() -> None:
     }
 
     assert agent_role_runner.resume_runtime_command(stored) == "python fake_adapter.py"
+
+
+def test_resume_rejects_project_identity_change(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    runs = tmp_path / ".agent-runs"
+    run_dir = runs / "identity-resume"
+    run_dir.mkdir(parents=True)
+    (run_dir / "workflow.json").write_text(
+        json.dumps(
+            {
+                "run_id": "identity-resume",
+                "execution_status": "resuming",
+                "project_id": "project",
+                "project_key": "2" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agent_role_runner, "RUNS", runs)
+
+    state = agent_role_runner.run_roles(
+        run_id="identity-resume",
+        resume=True,
+        project_id="project",
+        project_key="3" * 64,
+    )
+
+    assert state["execution_status"] == "blocked"
+    assert state["blockers"] == ["project identity changed since this run started"]
 
 
 def test_agent_role_runner_preflights_configured_runtime_before_roles(tmp_path: Path, monkeypatch: object) -> None:

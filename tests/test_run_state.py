@@ -148,3 +148,24 @@ def test_empty_attachment_digest_preserves_legacy_task_fingerprint(tmp_path: Pat
         **values,
         input_manifest_sha256="a" * 64,
     ) != expected
+
+
+def test_continuation_project_identity_preserves_new_and_legacy_runs() -> None:
+    assert run_state.continuation_project_identity({}) == {}
+    assert run_state.continuation_project_identity(
+        {"project_id": "local-project", "project_key": "b" * 64}
+    ) == {"project_id": "local-project", "project_key": "b" * 64}
+
+
+def test_continuation_project_identity_rejects_partial_or_corrupt_state() -> None:
+    for workflow in (
+        {"project_id": "local-project"},
+        {"project_id": "", "project_key": ""},
+        {"project_id": "Local Project", "project_key": "b" * 64},
+        {"project_id": "local-project", "project_key": "short"},
+    ):
+        try:
+            run_state.continuation_project_identity(workflow)
+        except ValueError:
+            continue
+        raise AssertionError(f"invalid project identity was accepted: {workflow!r}")

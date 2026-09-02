@@ -4,11 +4,14 @@ Tweebit AI Harness by Daryna runs software tasks in local Git repositories throu
 
 It supports single tasks, parallel work in isolated Git worktrees, batches across several repositories, background recovery, and explicit human approval when a decision cannot be made safely. Merge and deployment always remain human actions.
 
-The local Tweebit v0.3.0 release candidate keeps this standalone architecture—there is no Chrome
-extension and no Codex Projects clone or cloud sync. Its redesigned dashboard uses a lightweight,
-collapsible desktop sidebar and a mobile off-canvas menu to separate **Создать**, **Задачи**,
-**Статистика**, and **Adaptive Lab**. The focused composer keeps Auto/Adaptive/Fast/Full/Goal
-visible and adds private
+The local Tweebit v0.4.0 release candidate keeps this standalone architecture—there is no Chrome
+extension or cloud synchronization. Its local **Проекты** catalog reads only explicitly
+initialized, trusted repositories and uses the same folder, Git workspace, `AGENTS.md`, and
+`.agent/project.yaml` as Codex. The dashboard uses a lightweight, collapsible desktop sidebar and a
+mobile off-canvas menu to separate **Проекты**, **Задачи**, **Статистика**, and **Adaptive Lab**,
+with **Новая задача** remaining the single focused composer. Project and task records stay
+distinct: every new task belongs to one project, while the global task list remains an operational
+view across all projects. The composer keeps Auto/Adaptive/Fast/Full/Goal visible and adds private
 five-file/PDF intake with defaults of 100 MiB per file and 500 MiB per task. A locally trusted
 project may raise those limits to the hard ceilings of 512 MiB per file and 2.5 GiB per task.
 Pending uploads are bounded to 32 sets and 6 GiB; direct runtime images are limited to 10 MiB each
@@ -50,7 +53,7 @@ The installer creates an isolated application environment, installs the official
 
 ## Install
 
-Tweebit v0.3.0 is currently a local, unpublished release candidate. Install it only from the exact
+Tweebit v0.4.0 is currently a local, unpublished release candidate. Install it only from the exact
 reviewed local checkout that contains the candidate:
 
 ```sh
@@ -126,12 +129,28 @@ Or use the local browser dashboard:
 agent dashboard
 ```
 
-The dashboard opens on **Создать** for focused single-task intake. **Задачи** contains attention,
-active work, history, and the progressive-disclosure batch builder; attention is a task filter, not
-a separate object type. YAML remains available only under the advanced import section. The project
-control selects the current initialized repository; it is not a project catalog or a second source
-of project state. **Статистика** is a separate full section for operational counters, service
-health, and worker state; task details remain in **Задачи**.
+The dashboard opens on **Новая задача** for focused single-task intake. **Проекты** lists
+only repositories already registered by `agent init`; it does not scan the computer. Opening a
+project shows its task scope and durable local context, while **Новая задача** reuses the same
+composer with that project preselected. **Задачи** remains the global operational list across all
+projects and contains attention, active work, history, and the progressive-disclosure batch
+builder. YAML remains available only under the advanced import section. **Статистика** is a separate
+full section for operational counters, service health, and worker state; task details remain in
+**Задачи**.
+
+**Открыть в Codex** uses the selected project's trusted canonical folder and the supported local
+Codex workspace launcher. Tweebit does not read or mutate private Codex application databases and
+does not claim to create or synchronize native Codex sidebar projects. The existing provider-neutral
+runtime remains authoritative for execution; Codex SDK is one shipped provider, not the project
+identity itself.
+
+Project detail keeps **Memory**, **Skills**, and **Tools** under one compact context summary instead
+of adding three more top-level sections. This release does not claim automatic long-term learning:
+instructions, selected repository documentation, run artifacts, the run's Codex thread, and
+consented attachments form the effective task context. Skills are role-scoped Harness playbooks;
+Tools are governed capabilities and permissions, not memory. A curated editable project-memory
+surface remains deferred until its provenance, freshness, retention, and runtime indexing can be
+shown honestly.
 
 The dashboard's **Adaptive Lab** section reads the backend acceptance report and
 compares Full with Adaptive. `NOT ENOUGH DATA` means that the representative paired A/B acceptance

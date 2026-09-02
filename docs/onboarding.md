@@ -1,6 +1,6 @@
 # Agent Onboarding
 
-For the local, unpublished Tweebit v0.3.0 release candidate, run `./install.sh` only from the exact
+For the local, unpublished Tweebit v0.4.0 release candidate, run `./install.sh` only from the exact
 reviewed local checkout, then run `agent init` inside the project. Keep updates pinned with `agent
 update --source /absolute/path/to/reviewed/tweebit-checkout`; a source-less or public
 `mdvcode/agents` install selects the public baseline. See `README.md` and `docs/cli.md`. The

@@ -2,12 +2,11 @@
 
 ## Release-candidate comparison
 
-Status: **local v0.3.0 release candidate in the current working tree; not published**
+Status: **local v0.4.0 release candidate in the current working tree; feature branch published for review**
 
 This document compares the public [`mdvcode/agents`](https://github.com/mdvcode/agents)
 baseline at `6871a26c68afefd8f2140ac7da625970dc454304` with the current Tweebit working
-tree. The candidate was developed directly by Codex; it was not implemented by submitting this
-change as a task to the Harness itself.
+tree. The candidate is maintained in a separate review branch and is not merged or deployed.
 
 Tweebit remains a standalone, local AI Harness. It is not a Chrome extension and it is not a
 Codex-only shell. The provider boundary remains independent, although the only runtime adapters
@@ -17,10 +16,11 @@ currently shipped are Codex SDK and Codex CLI compatibility.
 
 > The public system is a technical local Agent Control dashboard. Tweebit keeps its execution,
 > safety, recovery, and Adaptive foundations, but replaces the crowded main surface with a light
-> collapsible desktop sidebar (mobile off-canvas) and four sections: **Создать**, **Задачи**,
-> **Статистика**, and **Adaptive Lab**. The focused composer keeps Auto/Adaptive/Fast/Full/Goal visible and accepts up to
-> five files including PDF. It stays local and standalone—no Chrome extension, no Codex Projects
-> clone or cloud sync. Files are privately validated and attached to the run; both runtimes receive
+> collapsible desktop sidebar (mobile off-canvas), a trusted local **Проекты** catalog, global
+> **Задачи**, **Статистика**, and **Adaptive Lab**. **Новая задача** remains the single focused
+> composer; each task belongs to one project and remains visible in the global operations list. The
+> composer keeps Auto/Adaptive/Fast/Full/Goal visible and accepts up to five files including PDF. It
+> stays local and standalone—no Chrome extension or cloud sync. Files are privately validated and attached to the run; both runtimes receive
 > bounded text/PDF-text context, while Codex SDK additionally receives revalidated direct and
 > scanned images.
 
@@ -29,12 +29,14 @@ currently shipped are Codex SDK and Codex CLI compatibility.
 | Area | Public baseline `6871a26` | Tweebit release candidate |
 | --- | --- | --- |
 | Product identity | `agent` CLI and the local **Agent Control** dashboard. | User-facing name is **Tweebit AI Harness by Daryna**. The Python distribution and `agent` command keep their compatibility names. |
-| Information architecture | Operations, configuration, diagnostics, task intake, and Adaptive evidence compete for attention. | A lightweight collapsible desktop sidebar and mobile off-canvas menu separate **Создать**, **Задачи**, **Статистика**, and **Adaptive Lab**. The composer stays focused; batch and technical controls use progressive disclosure. |
+| Information architecture | Operations, configuration, diagnostics, task intake, and Adaptive evidence compete for attention. | A lightweight collapsible desktop sidebar and mobile off-canvas menu provide **Проекты**, global **Задачи**, **Статистика**, and **Adaptive Lab**. **Новая задача** is a primary action and the only composer flow; batch and technical controls use progressive disclosure. |
 | Task attention | Questions, approvals, active work, history, and system telemetry share the operations surface. | **Задачи** puts actionable items first. Attention is a task filter over backend-authoritative lifecycle data, not a new entity or client-invented state. |
 | Operational statistics | Counters, service health, worker state, and task details compete on the same surface. | **Статистика** is a separate full section for counters, service health, and worker state. Task details remain in **Задачи**. |
 | Modes | Backend supports `auto`, `adaptive`, `fast`, `full`, and `goal`. | The same five mutually exclusive values are visible in one selector: **Auto / Adaptive / Fast / Full / Goal**. Auto chooses Fast or Full from risk and cannot choose Adaptive until authoritative acceptance is `PASS`; Adaptive is a manual Beta opt-in until then, not an additional checkbox. |
 | Adaptive | Efficiency and acceptance diagnostics live in the main technical surface. | **Adaptive Lab** is a separate analytics/evidence section. The execution mode remains named **Adaptive**, and the backend remains authoritative for `PASS`, `FAIL`, and `NOT ENOUGH DATA`. |
-| Project/workspace | Work is bound to an initialized and explicitly trusted local Git repository. | The composer selects and summarizes the current initialized project and workspace mode. There is no project catalog, second project authority, Codex Projects clone, filesystem-wide scan, or cloud sync. |
+| Project/workspace | Work is bound to an initialized and explicitly trusted local Git repository. | A first-class local project catalog reads the existing private trust registry. One project maps to one trusted primary repository; project detail and global Tasks reuse the same task records. There is no second project authority, filesystem-wide scan, private Codex-state access, or cloud sync. |
+| Codex connection | Codex SDK and CLI execute runtime roles, but the dashboard has no project-level handoff. | Project actions can open the trusted workspace in Codex through the supported local launcher. Harness and Codex share the folder, Git state, worktrees, and `AGENTS.md`; Tweebit does not claim native Codex sidebar synchronization. |
+| Context, memory, skills, tools | Context sources, role playbooks, runtime continuity, and tool policy exist as separate technical mechanisms without a clear project-level explanation. | Project detail presents one compact context model. Memory is not marketed as automatic learning; Skills are role-scoped playbooks, and Tools are governed capabilities. Editable durable memory is deferred until provenance, freshness, retention, and actual runtime indexing are explicit. |
 | Attachments | The dashboard has no general file/PDF context intake. | The browser can select, drop, or paste up to **5** files, show removable file chips, upload them to private local staging, and bind an immutable input manifest to the run. |
 | Limits | No attachment contract. | Defaults are **100 MiB per file** and **500 MiB per task**. A locally trusted project may raise them to hard ceilings of **512 MiB per file** and **2.5 GiB per task**. The pending-upload pool is capped at **32 sets / 6 GiB** and staging TTL defaults to 24 hours. Runtime text is capped at **120,000 bytes total / 24,000 per reference**; direct image inputs are capped at **10 MiB each / 20 references**. |
 | PDF | No dashboard PDF intake. | PDF is included in the first candidate: bounded local inspection, text extraction, and scanned-page rendering are implemented. Encrypted or malformed PDFs are rejected. |
@@ -71,15 +73,17 @@ Included in this candidate:
 
 - local standalone Harness operation;
 - lightweight collapsible desktop navigation and an accessible mobile off-canvas menu;
-- four focused sections: **Создать**, **Задачи**, **Статистика**, and **Adaptive Lab**;
+- a primary **Новая задача** action plus focused **Проекты**, **Задачи**, **Статистика**, and **Adaptive Lab** sections;
+- a trusted local project catalog backed by existing `agent init` registrations, with one project per primary repository;
+- one authoritative task record rendered in both project scope and the global Tasks operations view;
+- supported local workspace opening in Codex without private application-state access or sidebar-sync claims;
 - attention as a filter over authoritative tasks rather than a separate client-side entity;
 - a full **Статистика** section for counters, service health, and worker state, separate
   from task details and Adaptive efficiency analysis;
 - visible Auto, Adaptive, Fast, Full, and Goal selection;
 - a separate **Adaptive Lab** evidence surface without renaming Adaptive execution mode or changing
   backend verdict ownership;
-- selection and summary of the current trusted project/workspace rather than a project catalog or
-  second project database;
+- selection, summary, and task-scoped detail for registered trusted projects without a second project database;
 - five-file local intake with large bounded limits and PDF in the first release candidate;
 - explicit per-task attachment-runtime consent in UI, API, task envelope, and worker validation;
 - bounded text and PDF-text runtime context for Codex SDK and Codex CLI;
@@ -89,8 +93,8 @@ Included in this candidate:
 Not included:
 
 - a Chrome extension;
-- a Codex Projects clone or Codex/cloud synchronization;
-- a standalone project catalog or filesystem-wide project discovery;
+- private Codex Projects/sidebar synchronization or Codex/cloud synchronization;
+- filesystem-wide project discovery;
 - cloud hosting, shared accounts, or multi-user collaboration;
 - a continuing chat that silently changes a run after launch;
 - additional production model providers;

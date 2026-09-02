@@ -23,6 +23,42 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNS_DIR = ROOT / ".agent-runs"
 
 
+def continuation_project_identity(workflow: dict[str, Any]) -> dict[str, str]:
+    """Return validated optional project identity for a queued continuation.
+
+    Runs created before first-class Projects do not contain either field and
+    remain resumable.  New runs persist both fields as one identity pair so a
+    continuation cannot silently detach from its registered project.
+    """
+
+    has_project_id = "project_id" in workflow
+    has_project_key = "project_key" in workflow
+    if not has_project_id and not has_project_key:
+        return {}
+    if has_project_id != has_project_key:
+        raise ValueError("workflow project identity is incomplete")
+    project_id = workflow.get("project_id")
+    project_key = workflow.get("project_key")
+    if not isinstance(project_id, str) or not isinstance(project_key, str):
+        raise ValueError("workflow project identity must contain strings")
+    project_id = project_id.strip()
+    project_key = project_key.strip()
+    if not project_id or not project_key:
+        raise ValueError("workflow project identity is incomplete")
+    if (
+        len(project_id) > 64
+        or project_id.strip("-") != project_id
+        or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in project_id)
+    ):
+        raise ValueError("workflow project id is invalid")
+    if (
+        len(project_key) != 64
+        or any(character not in "0123456789abcdef" for character in project_key)
+    ):
+        raise ValueError("workflow project key is invalid")
+    return {"project_id": project_id, "project_key": project_key}
+
+
 def continuation_attachment_payload(workflow: dict[str, Any]) -> dict[str, Any]:
     """Return validated attachment metadata for a continuation queue record."""
 

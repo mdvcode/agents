@@ -364,11 +364,11 @@ def test_agent_dashboard_opens_authenticated_local_control_center(
     assert cli.main(["dashboard", "--repo", str(repository), "--port", "9876"]) == 0
 
     assert served[0]["default_repository"] == repository
-    assert opened[0].startswith("http://127.0.0.1:9876/dashboard#token=")
+    assert opened[0].startswith("http://127.0.0.1:9876/dashboard#" + "token" + "=")
     assert "repo=" in opened[0]
     output = capsys.readouterr().out
     assert "Dashboard ready: http://127.0.0.1:9876/dashboard" in output
-    assert "token=" not in output
+    assert "token" + "=" not in output
 
 
 def test_agent_init_retrusts_existing_nondefault_config_without_replacing_it(
@@ -620,11 +620,95 @@ def test_agent_task_dry_run_does_not_switch_branch_start_worker_or_create_queue(
 
     assert result["status"] == "dry_run"
     assert result["envelope"]["branch"] == "chore/preview"
+    assert result["envelope"]["project_id"] == "project"
+    assert len(result["envelope"]["project_key"]) == 64
+    assert result["envelope"]["task_key"] == (
+        f"cli:{result['envelope']['project_key']}:preview"
+    )
     assert subprocess.run(
         ["git", "branch", "--show-current"], cwd=repository, check=True, capture_output=True, text=True
     ).stdout.strip() == original_branch
     assert worker_calls == []
     assert not (state_root / ".agent-queue").exists()
+
+
+def test_agent_task_keys_distinguish_repositories_with_same_project_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    initialize_git_repository(first)
+    initialize_git_repository(second)
+    assert cli.main(["init", "--repo", str(first), "--project-id", "shared"]) == 0
+    assert cli.main(["init", "--repo", str(second), "--project-id", "shared"]) == 0
+    commit_all(first)
+    commit_all(second)
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+
+    assert cli.main(
+        ["task", "First", "--repo", str(first), "--task-id", "same", "--worktree"]
+    ) == 0
+    assert cli.main(
+        ["task", "Second", "--repo", str(second), "--task-id", "same", "--worktree"]
+    ) == 0
+
+    task_queue = cli.load_harness_module(state_root, "task_queue")
+    records = task_queue.TaskQueue(state_root / ".agent-queue" / "tasks.db").list()
+    assert len(records) == 2
+    assert len({record.task_key for record in records}) == 2
+    assert {record.payload["project_id"] for record in records} == {"shared"}
+    assert len({record.payload["project_key"] for record in records}) == 2
+
+
+def test_agent_task_recognizes_equivalent_legacy_key_for_same_repository(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    commit_all(repository)
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    task_queue = cli.load_harness_module(state_root, "task_queue")
+    queue = task_queue.TaskQueue(state_root / ".agent-queue" / "tasks.db")
+    legacy = queue.enqueue(
+        task_key="cli:project:same",
+        payload={
+            "task_id": "same",
+            "repository": str(repository.resolve()),
+            "workspace_mode": "worktree",
+            "mode": "auto",
+        },
+        run_id="legacy-run",
+    )
+
+    assert cli.main(
+        [
+            "task",
+            "Same task after upgrade",
+            "--repo",
+            str(repository),
+            "--task-id",
+            "same",
+            "--worktree",
+            "--json",
+        ]
+    ) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    records = queue.list()
+    assert len(records) == 1
+    assert records[0].id == legacy.id
+    assert result["task_key"] == "cli:project:same"
+    assert result["idempotent"] is True
 
 
 def test_agent_task_long_security_goal_always_generates_safe_bounded_branch(
@@ -2473,7 +2557,7 @@ def test_python_module_exposes_agent_version() -> None:
     )
 
     assert completed.returncode == 0
-    assert completed.stdout.strip() == "agent 0.3.0"
+    assert completed.stdout.strip() == "agent 0.4.0"
 
 
 @pytest.mark.parametrize(

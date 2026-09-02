@@ -28,10 +28,12 @@ if str(ROOT) not in sys.path:
 
 from ai_harness.observability import NoOpTelemetryRuntime, TelemetryRuntime, safe_telemetry_runtime
 from ai_harness.processes import run_managed_process
+from ai_harness.project import trust_key
 from ai_harness.recovery import RecoveryCoordinator, classify_failure, load_recovery_policy
 from ai_harness.recovery.models import persist_failure, sanitized_message
 from ai_harness.sdk_session import ManagedCodexSdkSession, SdkSessionUnavailable
 from ai_harness.workspace_cache import cache_environment
+from run_state import continuation_project_identity
 from task_graph import finalize_child_run, reconcile_waiting_parent
 
 RUNS_DIR = ROOT / ".agent-runs"
@@ -114,6 +116,8 @@ def safe_payload(record: TaskRecord) -> dict[str, Any]:
     allowed = {
         "task_id",
         "project",
+        "project_id",
+        "project_key",
         "repository",
         "branch",
         "base_branch",
@@ -155,6 +159,11 @@ def safe_payload(record: TaskRecord) -> dict[str, Any]:
     missing = [field for field in required if not isinstance(record.payload.get(field), str) or not record.payload[field]]
     if missing:
         raise ValueError("missing task payload fields: " + ", ".join(missing))
+    project_identity = continuation_project_identity(record.payload)
+    if project_identity and project_identity["project_key"] != trust_key(
+        Path(str(record.payload["repository"]))
+    ):
+        raise ValueError("task project key does not match the canonical repository")
     workspace_mode = record.payload.get("workspace_mode", "worktree")
     if workspace_mode not in {"checkout", "worktree", "isolated", "current_branch"}:
         raise ValueError("workspace_mode must be checkout or worktree")
@@ -338,6 +347,10 @@ class WorkflowWorkerPool:
             "--mode",
             payload.get("mode", "auto"),
         ]
+        if payload.get("project_id"):
+            command.extend(["--project-id", str(payload["project_id"])])
+        if payload.get("project_key"):
+            command.extend(["--project-key", str(payload["project_key"])])
         if payload.get("adapter_command"):
             command.extend(["--adapter-command", payload["adapter_command"]])
         if payload.get("runtime_provider"):

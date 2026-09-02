@@ -55,6 +55,7 @@ from ai_harness.execution_accounting import (
 )
 from ai_harness.planning import RolePolicy, TaskAnalyzer, WorkflowCompiler
 from ai_harness.planning.workflow_compiler import COMPILER_VERSION
+from ai_harness.project import trust_key
 from context_compiler import create_context_manifest, role_capability, role_contract
 from repository_registry import RepositoryRecord, find_by_remote, load_local_project_record
 from runtime_contracts import contract_section, load_json, validate_contract
@@ -62,6 +63,7 @@ from runtimes import RuntimeConfigurationError, create_runtime
 from run_state import (
     RunLayout,
     continuation_attachment_payload,
+    continuation_project_identity,
     file_contents_snapshot,
     file_snapshot,
     find_completed_run,
@@ -2319,6 +2321,8 @@ def run_issue_intake(
     task_id: str,
     goal: str,
     project: str,
+    project_id: str,
+    project_key: str,
     repository: Path,
     worktree: Path,
     branch: str,
@@ -2330,6 +2334,11 @@ def run_issue_intake(
         "task_id": task_id,
         "goal": goal,
         "project": project,
+        **(
+            {"project_id": project_id, "project_key": project_key}
+            if project_id and project_key
+            else {}
+        ),
         "repository": str(repository.resolve()),
         "worktree": str(worktree.resolve()),
         "branch": branch,
@@ -2352,6 +2361,7 @@ def run_context_compiler(
     run_id: str,
     goal: str,
     project: str,
+    project_key: str,
     worktree: Path,
     artifacts_dir: Path,
     context_dir: Path,
@@ -2452,6 +2462,7 @@ def run_context_compiler(
         artifacts_dir=artifacts_dir,
         context_dir=context_dir,
         project=project,
+        project_key=project_key,
         project_profile=project_profile,
         token_budget=token_budget,
         allowed_tools=role_tools("planner"),
@@ -2580,6 +2591,7 @@ def run_adaptive_read_only_verifier(
         artifacts_dir=artifacts_dir,
         context_dir=context_dir,
         project=project,
+        project_key=str(state.get("project_key", "")),
         project_profile=project_profile,
         token_budget=role_budget,
         allowed_tools=role_tools(role),
@@ -2669,6 +2681,8 @@ def run_roles(
     task_id: str = "task",
     goal: str = "",
     project: str = "",
+    project_id: str = "",
+    project_key: str = "",
     repository: Path = ROOT,
     branch: str = "",
     base_branch: str = "main",
@@ -2721,6 +2735,31 @@ def run_roles(
             existing = load_json(existing_workflow)
         except (OSError, json.JSONDecodeError, ValueError):
             existing = {}
+    try:
+        requested_project_identity = continuation_project_identity(
+            {"project_id": project_id, "project_key": project_key}
+            if project_id or project_key
+            else {}
+        )
+        existing_project_identity = continuation_project_identity(existing)
+    except ValueError as exc:
+        return {
+            **existing,
+            "run_id": run_id,
+            "execution_status": "blocked",
+            "blockers": [str(exc)],
+        }
+    if (
+        resume
+        and requested_project_identity
+        and requested_project_identity != existing_project_identity
+    ):
+        return {
+            **existing,
+            "execution_status": "blocked",
+            "blockers": ["project identity changed since this run started"],
+        }
+    project_identity = existing_project_identity or requested_project_identity
     if resume:
         if not existing:
             return {"run_id": run_id, "execution_status": "blocked", "blockers": ["resume state is missing"]}
@@ -2779,6 +2818,15 @@ def run_roles(
         duplicate = find_completed_run(RUNS, fingerprint, exclude_run_id=run_id)
         if duplicate is not None:
             return {**duplicate, "deduplicated": True, "duplicate_of": duplicate.get("run_id", "")}
+    if project_identity and project_identity["project_key"] != trust_key(repository):
+        return {
+            **existing,
+            "run_id": run_id,
+            "execution_status": "blocked",
+            "blockers": [
+                "project identity does not match the canonical repository"
+            ],
+        }
     layout = RunLayout.create(RUNS, run_id)
     try:
         layout.assert_artifacts_dir(artifacts_dir)
@@ -2795,6 +2843,7 @@ def run_roles(
             "tokens_used": 0,
             "blockers": [str(exc)],
             "input_fingerprint": fingerprint,
+            **project_identity,
             **attachment_payload,
         }
         write_json(layout.workflow, state)
@@ -2939,6 +2988,7 @@ def run_roles(
             "task_id": task_id,
             "goal": goal,
             "project": project,
+            **project_identity,
             "project_profile": project_profile,
             "repository": str(repository),
             "worktree": str(worktree.resolve()),
@@ -3264,6 +3314,8 @@ def run_roles(
                 task_id=task_id,
                 goal=goal,
                 project=project,
+                project_id=str(state.get("project_id", "")),
+                project_key=str(state.get("project_key", "")),
                 repository=repository,
                 worktree=worktree,
                 branch=effective_branch,
@@ -3274,7 +3326,8 @@ def run_roles(
             result = run_context_compiler(
                 run_id=run_id,
                 goal=goal,
-                project=project,
+                project=str(state.get("project_id", "")) or project,
+                project_key=str(state.get("project_key", "")),
                 worktree=worktree,
                 artifacts_dir=run_artifacts,
                 context_dir=context_dir,
@@ -3329,7 +3382,7 @@ def run_roles(
                             state=dict(state),
                             role=companion,
                             goal=goal,
-                            project=project,
+                            project=str(state.get("project_id", "")) or project,
                             project_profile=project_profile,
                             repository=worktree,
                             artifacts_dir=run_artifacts,
@@ -3391,7 +3444,8 @@ def run_roles(
                     repository=worktree,
                     artifacts_dir=run_artifacts,
                     context_dir=context_dir,
-                    project=project,
+                    project=str(state.get("project_id", "")) or project,
+                    project_key=str(state.get("project_key", "")),
                     project_profile=project_profile,
                     token_budget=role_token_budget,
                     allowed_tools=role_tools(role),
@@ -4123,6 +4177,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task-id", default="task")
     parser.add_argument("--goal", default="")
     parser.add_argument("--project", default="")
+    parser.add_argument("--project-id", default="")
+    parser.add_argument("--project-key", default="")
     parser.add_argument("--repo", type=Path, default=ROOT)
     parser.add_argument("--branch", default="")
     parser.add_argument("--base-branch", default="main")
@@ -4149,6 +4205,8 @@ def main() -> int:
         task_id=args.task_id,
         goal=args.goal,
         project=args.project,
+        project_id=args.project_id,
+        project_key=args.project_key,
         repository=args.repo,
         branch=args.branch,
         base_branch=args.base_branch,

@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from ai_harness.project import trust_key
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -70,6 +71,8 @@ def test_metrics_expose_bounded_structured_question(tmp_path: Path) -> None:
         {
             "run_id": "question-run",
             "task_id": "question-task",
+            "project_id": "question-project",
+            "project_key": trust_key(tmp_path),
             "repository": str(tmp_path),
             "execution_status": "awaiting_approval",
             "attention": {
@@ -104,6 +107,8 @@ def test_metrics_expose_bounded_structured_question(tmp_path: Path) -> None:
     metrics = collect_metrics(runs_dir=runs, db_path=tmp_path / "queue.db")
 
     attention = metrics["runs"]["items"][0]["attention"]
+    assert metrics["runs"]["items"][0]["project_id"] == "question-project"
+    assert metrics["runs"]["items"][0]["project_key"] == trust_key(tmp_path)
     assert attention["action"] == "answer"
     assert attention["question"]["id"] == "environment"
     assert attention["question"]["options"][0]["recommended"] is True
@@ -454,15 +459,29 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         assert dashboard.index('id="newTaskPanel"') < dashboard.index('id="historyPanel"')
         assert dashboard.index('id="newTaskPanel"') < dashboard.index('id="adaptivePanel"')
         assert 'id="createView"' in dashboard
+        assert 'id="projectsView"' in dashboard
         assert 'id="tasksView"' in dashboard
         assert 'id="statsView"' in dashboard
         assert 'id="adaptiveView"' in dashboard
-        assert 'data-view-link="create" aria-current="page"' in dashboard
+        assert '<span class="nav-copy">Создать</span>' not in dashboard
+        assert 'data-view-link="projects"' in dashboard
         assert 'data-view-link="tasks"' in dashboard
         assert 'data-view-link="stats"' in dashboard
         assert 'data-view-link="adaptive"' in dashboard
+        assert dashboard.index('id="focusTask"') < dashboard.index(
+            'data-view-link="projects"'
+        )
+        assert dashboard.index('data-view-link="projects"') < dashboard.index(
+            'data-view-link="tasks"'
+        )
+        assert dashboard.index('data-view-link="tasks"') < dashboard.index(
+            'data-view-link="stats"'
+        )
+        assert dashboard.index('data-view-link="stats"') < dashboard.index(
+            'data-view-link="adaptive"'
+        )
         assert 'role="tablist"' not in dashboard
-        assert "new Set(['create','tasks','stats','adaptive'])" in dashboard
+        assert "new Set(['create','projects','tasks','stats','adaptive'])" in dashboard
         assert "window.addEventListener('popstate'" in dashboard
         assert 'id="appSidebar"' in dashboard
         assert 'id="sidebarCollapse" type="button" aria-controls="appSidebar"' in dashboard
@@ -496,6 +515,7 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         assert "max_parallel_tasks" in dashboard
         assert "Queued" in dashboard
         assert "PR ready" in dashboard
+        assert 'id="projectFilter"' in dashboard
         assert 'id="repositoryFilter"' in dashboard
         assert 'id="branchFilter"' in dashboard
         assert 'id="workerFilter"' in dashboard
@@ -530,11 +550,53 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         assert "'/ui/attachments'" in dashboard
         assert "attachment_set_ids" in dashboard
         assert "if(file.type)headers['Content-Type']=file.type" in dashboard
-        assert "repository=${encodeURIComponent(uploadRepository)}" in dashboard
+        assert "new URLSearchParams({name:file.name,repository:uploadRepository})" in dashboard
+        assert "params.set('project_key',projectKey)" in dashboard
         assert "files=[...state.contextFiles]" in dashboard
-        assert "uploadTaskAttachments(files,{repository})" in dashboard
+        assert (
+            "uploadTaskAttachments(files,{repository,projectKey:"
+            "project?.project_key||''})"
+            in dashboard
+        )
         assert "$('repository').disabled=true" in dashboard
         assert "refreshAttachmentConfiguration" in dashboard
+        assert 'id="projectSelect"' in dashboard
+        assert "project_key:project.project_key" in dashboard
+        assert "project_id:project.project_id" in dashboard
+        assert "params.set('project_key',project.project_key)" in dashboard
+        assert "sessionStorage.setItem('harness-project-key'" in dashboard
+        assert "sessionStorage.removeItem('harness-project-key')" in dashboard
+        assert "taskProjectIdentity(task)" in dashboard
+        assert "`Проект: ${project.label}`" in dashboard
+        assert "routeProjectKey()" in dashboard
+        assert "params.set('project',projectKey)" in dashboard
+        assert 'id="projectList" aria-live="polite"' in dashboard
+        assert 'id="projectDetailPanel" aria-live="polite"' in dashboard
+        assert 'id="addProjectPanel"' in dashboard
+        assert 'id="addProjectForm"' in dashboard
+        assert 'id="addProjectRepository"' in dashboard
+        assert "api('/ui/projects',{method:'POST',body:{repository}})" in dashboard
+        assert "api('/projects')" in dashboard
+        assert "api(`/projects/${encodeURIComponent(requestedKey)}`)" in dashboard
+        assert "requestId!==attachmentConfigRequest" in dashboard
+        assert "detailRequest!==projectDetailRequest" in dashboard
+        assert "preferred=repository?repositoryMatch" in dashboard
+        assert "if(state.projectDetailKey){projectDetailRequest+=1" in dashboard
+        assert "function projectLabel(project)" in dashboard
+        assert "list.dataset.signature===signature" in dashboard
+        assert "open-codex`" in dashboard
+        assert "confirm_concurrent_tasks:confirmed" in dashboard
+        assert "error.status===409" in dashboard
+        assert "agent init" in dashboard
+        assert ".agent/project.yaml" in dashboard
+        assert "Существующий AGENTS.md сохраняется" in dashboard
+        assert "Контекст проекта" in dashboard
+        assert "отдельная управляемая память планируется" in dashboard
+        assert "Подбираются автоматически по роли" in dashboard
+        assert "Ограничены профилем и политикой" in dashboard
+        assert '<span class="nav-copy">Память</span>' not in dashboard
+        assert '<span class="nav-copy">Навыки</span>' not in dashboard
+        assert '<span class="nav-copy">Инструменты</span>' not in dashboard
         assert "Другой ответ" in dashboard
         assert "question.options" in dashboard
         assert "item.requires_input" in dashboard
@@ -612,7 +674,7 @@ def test_dashboard_task_and_run_controls_delegate_to_product_cli(
 
     monkeypatch.setattr(ControlPlaneHandler, "agent_command", command)
     queue = TaskQueue(tmp_path / "queue.db")
-    token = "dashboard-test-token"
+    token = "test" + "-dashboard-token"
     server = ThreadingHTTPServer(
         ("127.0.0.1", 0),
         handler_factory(
@@ -759,7 +821,7 @@ def test_dashboard_batch_maps_parallel_to_worktree_and_repository_limit(
 
     monkeypatch.setattr(ControlPlaneHandler, "agent_command", command)
     queue = TaskQueue(tmp_path / "queue.db")
-    token = "dashboard-batch-token"
+    token = "test" + "-dashboard-batch-token"
     server = ThreadingHTTPServer(
         ("127.0.0.1", 0),
         handler_factory(

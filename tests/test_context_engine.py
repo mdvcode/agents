@@ -27,6 +27,7 @@ from ai_harness.context import (
 from ai_harness.context.cache import repository_fingerprints
 from ai_harness.context.sources import ObsidianSource, PolicySource
 from ai_harness.context.deduplication import deduplicate_documents
+from ai_harness.project import trust_key
 from scripts.context_compiler import create_context_manifest
 
 
@@ -247,6 +248,72 @@ def test_context_cache_hits_and_invalidates_only_when_selected_sources_change(tm
     assert compatible.log["cache"]["status"] == "compatible_hit"  # type: ignore[index]
     assert rebuilt.log["cache"]["status"] == "miss"  # type: ignore[index]
     assert "Changed authoritative overview" in rebuilt.package
+
+
+def test_context_cache_isolated_by_canonical_repository(tmp_path: Path) -> None:
+    first_repository = tmp_path / "first"
+    second_repository = tmp_path / "second"
+    first_repository.mkdir()
+    second_repository.mkdir()
+    cache = ContextCache(tmp_path / "cache")
+
+    class RepositoryNamedSource:
+        name = "repository_named"
+
+        def collect(self, request: KnowledgeRequest) -> tuple[KnowledgeDocument, ...]:
+            return (
+                KnowledgeDocument(
+                    id=request.repository.name,
+                    title="Repository identity",
+                    content=f"context for {request.repository.name}",
+                    source=self.name,
+                    path="identity.md",
+                    knowledge_type=KnowledgeType.REPOSITORY,
+                    document_type=DocumentType.REPOSITORY,
+                    priority=100,
+                ),
+            )
+
+    def engine(repository: Path) -> ContextEngine:
+        return ContextEngine(
+            sources=(RepositoryNamedSource(),),
+            project="duplicate-name",
+            project_key=trust_key(repository),
+            project_profile="agent_workspace",
+            cache=cache,
+            builder=ContextBuilder(ContextBudget(total_tokens=4000)),
+        )
+
+    first = engine(first_repository).build(
+        "Read identity", first_repository, "planner", "runtime"
+    )
+    second = engine(second_repository).build(
+        "Read identity", second_repository, "planner", "runtime"
+    )
+
+    assert first.log["cache"]["status"] == "miss"  # type: ignore[index]
+    assert second.log["cache"]["status"] == "miss"  # type: ignore[index]
+    assert "context for first" in first.package
+    assert "context for second" in second.package
+    assert "context for first" not in second.package
+
+
+def test_context_engine_rejects_project_key_from_another_repository(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    other = tmp_path / "other"
+    repository.mkdir()
+    other.mkdir()
+    engine = ContextEngine(
+        sources=(),
+        project="shared",
+        project_key=trust_key(other),
+        project_profile="agent_workspace",
+    )
+
+    with pytest.raises(ValueError, match="canonical repository"):
+        engine.build("Do not cross projects", repository, "planner", "runtime")
 
 
 def test_context_cache_path_invalidation_is_selective(tmp_path: Path) -> None:

@@ -43,12 +43,20 @@ from ai_harness.attachments.runtime import (
     DEFAULT_MAX_TEXT_BYTES_PER_REFERENCE,
     DEFAULT_MAX_TOTAL_TEXT_BYTES,
 )
+from ai_harness.codex_workspace import CodexWorkspaceError, open_codex_workspace
 from ai_harness.project import (
     CONFIG_RELATIVE_PATH,
     ProjectConfigError,
     load_project_config,
     project_attachment_limits,
     project_is_trusted,
+)
+from ai_harness.project_catalog import (
+    ProjectCatalogError,
+    ProjectNotFoundError,
+    ProjectUnavailableError,
+    load_project_catalog,
+    resolve_project_key,
 )
 from ai_harness.task_batch import BatchManifestError, parse_batch_manifest
 
@@ -190,6 +198,15 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
         if self.headers.get("Authorization", "") != f"Bearer {self.auth_token}":
             raise APIError(HTTPStatus.UNAUTHORIZED, "invalid control-plane token")
 
+    def require_project_catalog_authorization(self) -> None:
+        """Project paths remain private even on an otherwise read-only server."""
+
+        if not self.auth_token:
+            raise APIError(
+                HTTPStatus.FORBIDDEN,
+                "a control-plane bearer token is required for the project catalog",
+            )
+
     def body(self) -> tuple[bytes, dict[str, Any]]:
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -248,12 +265,80 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             True,
         )
 
-    def query_repository(self, values: dict[str, list[str]]) -> Path:
-        raw_repository = str(values.get("repository", [""])[0]).strip()
-        repository = Path(raw_repository or self.default_repository).expanduser().resolve()
+    def resolve_repository_selection(
+        self,
+        *,
+        raw_repository: Any = "",
+        raw_project_key: Any = "",
+        default_repository: Path | None = None,
+    ) -> Path:
+        """Resolve a legacy path and/or an opaque registered project key."""
+
+        repository_value = str(raw_repository or "").strip()
+        project_key = str(raw_project_key or "").strip()
+        if project_key:
+            try:
+                registered_repository = resolve_project_key(project_key)
+            except ProjectNotFoundError as exc:
+                raise APIError(HTTPStatus.NOT_FOUND, "project not found") from exc
+            except ProjectUnavailableError as exc:
+                raise APIError(
+                    HTTPStatus.CONFLICT, f"project is not ready ({exc.state})"
+                ) from exc
+            except ProjectCatalogError as exc:
+                raise APIError(HTTPStatus.BAD_REQUEST, str(exc)) from exc
+            if repository_value:
+                compatible_repository = Path(repository_value).expanduser().resolve()
+                if compatible_repository != registered_repository:
+                    raise APIError(
+                        HTTPStatus.BAD_REQUEST,
+                        "project_key and repository identify different projects",
+                    )
+            repository = registered_repository
+        else:
+            repository = Path(
+                repository_value or default_repository or self.default_repository
+            ).expanduser().resolve()
         if not repository.is_dir():
             raise APIError(HTTPStatus.BAD_REQUEST, "project folder does not exist")
         return repository
+
+    def query_repository(self, values: dict[str, list[str]]) -> Path:
+        return self.resolve_repository_selection(
+            raw_repository=values.get("repository", [""])[0],
+            raw_project_key=values.get("project_key", [""])[0],
+        )
+
+    def project_catalog(self, metrics: dict[str, Any]) -> list[dict[str, Any]]:
+        try:
+            projects = load_project_catalog(
+                tasks=metrics.get("queue", {}).get("items", []),
+                runs=metrics.get("runs", {}).get("items", []),
+            )
+        except ProjectCatalogError as exc:
+            raise APIError(HTTPStatus.BAD_REQUEST, str(exc)) from exc
+        default_repository = str(self.default_repository.resolve())
+        for project in projects:
+            project["is_default"] = project["repository"] == default_repository
+        return projects
+
+    def selected_project_identity(self, repository: Path) -> tuple[str, str]:
+        try:
+            projects = load_project_catalog()
+        except ProjectCatalogError as exc:
+            raise APIError(HTTPStatus.BAD_REQUEST, str(exc)) from exc
+        selected = next(
+            (
+                project
+                for project in projects
+                if project["state"] == "ready"
+                and project["repository"] == str(repository.resolve())
+            ),
+            None,
+        )
+        if selected is None:
+            return "", ""
+        return str(selected["project_key"]), str(selected["project_id"])
 
     def stage_attachment(self) -> dict[str, Any]:
         parsed = urlparse(self.path)
@@ -425,8 +510,19 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
         *,
         timeout: int = 120,
     ) -> dict[str, Any]:
-        command = [sys.executable, "-m", "ai_harness", *arguments, "--repo", str(repository), "--json"]
+        command = [
+            sys.executable,
+            "-I",
+            "-m",
+            "ai_harness",
+            *arguments,
+            "--repo",
+            str(repository),
+            "--json",
+        ]
         environment = os.environ.copy()
+        environment.pop("PYTHONPATH", None)
+        environment.pop("PYTHONHOME", None)
         # The CLI resolves staged attachment set ids below AI_HARNESS_HOME. Keep
         # the subprocess home and the HTTP upload store on the same explicit
         # root even when runs are written to a custom --runs-dir.
@@ -434,7 +530,7 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
         try:
             completed = subprocess.run(
                 command,
-                cwd=repository,
+                cwd=ROOT,
                 env=environment,
                 text=True,
                 capture_output=True,
@@ -455,11 +551,10 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
         return value
 
     def request_repository(self, payload: dict[str, Any]) -> Path:
-        raw_repository = str(payload.get("repository", "")).strip()
-        repository = Path(raw_repository or self.default_repository).expanduser().resolve()
-        if not repository.is_dir():
-            raise APIError(HTTPStatus.BAD_REQUEST, "project folder does not exist")
-        return repository
+        return self.resolve_repository_selection(
+            raw_repository=payload.get("repository", ""),
+            raw_project_key=payload.get("project_key", ""),
+        )
 
     def submit_batch(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.require_cli_mutations_enabled()
@@ -538,6 +633,8 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 self.send_asset(path.removeprefix("/assets/"))
                 return
             self.authorize()
+            if path == "/projects" or path.startswith("/projects/"):
+                self.require_project_catalog_authorization()
             metrics = collect_metrics(runs_dir=self.runs_dir, db_path=self.queue.path)
             if path == "/health":
                 self.send_json(HTTPStatus.OK, {"status": "ok", "service": metrics["service"]})
@@ -545,11 +642,37 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.OK, metrics)
             elif path == "/adaptive":
                 self.send_json(HTTPStatus.OK, metrics["adaptive"])
+            elif path == "/projects":
+                self.send_json(
+                    HTTPStatus.OK,
+                    {
+                        "schema_version": 1,
+                        "projects": self.project_catalog(metrics),
+                    },
+                )
+            elif path.startswith("/projects/"):
+                project_key = path.removeprefix("/projects/")
+                projects = self.project_catalog(metrics)
+                project = next(
+                    (
+                        item
+                        for item in projects
+                        if item["project_key"] == project_key
+                    ),
+                    None,
+                )
+                if project is None:
+                    raise APIError(HTTPStatus.NOT_FOUND, "project not found")
+                self.send_json(
+                    HTTPStatus.OK,
+                    {"schema_version": 1, "project": project},
+                )
             elif path == "/config":
                 parsed = urlparse(self.path)
                 repository = self.query_repository(
                     parse_qs(parsed.query, keep_blank_values=True)
                 )
+                project_key, project_id = self.selected_project_identity(repository)
                 limits, runtime_provider, capabilities, trusted = (
                     self.repository_settings(repository)
                 )
@@ -563,6 +686,8 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                     {
                         "default_repository": str(self.default_repository),
                         "repository": str(repository),
+                        "project_key": project_key,
+                        "project_id": project_id,
                         "refresh_seconds": 5,
                         "product_name": "Tweebit AI Harness by Daryna",
                         "runtime_provider": runtime_provider,
@@ -615,6 +740,78 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.CREATED, self.stage_attachment())
                 return
             raw, payload = self.body()
+            if path == "/ui/projects":
+                self.require_cli_mutations_enabled()
+                raw_repository = str(payload.get("repository", "")).strip()
+                if not raw_repository:
+                    raise APIError(
+                        HTTPStatus.BAD_REQUEST,
+                        "choose a project folder before adding it",
+                    )
+                repository = Path(raw_repository).expanduser().resolve()
+                if not repository.is_dir():
+                    raise APIError(
+                        HTTPStatus.BAD_REQUEST, "project folder does not exist"
+                    )
+                result = self.agent_command(repository, ["init"])
+                self.send_json(
+                    HTTPStatus.CREATED,
+                    {
+                        "status": "registered",
+                        "repository": str(repository),
+                        "result": result,
+                    },
+                )
+                return
+            parts = [part for part in path.split("/") if part]
+            if (
+                len(parts) == 4
+                and parts[:2] == ["ui", "projects"]
+                and parts[3] == "open-codex"
+            ):
+                project_key = parts[2]
+                try:
+                    repository = resolve_project_key(project_key)
+                    metrics = collect_metrics(
+                        runs_dir=self.runs_dir, db_path=self.queue.path
+                    )
+                    selected_project = next(
+                        (
+                            item
+                            for item in self.project_catalog(metrics)
+                            if item["project_key"] == project_key
+                        ),
+                        None,
+                    )
+                    conflicts = int(
+                        (selected_project or {}).get("counts", {}).get(
+                            "codex_conflicts", 0
+                        )
+                    )
+                    if conflicts and payload.get("confirm_concurrent_tasks") is not True:
+                        raise APIError(
+                            HTTPStatus.CONFLICT,
+                            "project has unfinished Harness tasks; explicit confirmation is required",
+                        )
+                    open_codex_workspace(repository)
+                except ProjectNotFoundError as exc:
+                    raise APIError(HTTPStatus.NOT_FOUND, "project not found") from exc
+                except ProjectUnavailableError as exc:
+                    raise APIError(
+                        HTTPStatus.CONFLICT,
+                        f"project is not ready ({exc.state})",
+                    ) from exc
+                except (ProjectCatalogError, CodexWorkspaceError) as exc:
+                    raise APIError(HTTPStatus.BAD_REQUEST, str(exc)) from exc
+                self.send_json(
+                    HTTPStatus.ACCEPTED,
+                    {
+                        "status": "opened",
+                        "project_key": project_key,
+                        "application": "Codex",
+                    },
+                )
+                return
             if path in {"/ui/tasks/batch", "/tasks/batch"}:
                 result = self.submit_batch(payload)
                 status = HTTPStatus.ACCEPTED if result["accepted"] else HTTPStatus.BAD_REQUEST
@@ -690,15 +887,59 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 return
             if path in {"/tasks", "/events"}:
                 source = str(payload.get("source", "api"))
-                repository = Path(str(payload.get("repository", ROOT)))
+                requested_project_key = str(payload.get("project_key", "")).strip()
+                repository = (
+                    self.resolve_repository_selection(
+                        raw_repository=payload.get("repository", ""),
+                        raw_project_key=requested_project_key,
+                        default_repository=ROOT,
+                    )
+                    if requested_project_key
+                    else Path(str(payload.get("repository", ROOT)))
+                )
+                project_key = ""
+                project_id = ""
+                if requested_project_key:
+                    project_key, project_id = self.selected_project_identity(repository)
+                    requested_project_id = str(payload.get("project_id", "")).strip()
+                    if requested_project_id and requested_project_id != project_id:
+                        raise APIError(
+                            HTTPStatus.BAD_REQUEST,
+                            "project_key and project_id identify different projects",
+                        )
                 event_payload = payload.get("payload", payload)
                 if not isinstance(event_payload, dict):
                     raise APIError(HTTPStatus.BAD_REQUEST, "event payload must be an object")
+                declared_project_key = str(
+                    event_payload.get("project_key", "")
+                ).strip()
+                declared_project_id = str(
+                    event_payload.get("project_id", "")
+                ).strip()
+                if not requested_project_key and (
+                    declared_project_key or declared_project_id
+                ):
+                    raise APIError(
+                        HTTPStatus.BAD_REQUEST,
+                        "select project identity with the top-level project_key",
+                    )
+                if declared_project_key and declared_project_key != project_key:
+                    raise APIError(
+                        HTTPStatus.BAD_REQUEST,
+                        "event project_key does not match the selected project",
+                    )
+                if declared_project_id and declared_project_id != project_id:
+                    raise APIError(
+                        HTTPStatus.BAD_REQUEST,
+                        "event project_id does not match the selected project",
+                    )
                 envelope = normalize_event(
                     source=source,
                     payload=event_payload,
                     repository=repository,
                     project=str(payload.get("project", "agent_workspace")),
+                    project_id=project_id,
+                    project_key=project_key,
                 )
                 record = enqueue_envelope(self.queue, envelope)
                 self.send_json(HTTPStatus.ACCEPTED, {"envelope": envelope, "queue_task": asdict(record)})
@@ -713,7 +954,6 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 )
                 self.send_json(HTTPStatus.ACCEPTED, {"feedback": feedback, "queue_task": asdict(record)})
                 return
-            parts = [part for part in path.split("/") if part]
             if len(parts) == 4 and parts[:2] == ["ui", "runs"]:
                 run_id, action = parts[2], parts[3]
                 if action not in {"answer", "approve", "retry", "abort"}:

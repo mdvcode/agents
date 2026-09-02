@@ -97,6 +97,17 @@ def validate_required(data: dict[str, Any], schema: dict[str, Any], label: str) 
     for field in schema.get("required", []):
         if field not in data:
             errors.append(f"{label}: missing required field {field!r}")
+    for raw_group in schema.get("all_or_none", []):
+        if not isinstance(raw_group, list) or not all(
+            isinstance(field, str) and field for field in raw_group
+        ):
+            errors.append(f"{label}: schema has an invalid all_or_none group")
+            continue
+        present = [field for field in raw_group if field in data]
+        if present and len(present) != len(raw_group):
+            errors.append(
+                f"{label}: fields {', '.join(raw_group)} must be present together"
+            )
     for field, allowed in schema.get("enums", {}).items():
         if field in data and data[field] not in allowed:
             errors.append(f"{label}: field {field!r} has invalid value {data[field]!r}")

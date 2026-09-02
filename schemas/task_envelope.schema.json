@@ -8,9 +8,10 @@
     "allowed_paths", "allowed_child_repositories", "graph_depth", "child_budget", "spawn_fingerprint",
     "external_id", "received_at", "metadata"
   ],
+  "all_or_none": [["project_id", "project_key"]],
   "types": {
     "event_id": "str", "source": "str", "event_type": "str", "task_key": "str",
-    "task_id": "str", "goal": "str", "project": "str", "repository": "str",
+    "task_id": "str", "goal": "str", "project": "str", "project_id": "str", "project_key": "str", "repository": "str",
     "branch": "str", "base_branch": "str", "workspace_mode": "str", "checkout_path": "str",
     "task_branch": "str", "base_sha": "str", "branch_owner_run_id": "str", "mode": "str", "runtime_provider": "str", "run_id": "str", "priority": "int",
     "max_retries": "int", "repository_max_parallel_tasks": "int", "batch_id": "str", "batch_index": "int",
@@ -18,7 +19,7 @@
     "spawn_reason": "str", "allowed_paths": "list", "allowed_child_repositories": "list",
     "graph_depth": "int", "child_budget": "dict", "spawn_fingerprint": "str",
     "input_manifest": "str", "input_manifest_sha256": "str", "attachment_count": "int", "attachment_runtime_consent": "bool",
-    "external_id": "str", "received_at": "str", "metadata": "dict"
+    "external_id": "str", "received_at": "str", "metadata": "dict", "idempotency_aliases": "list"
   },
   "enums": {
     "source": ["cli", "github_issue", "webhook", "api", "ci"],

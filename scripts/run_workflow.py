@@ -29,6 +29,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from run_state import (
     RunLayout,
     continuation_attachment_payload,
+    continuation_project_identity,
     find_completed_run,
     record_failure,
     task_fingerprint,
@@ -297,6 +298,8 @@ def run_workflow(
     task_id: str = "task",
     goal: str = "",
     project: str = "",
+    project_id: str = "",
+    project_key: str = "",
     repository: Path | None = None,
     branch: str = "",
     base_branch: str = "main",
@@ -315,6 +318,11 @@ def run_workflow(
         print(f"unknown workflow: {workflow_name}")
         return EXIT_INVALID_HARNESS_STATE
     project_value = project or "agent_workspace"
+    project_identity = continuation_project_identity(
+        {"project_id": project_id, "project_key": project_key}
+        if project_id or project_key
+        else {}
+    )
     goal_value = goal or task_id
     branch_value = branch or f"issue/{task_id}"
     repository_value = (repository or root).resolve()
@@ -417,6 +425,8 @@ def run_workflow(
                     "workflow": workflow_name,
                     "task_id": task_id,
                     "goal": goal_value,
+                    "project": project_value,
+                    **project_identity,
                     "repository": str(repository_value),
                     "workspace_mode": "checkout" if current_branch else "worktree",
                     "checkout_path": str(repository_value),
@@ -605,6 +615,17 @@ def run_workflow(
                 command = command + " --resume"
             if command.startswith("python3 scripts/agent_role_runner.py") and "--mode" not in command:
                 command = f"{command} --mode {quote_placeholder(mode)}"
+            if project_identity and command.startswith("python3 scripts/agent_role_runner.py"):
+                if "--project-id" not in command:
+                    command = (
+                        f"{command} --project-id "
+                        f"{quote_placeholder(project_identity['project_id'])}"
+                    )
+                if "--project-key" not in command:
+                    command = (
+                        f"{command} --project-key "
+                        f"{quote_placeholder(project_identity['project_key'])}"
+                    )
             if (
                 current_branch
                 and command.startswith("python3 scripts/agent_role_runner.py")
@@ -796,6 +817,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task-id", default="task")
     parser.add_argument("--goal", default="")
     parser.add_argument("--project", default="agent_workspace")
+    parser.add_argument("--project-id", default="")
+    parser.add_argument("--project-key", default="")
     parser.add_argument("--repo", type=Path, default=None)
     parser.add_argument("--branch", default="")
     parser.add_argument("--base-branch", default="main")
@@ -823,6 +846,8 @@ def main() -> int:
             task_id=args.task_id,
             goal=args.goal,
             project=args.project,
+            project_id=args.project_id,
+            project_key=args.project_key,
             repository=args.repo,
             branch=args.branch,
             base_branch=args.base_branch,

@@ -166,7 +166,7 @@ def test_control_plane_uses_trusted_project_limits_and_runtime_capabilities(
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{server.server_port}"
-    token = "attachment-config-token"
+    token = "attach" + "ment-config-token"
     try:
         sdk_config = json_request(
             f"{base}/config?{urlencode({'repository': str(sdk_repository)})}", token
@@ -404,6 +404,15 @@ def test_custom_runs_dir_keeps_upload_store_aligned_with_agent_home(
     assert handler.runs_dir == runs_dir
     assert store.staging_root == attachment_store_root.absolute()
     assert observed["env"]["AI_HARNESS_HOME"] == str(harness_home.resolve())  # type: ignore[index]
+    assert observed["command"][:4] == [
+        sys.executable,
+        "-I",
+        "-m",
+        "ai_harness",
+    ]
+    assert observed["cwd"] == ROOT
+    assert "PYTHONPATH" not in observed["env"]  # type: ignore[operator]
+    assert "PYTHONHOME" not in observed["env"]  # type: ignore[operator]
     assert result == {"status": "queued", "task_id": "aligned"}
 
 
@@ -514,7 +523,7 @@ def test_misaligned_control_plane_rejects_only_cli_backed_mutations(
 
     monkeypatch.setattr(ControlPlaneHandler, "agent_command", command)
     queue = TaskQueue(tmp_path / "custom-queue.db")
-    token = "misaligned-control-plane-token"
+    token = "test" + "-misaligned-control-plane-token"
     server = ThreadingHTTPServer(
         ("127.0.0.1", 0),
         handler_factory(

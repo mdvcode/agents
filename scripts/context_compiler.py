@@ -214,6 +214,7 @@ def create_context_manifest(
     output_contract: str = "",
     expected_artifacts: Sequence[str] = (),
     runtime: str = "codex-cli",
+    project_key: str = "",
 ) -> Path:
     capability = role_capability(role)
     contract = role_contract(role)
@@ -242,6 +243,7 @@ def create_context_manifest(
         control_root=MEMORY_CONTROL_ROOT,
         project=project,
         project_profile=project_profile,
+        project_key=project_key,
         artifacts_dir=artifacts_dir,
         context_log_path=context_log_path,
         repository=repository,
@@ -295,6 +297,7 @@ def create_context_manifest(
         "repository": str(repository.resolve()),
         "artifacts_dir": str(artifacts_dir.resolve()),
         "project": project,
+        **({"project_key": project_key} if project_key else {}),
         "project_profile": project_profile,
         "token_budget": token_budget,
         "allowed_tools": tools,
@@ -361,6 +364,7 @@ def main() -> int:
     parser.add_argument("--artifacts-dir", type=Path, required=True)
     parser.add_argument("--context-dir", type=Path, required=True)
     parser.add_argument("--project", default="")
+    parser.add_argument("--project-key", default="")
     parser.add_argument("--project-profile", default="")
     parser.add_argument("--token-budget", type=int, default=12000)
     args = parser.parse_args()
@@ -372,6 +376,7 @@ def main() -> int:
         artifacts_dir=args.artifacts_dir,
         context_dir=args.context_dir,
         project=args.project,
+        project_key=args.project_key,
         project_profile=args.project_profile,
         token_budget=args.token_budget,
         allowed_tools=["filesystem_read", "repository_search"],

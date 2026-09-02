@@ -4,7 +4,7 @@ This is the shortest supported path from a repository to autonomous execution.
 
 ## First start
 
-For the local, unpublished Tweebit v0.3.0 release candidate, use the exact reviewed checkout rather
+For the local, unpublished Tweebit v0.4.0 release candidate, use the exact reviewed checkout rather
 than the public `mdvcode/agents` installer, which installs the baseline:
 
 ```sh

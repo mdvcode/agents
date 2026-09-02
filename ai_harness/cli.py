@@ -40,6 +40,7 @@ from .project import (
     register_local_project,
     safe_branch,
     slug,
+    trust_key,
     write_project_config,
 )
 from .recovery.checkpoints import RoleCheckpoint, read_checkpoint, write_checkpoint
@@ -616,12 +617,15 @@ def handle_task(args: argparse.Namespace) -> int:
         )
     if branch in {config.base_branch, "main", "master", "trunk"}:
         raise CLIError("task branch must not be a protected/default branch")
-    external_id = f"{config.project_id}:{task_id}"
+    project_key = trust_key(repository)
+    external_id = f"{project_key}:{task_id}"
     run_id = datetime.now(timezone.utc).strftime(f"%Y%m%dT%H%M%S.%fZ-{task_id}")
     payload = {
         "external_id": external_id,
         "task_id": task_id,
-        "task_key": f"cli:{config.project_id}:{task_id}",
+        "task_key": f"cli:{project_key}:{task_id}",
+        "project_id": config.project_id,
+        "project_key": project_key,
         "goal": goal,
         "branch": branch,
         "base_branch": config.base_branch,
@@ -649,9 +653,13 @@ def handle_task(args: argparse.Namespace) -> int:
             payload=payload,
             repository=repository,
             project=config.profile,
+            project_id=config.project_id,
+            project_key=project_key,
         )
     except event_ingestion.EventError as exc:
         raise CLIError(f"task request is invalid: {exc}") from exc
+    legacy_task_key = f"cli:{config.project_id}:{task_id}"
+    envelope["idempotency_aliases"] = [legacy_task_key]
     if args.dry_run:
         if getattr(args, "attachment_sets", []):
             raise CLIError("attachment sets cannot be consumed by a dry run")
@@ -697,10 +705,22 @@ def handle_task(args: argparse.Namespace) -> int:
     except (sqlite3.Error, ValueError) as exc:
         raise CLIError(f"task queue could not be opened: {exc}") from exc
     queued_items = queue.list() if queue is not None else []
+    equivalent_task_keys = {str(envelope["task_key"]), legacy_task_key}
     existing_same_task = next(
-        (item for item in queued_items if item.task_key == envelope["task_key"]),
+        (
+            item
+            for item in queued_items
+            if item.task_key in equivalent_task_keys
+            and bool(item.payload.get("repository"))
+            and Path(str(item.payload["repository"])).resolve() == repository.resolve()
+        ),
         None,
     )
+    if existing_same_task is not None:
+        # Reuse a matching legacy key so upgrading an initialized project does
+        # not enqueue the same task a second time.  New tasks always retain the
+        # collision-safe key based on the canonical repository identity.
+        envelope["task_key"] = existing_same_task.task_key
     if requested_attachment_sets and existing_same_task is not None:
         raise CLIError(
             f"task id {task_id!r} already exists; use a new task id when submitting attachments"
@@ -708,7 +728,7 @@ def handle_task(args: argparse.Namespace) -> int:
     current_branch_conflicts = [
         item
         for item in queued_items
-        if item.task_key != envelope["task_key"]
+        if (existing_same_task is None or item.id != existing_same_task.id)
         and item.status not in {"completed", "cancelled"}
         and item.payload.get("workspace_mode") in {"checkout", "current_branch"}
         and bool(item.payload.get("repository"))
@@ -865,12 +885,17 @@ def handle_task(args: argparse.Namespace) -> int:
         "task_id": task_id,
         "task_key": record.task_key,
         "run_id": record.run_id,
+        "project_id": str(record.payload.get("project_id", config.project_id)),
+        "project_key": str(record.payload.get("project_key", project_key)),
         "repository": str(repository),
         "branch": stored_branch,
         "workspace_mode": str(record.payload.get("workspace_mode", workspace_mode)),
         "mode": str(record.payload.get("mode", args.mode)),
         "queue_db": str(queue_path),
-        "idempotent": record.payload.get("event_id") == envelope["event_id"],
+        "idempotent": (
+            existing_same_task is not None
+            or record.payload.get("event_id") == envelope["event_id"]
+        ),
         "worker": {
             "status": str(worker.get("status", "starting")),
             "pid": safe_int(worker.get("pid", 0)),

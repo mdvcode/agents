@@ -4,7 +4,7 @@ The Harness is installable as the `ai-harness` Python distribution and exposes o
 
 ## Install
 
-Tweebit v0.3.0 is currently a local, unpublished release candidate. Install it only from the exact
+Tweebit v0.4.0 is currently a local, unpublished release candidate. Install it only from the exact
 reviewed local checkout:
 
 ```sh
@@ -74,7 +74,17 @@ The ordinary visual entry point is:
 agent dashboard
 ```
 
-It starts an authenticated loopback control center for the initialized project and opens it in the default browser. The page launches tasks through the same CLI policy boundary and healthy worker as `agent task`, refreshes live task/worker state, displays bounded attention questions, and provides answer, approval, retry, and abort controls. **Очистить историю** hides only completed and cancelled task rows in that browser; active or actionable tasks remain visible, queue/run evidence is retained, and **Вернуть скрытые** restores the rows. The temporary token is passed in the URL fragment, moved to session storage, and removed from the visible URL. Use `Ctrl+C` to stop only the dashboard server.
+It starts an authenticated loopback control center and opens it in the default browser. **Проекты**
+lists only repositories explicitly registered by `agent init`; it never scans the computer. Every
+new task selects one project, while **Задачи** remains the global operations list across all
+projects. Project actions can initialize another chosen folder and open a trusted project folder in
+Codex without accessing private Codex application state. The page launches tasks through the same
+CLI policy boundary and healthy worker as `agent task`, refreshes live task/worker state, displays
+bounded attention questions, and provides answer, approval, retry, and abort controls. **Очистить
+историю** hides only completed and cancelled task rows in that browser; active or actionable tasks
+remain visible, queue/run evidence is retained, and **Вернуть скрытые** restores the rows. The
+temporary token is passed in the URL fragment, moved to session storage, and removed from the
+visible URL. Use `Ctrl+C` to stop only the dashboard server.
 
 Validate the installation once after installation or an upgrade:
 
@@ -164,7 +174,10 @@ agent status --json
 
 Status is read-only, project-scoped, and compact. It shows queue, run, and worker-service states without role transcripts, source contents, credentials, or raw events. Worker startup is an intentional side effect of `agent task`; read-only commands never start it.
 
-The dashboard provides one cross-repository queue with `Queued`, `Running`, `Testing`, `Needs input`, `PR ready`, and `Failed` lifecycle views. Repository, task branch, and worker filters can be combined. When active branches in one repository currently touch the same paths, both tasks receive a probable-conflict marker and a deterministic publish-first/rebase-second recommendation.
+The dashboard provides one cross-project queue with `Queued`, `Running`, `Testing`, `Needs input`,
+`PR ready`, and `Failed` lifecycle views. Project, repository, task branch, and worker filters can be
+combined. When active branches in one repository currently touch the same paths, both tasks receive
+a probable-conflict marker and a deterministic publish-first/rebase-second recommendation.
 
 During implementation, a role may propose a bounded independent child task. The deterministic router—not the model—decides whether it is allowed. A writing child receives its own worktree, branch, SDK thread, token/time budget, and `allowed_paths`; the parent records `root_run_id` and `parent_run_id`. Blocking failures stay in the normal sequential repair loop. Independent children may run in the background, after which the parent alone joins their patch, resumes its original SDK thread, runs the combined verification, and owns publication. Fan-out is limited to three children and graph depth to two levels.
 
