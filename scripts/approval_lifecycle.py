@@ -167,6 +167,62 @@ def checkpoint_fingerprint(workflow: dict[str, Any], role: str, reason: str) -> 
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+def verifier_artifact_unavailable(verifier: dict[str, Any]) -> bool:
+    """Return whether a verifier artifact reports an environmental limitation."""
+
+    if str(verifier.get("verdict", "")).lower() == "unavailable":
+        return True
+    markers = (
+        "unavailable",
+        "missing dependenc",
+        "command not found",
+        "browser",
+        "playwright",
+        "read-only",
+        "runtime capability",
+        "did not complete",
+    )
+    blockers = [
+        str(item).lower()
+        for item in verifier.get("blockers", [])
+        if isinstance(item, (str, int)) and str(item).strip()
+    ]
+    if blockers:
+        return all(any(marker in blocker for marker in markers) for blocker in blockers)
+    fallback = " ".join(
+        [
+            *[
+                str(item)
+                for item in verifier.get("warnings", [])
+                if isinstance(item, (str, int))
+            ],
+            *[
+                str(item)
+                for item in verifier.get("observed", [])
+                if isinstance(item, (str, int))
+            ],
+        ]
+    ).lower()
+    return any(marker in fallback for marker in markers)
+
+
+def one_time_repair_extension_available(workflow: dict[str, Any]) -> bool:
+    """Return whether the current exhausted loop can request one extra repair."""
+
+    last_route = workflow.get("last_route", {})
+    loop = last_route.get("loop", {}) if isinstance(last_route, dict) else {}
+    if not isinstance(loop, dict):
+        return False
+    name = str(loop.get("name", ""))
+    if not name or int(loop.get("iteration", 0) or 0) < int(
+        loop.get("max_iterations", 0) or 0
+    ):
+        return False
+    loops = workflow.get("loops", {})
+    stored = loops.get(name, {}) if isinstance(loops, dict) else {}
+    return isinstance(stored, dict) and int(stored.get("extensions_used", 0) or 0) < 1
+
+
 def default_scope(workflow: dict[str, Any], role: str) -> dict[str, Any]:
     changed = workflow.get("changed_files", [])
     paths = [str(item) for item in changed if isinstance(item, str)] if isinstance(changed, list) else []
@@ -195,8 +251,11 @@ def default_scope(workflow: dict[str, Any], role: str) -> dict[str, Any]:
     verifier_name = verifier_artifacts.get(role)
     verifier_path = Path(str(workflow.get("artifacts_dir", ""))) / str(verifier_name or "")
     if verifier_name and verifier_path.is_file():
-        actions.append("accept_unavailable_verification")
         verifier = read_json(verifier_path)
+        if verifier_artifact_unavailable(verifier):
+            actions.append("accept_unavailable_verification")
+        elif one_time_repair_extension_available(workflow):
+            actions.append("extend_repair_budget")
         verifier_details = {
             "verifier_fingerprint": hashlib.sha256(
                 json.dumps(verifier, sort_keys=True, separators=(",", ":")).encode("utf-8")

@@ -722,6 +722,73 @@ def test_consumed_repair_approval_cannot_prompt_again(tmp_path: Path) -> None:
     assert state["loops"]["review_repair"]["iterations"] == 3  # type: ignore[index]
 
 
+def test_consumed_one_time_repair_extension_starts_one_more_repair(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    review = json.loads((artifacts_dir / "review.json").read_text(encoding="utf-8"))
+    review.update(
+        {
+            "verdict": "broken",
+            "status": "block",
+            "blockers": ["REV-LOOP"],
+            "blocker_ids": ["REV-LOOP"],
+            "repair_required": True,
+        }
+    )
+    artifact(artifacts_dir / "review.json", review)
+    state = completed_state(
+        review_status="block",
+        approval_override={
+            "approval_id": "review-repair-extension",
+            "gate": "reviewer",
+            "scope": {
+                "actions": ["extend_repair_budget", "resume_workflow"],
+                "gate": "reviewer",
+            },
+        },
+    )
+    state["loops"]["review_repair"] = {"iterations": 3, "extensions_used": 0}  # type: ignore[index]
+
+    result = route(tmp_path, state, "reviewer")
+
+    assert result["next_role"] == "implementation-agent"
+    assert result["stop"] is False
+    assert "one-time approved repair extension" in result["reason"]
+    assert state["loops"]["review_repair"]["extensions_used"] == 1  # type: ignore[index]
+
+
+def test_second_repair_extension_is_not_reusable(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    review = json.loads((artifacts_dir / "review.json").read_text(encoding="utf-8"))
+    review.update(
+        {
+            "verdict": "broken",
+            "status": "block",
+            "blockers": ["REV-LOOP"],
+            "blocker_ids": ["REV-LOOP"],
+            "repair_required": True,
+        }
+    )
+    artifact(artifacts_dir / "review.json", review)
+    state = completed_state(
+        review_status="block",
+        approval_override={
+            "approval_id": "second-review-repair-extension",
+            "gate": "reviewer",
+            "scope": {
+                "actions": ["extend_repair_budget", "resume_workflow"],
+                "gate": "reviewer",
+            },
+        },
+    )
+    state["loops"]["review_repair"] = {"iterations": 3, "extensions_used": 1}  # type: ignore[index]
+
+    result = route(tmp_path, state, "reviewer")
+
+    assert result["next_role"] == "blocked"
+    assert result["stop"] is True
+    assert state["loops"]["review_repair"]["extensions_used"] == 1  # type: ignore[index]
+
+
 def test_critical_security_finding_blocks_workflow(tmp_path: Path) -> None:
     setup_artifacts(tmp_path)
     state = completed_state(security_blockers_present=True)

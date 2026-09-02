@@ -1051,6 +1051,7 @@ def _repair_route(
     artifacts_dir: Path,
     routing: dict[str, Any],
     approval_consumed: bool = False,
+    repair_budget_extended: bool = False,
 ) -> dict[str, Any]:
     config = _loop_config(name, routing)
     loops = state.get("loops")
@@ -1058,6 +1059,7 @@ def _repair_route(
         loops = {}
         state["loops"] = loops
     previous = loops.get(name, {}) if isinstance(loops.get(name), dict) else {}
+    extensions_used = int(previous.get("extensions_used", 0) or 0)
     iteration = min(
         int(previous.get("iterations", 0)) + 1,
         config["max_iterations"],
@@ -1083,6 +1085,7 @@ def _repair_route(
         "progress_detected": progress,
         "tokens_used": loop_tokens,
         "elapsed_seconds": loop_elapsed,
+        "extensions_used": extensions_used,
     }
     loops[name] = {
         "iterations": iteration,
@@ -1094,6 +1097,7 @@ def _repair_route(
         "elapsed_at_start": elapsed_at_start,
         "tokens_used": loop_tokens,
         "elapsed_seconds": loop_elapsed,
+        "extensions_used": extensions_used,
     }
     token_pressure = loop_tokens >= config["max_tokens"]
     exhausted = (
@@ -1124,6 +1128,15 @@ def _repair_route(
         ]
         if token_warning:
             loop_warnings.append(token_warning)
+        if approval_consumed and repair_budget_extended and extensions_used < 1:
+            loops[name]["extensions_used"] = extensions_used + 1
+            loop["extensions_used"] = extensions_used + 1
+            return _route(
+                config["to"],
+                f"{config['name']} received a one-time approved repair extension.",
+                loop=loop,
+                warnings=[token_warning] if token_warning else None,
+            )
         if approval_consumed:
             return _blocked(
                 f"{reason} The scoped approval was consumed, but the same checkpoint is still unresolved; repair it before retrying.",
@@ -1165,6 +1178,11 @@ def decide_next_role(
         and approval_override.get("gate") == current_role
         and isinstance(override_scope, dict)
         and "resume_workflow" in override_scope.get("actions", [])
+    )
+    repair_budget_extended = (
+        bypass_approval
+        and isinstance(override_scope, dict)
+        and "extend_repair_budget" in override_scope.get("actions", [])
     )
     if bypass_approval:
         state.pop("approval_override", None)
@@ -1262,6 +1280,7 @@ def decide_next_role(
             artifacts_dir=artifacts_dir,
             routing=routing,
             approval_consumed=bypass_approval,
+            repair_budget_extended=repair_budget_extended,
         )
 
     budget_blockers = _budget_blockers(state, workflows)
@@ -1309,6 +1328,7 @@ def decide_next_role(
                 artifacts_dir=artifacts_dir,
                 routing=routing,
                 approval_consumed=bypass_approval,
+                repair_budget_extended=repair_budget_extended,
             )
         else:
             route = _repair_route(
@@ -1318,6 +1338,7 @@ def decide_next_role(
                 artifacts_dir=artifacts_dir,
                 routing=routing,
                 approval_consumed=bypass_approval,
+                repair_budget_extended=repair_budget_extended,
             )
         if not route["stop"]:
             after_loop_budget = _budget_blockers(state, workflows)
@@ -1353,6 +1374,7 @@ def decide_next_role(
                 artifacts_dir=artifacts_dir,
                 routing=routing,
                 approval_consumed=bypass_approval,
+                repair_budget_extended=repair_budget_extended,
             )
             if not route["stop"]:
                 after_loop_budget = _budget_blockers(state, workflows)
@@ -1369,6 +1391,7 @@ def decide_next_role(
                 artifacts_dir=artifacts_dir,
                 routing=routing,
                 approval_consumed=bypass_approval,
+                repair_budget_extended=repair_budget_extended,
             )
             if not route["stop"]:
                 after_loop_budget = _budget_blockers(state, workflows)
@@ -1409,6 +1432,7 @@ def decide_next_role(
                     artifacts_dir=artifacts_dir,
                     routing=routing,
                     approval_consumed=bypass_approval,
+                    repair_budget_extended=repair_budget_extended,
                 )
         if verification == "unavailable":
             if not unavailability_accepted:

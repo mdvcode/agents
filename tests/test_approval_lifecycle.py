@@ -350,3 +350,56 @@ def test_verifier_request_is_scoped_to_current_artifact(tmp_path: Path) -> None:
         "resume_workflow",
     ]
     assert len(approval["requested_scope"]["verifier_fingerprint"]) == 64
+
+
+def test_available_verifier_requests_one_time_repair_extension(tmp_path: Path) -> None:
+    run = awaiting_run(tmp_path)
+    workflow_path = run / "workflow.json"
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    workflow["roles"] = [
+        {"role": "architecture-consistency-agent", "result": {"status": "completed"}},
+        {"role": "approval-gate", "result": {"status": "awaiting_approval"}},
+    ]
+    workflow["artifacts_dir"] = str(run / "artifacts")
+    workflow["last_route"] = {
+        "loop": {"name": "review_repair", "iteration": 3, "max_iterations": 3}
+    }
+    workflow["loops"] = {"review_repair": {"iterations": 3, "extensions_used": 0}}
+    write_json(workflow_path, workflow)
+    write_json(
+        run / "artifacts" / "architecture_consistency.json",
+        {
+            "verdict": "broken",
+            "blockers": ["Public archive queries bypass the publication policy."],
+        },
+    )
+
+    approval = request_approval(run, reason="Repair budget exhausted")
+
+    assert approval["requested_scope"]["actions"] == [
+        "extend_repair_budget",
+        "resume_workflow",
+    ]
+    assert "accept_unavailable_verification" not in approval["requested_scope"]["actions"]
+
+
+def test_available_verifier_without_exhausted_loop_cannot_be_accepted(
+    tmp_path: Path,
+) -> None:
+    run = awaiting_run(tmp_path)
+    workflow_path = run / "workflow.json"
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    workflow["roles"] = [
+        {"role": "reviewer", "result": {"status": "completed"}},
+        {"role": "approval-gate", "result": {"status": "awaiting_approval"}},
+    ]
+    workflow["artifacts_dir"] = str(run / "artifacts")
+    write_json(workflow_path, workflow)
+    write_json(
+        run / "artifacts" / "review.json",
+        {"verdict": "broken", "blockers": ["A concrete code defect remains."]},
+    )
+
+    approval = request_approval(run, reason="Concrete verifier blocker")
+
+    assert approval["requested_scope"]["actions"] == ["resume_workflow"]
