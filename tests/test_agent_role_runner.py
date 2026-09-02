@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from ai_harness import cli as agent_cli
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from approval_lifecycle import approve_run, prepare_resume, request_approval  # noqa: E402
 from runtimes.codex_cli import CodexCliRuntime  # noqa: E402
@@ -1183,6 +1185,142 @@ def test_technical_publication_failure_does_not_create_approval_gate(
     assert state["attention"]["action"] == "fix_then_retry"
     assert state["attention"]["summary"] == "Publication executor blocked or failed."
     assert not (run_dir / "artifacts" / "approval.json").exists()
+
+
+def test_terminal_model_resume_requests_exact_one_use_approval_without_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runs = tmp_path / ".agent-runs"
+    monkeypatch.setattr(agent_role_runner, "RUNS", runs)
+    run_id = "terminal-model-resume"
+    initial = agent_role_runner.run_roles(
+        run_id=run_id,
+        repository=tmp_path,
+        adapter_command=fake_adapter_script(tmp_path / "fake_adapter.py"),
+        mode="full",
+        dry_run=True,
+    )
+    run_dir = runs / run_id
+    workflow_path = run_dir / "workflow.json"
+    role = "implementation-agent"
+    terminal_profile = {
+        "execution_profile": "complex",
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "high",
+        "service_tier": "fast",
+        "profile_reason": (
+            "the bounded model ladder is exhausted and requires human review or dead-letter"
+        ),
+        "escalation_level": 2,
+        "terminal_action": "human_or_dead_letter",
+    }
+    terminal_result = agent_role_runner.awaiting_approval_result(
+        agent_role_runner.MODEL_ESCALATION_SUMMARY,
+        ["Human review is required before retrying or dead-lettering this role."],
+    )
+    terminal_entry = {
+        "role": role,
+        "llm_invoked": False,
+        "execution_profile": terminal_profile,
+        "result": terminal_result,
+    }
+    initial["roles"].append(terminal_entry)
+    initial.update(
+        {
+            "execution_status": "resuming",
+            "current_role": role,
+            "resume_role": role,
+            "current_execution_profile": {
+                **terminal_profile,
+                "escalation_level": 0,
+                "terminal_action": "",
+            },
+            "attention": {
+                "required": True,
+                "role": role,
+                "action": "answer",
+                "summary": agent_role_runner.MODEL_ESCALATION_SUMMARY,
+                "details": list(terminal_result["blockers"]),
+                "fingerprint": "sha256:" + "a" * 64,
+                "requirement": {
+                    "requirement_id": agent_role_runner.MODEL_ESCALATION_REQUIREMENT,
+                },
+            },
+            "last_route": {
+                "next_role": "approval-gate",
+                "reason": agent_role_runner.MODEL_ESCALATION_SUMMARY,
+                "stop": True,
+                "publication_allowed": False,
+                "loop": None,
+                "warnings": [],
+            },
+            "blockers": ["approval expired"],
+            "approval_grants": [],
+            "missing_requirement_requests": [
+                {
+                    "requirement_id": agent_role_runner.MODEL_ESCALATION_REQUIREMENT,
+                    "semantic_aliases": ["bounded escalation exhausted model"],
+                    "source_question_id": "",
+                    "role": role,
+                    "fingerprint": "sha256:" + "a" * 64,
+                    "summary": agent_role_runner.MODEL_ESCALATION_SUMMARY,
+                    "requested_at": "2026-09-02T10:44:02+00:00",
+                }
+            ],
+        }
+    )
+    initial.pop("approval_override", None)
+    assert agent_cli.resolve_retry_attention(initial) is True
+    assert initial["blockers"] == []
+    assert initial["missing_requirement_requests"] == []
+    agent_role_runner.write_json(workflow_path, initial)
+    agent_role_runner.role_checkpoint(
+        run_dir=run_dir,
+        run_id=run_id,
+        role=role,
+        state_name="role_running",
+        attempt=2,
+        worktree=Path(str(initial["checkout_path"])),
+        input_fingerprint=str(initial["input_fingerprint"]),
+    )
+
+    assert agent_role_runner.bounded_model_escalation_checkpoint(initial, role) is True
+
+    def reject_runtime(*args: object, **kwargs: object) -> dict[str, object]:
+        raise AssertionError("a terminal model checkpoint must not invoke the runtime")
+
+    monkeypatch.setattr(agent_role_runner, "execute_runtime_observed", reject_runtime)
+
+    resumed = agent_role_runner.run_roles(run_id=run_id, resume=True, dry_run=True)
+
+    approval_path = run_dir / "artifacts" / "approval.json"
+    assert approval_path.is_file(), resumed.get("attention")
+    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    scope = approval["requested_scope"]
+    assert resumed["execution_status"] == "awaiting_approval"
+    assert resumed["attention"]["summary"] == agent_role_runner.MODEL_ESCALATION_SUMMARY
+    assert resumed["attention"]["requirement"]["requirement_id"] == (
+        agent_role_runner.MODEL_ESCALATION_REQUIREMENT
+    )
+    assert resumed["last_route"]["loop"] is None
+    assert resumed.get("approval_grants") == []
+    assert approval["status"] == "pending"
+    assert approval["checkpoint_role"] == role
+    assert scope["actions"] == ["allow_one_model_escalation", "resume_workflow"]
+    assert scope["gate"] == role
+    assert scope["additional_attempts"] == 1
+    assert scope["model_escalation_role"] == role
+    assert scope["model_escalation_uses"] == 1
+    assert len(scope["model_escalation_fingerprint"]) == 64
+    latest = next(
+        entry
+        for entry in reversed(resumed["roles"])
+        if entry.get("role") != "approval-gate"
+    )
+    assert latest["role"] == role
+    assert latest["llm_invoked"] is False
+    assert latest["execution_profile"]["terminal_action"] == "human_or_dead_letter"
 
 
 @pytest.mark.parametrize(

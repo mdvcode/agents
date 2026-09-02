@@ -616,6 +616,20 @@ def test_terminal_model_profile_requests_exact_one_use_escalation_scope(
     assert len(scope["model_escalation_fingerprint"]) == 64
 
 
+def test_terminal_model_profile_is_bound_to_the_current_role() -> None:
+    workflow = {
+        "current_role": "ci-repair-agent",
+        "current_execution_profile": {
+            "terminal_action": "human_or_dead_letter",
+        },
+        "roles": [],
+    }
+
+    assert approval_lifecycle.model_escalation_terminal_state(
+        workflow, "implementation-agent"
+    ) is False
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

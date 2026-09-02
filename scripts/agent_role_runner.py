@@ -38,7 +38,9 @@ from approval_lifecycle import (
     MODEL_ESCALATION_REQUIREMENT,
     MODEL_ESCALATION_SUMMARY,
     approval_lock,
+    bounded_model_escalation_checkpoint,
     model_escalation_fingerprint,
+    model_escalation_terminal_state,
     read_json as read_approval_workflow,
     request_approval,
     write_json_atomic as write_approval_workflow,
@@ -1289,8 +1291,7 @@ def active_model_escalation_approval_id(state: dict[str, Any], role: str) -> str
         == model_escalation_fingerprint(state, role)
     ):
         return ""
-    profile = state.get("current_execution_profile", {})
-    if not isinstance(profile, dict) or profile.get("terminal_action") != "human_or_dead_letter":
+    if not model_escalation_terminal_state(state, role):
         return ""
     history = state.get("attention_history", [])
     if not isinstance(history, list) or not any(
@@ -3409,6 +3410,9 @@ def run_roles(
                         model_escalation_approval_id = active_model_escalation_approval_id(
                             state, role
                         )
+                        bounded_escalation_exhausted = bool(
+                            model_escalation_approval_id
+                        ) or bounded_model_escalation_checkpoint(state, role)
                         execution_settings = select_execution_profile(
                             role=role,
                             goal=role_goal,
@@ -3451,6 +3455,7 @@ def run_roles(
                                 else 2
                             ),
                             human_escalation_approved=bool(model_escalation_approval_id),
+                            bounded_escalation_exhausted=bounded_escalation_exhausted,
                         )
                         if (
                             model_escalation_approval_id

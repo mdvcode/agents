@@ -1168,12 +1168,59 @@ def reset_role_checkpoint_for_rerun(run_dir: Path, workflow: dict[str, Any]) -> 
     workflow["resume_role"] = role
 
 
-def resolve_retry_attention(workflow: dict[str, Any]) -> None:
-    """Archive a repaired attention item before explicitly retrying its role."""
+def resolve_retry_attention(workflow: dict[str, Any]) -> bool:
+    """Clear repaired retry state and return whether the current role must rerun."""
 
     attention = workflow.get("attention")
     if not isinstance(attention, dict) or attention.get("action") != "fix_then_retry":
-        return
+        blockers = workflow.get("blockers", [])
+        approval_expired = isinstance(blockers, list) and any(
+            str(item).strip() == "approval expired" for item in blockers
+        )
+        requirement = attention.get("requirement", {}) if isinstance(attention, dict) else {}
+        if (
+            approval_expired
+            and isinstance(requirement, dict)
+            and requirement.get("requirement_id") == "bounded_escalation_exhausted_model"
+            and attention.get("summary") == "Bounded model escalation is exhausted."
+            and attention.get("role") in {"implementation-agent", "ci-repair-agent"}
+        ):
+            requests = workflow.get("missing_requirement_requests", [])
+            if isinstance(requests, list):
+                retained: list[Any] = []
+                expired: list[Any] = []
+                attention_fingerprint = str(attention.get("fingerprint", ""))
+                for request in requests:
+                    matches = bool(
+                        isinstance(request, dict)
+                        and request.get("requirement_id")
+                        == "bounded_escalation_exhausted_model"
+                        and request.get("role") == attention.get("role")
+                        and bool(attention_fingerprint)
+                        and request.get("fingerprint") == attention_fingerprint
+                    )
+                    (expired if matches else retained).append(request)
+                workflow["missing_requirement_requests"] = retained
+                if expired:
+                    history = workflow.get("expired_requirement_requests", [])
+                    if not isinstance(history, list):
+                        history = []
+                    expired_at = datetime.now(timezone.utc).isoformat()
+                    history.extend(
+                        {
+                            **request,
+                            "expired_at": expired_at,
+                            "resolution": "approval_expired",
+                        }
+                        for request in expired
+                        if isinstance(request, dict)
+                    )
+                    workflow["expired_requirement_requests"] = history[-50:]
+        if isinstance(blockers, list):
+            workflow["blockers"] = [
+                item for item in blockers if str(item).strip() != "approval expired"
+            ]
+        return True
     details = attention.get("details", [])
     active_values = {str(attention.get("summary", "")).strip()}
     if isinstance(details, list):
@@ -1197,6 +1244,18 @@ def resolve_retry_attention(workflow: dict[str, Any]) -> None:
         workflow["blockers"] = [
             item for item in blockers if str(item).strip() not in active_values
         ]
+    role = str(attention.get("role", workflow.get("current_role", "")))
+    roles = workflow.get("roles", [])
+    if isinstance(roles, list):
+        for checkpoint in reversed(roles):
+            if not isinstance(checkpoint, dict) or checkpoint.get("role") != role:
+                continue
+            result = checkpoint.get("result", {})
+            completed = isinstance(result, dict) and result.get("status") == "completed"
+            if completed:
+                workflow["resume_role"] = role
+            return not completed
+    return True
 
 
 def resolve_answer_attention(run_dir: Path) -> None:
@@ -1955,8 +2014,8 @@ def handle_recovery_command(args: argparse.Namespace) -> int:
                 workflow["execution_status"] = "retry_wait" if args.command == "retry" else "resuming"
                 workflow["recovery_action"] = args.command
                 if args.command == "retry":
-                    resolve_retry_attention(workflow)
-                    reset_role_checkpoint_for_rerun(run_dir, workflow)
+                    if resolve_retry_attention(workflow):
+                        reset_role_checkpoint_for_rerun(run_dir, workflow)
                 recovery = workflow.get("recovery", {})
                 if not isinstance(recovery, dict):
                     recovery = {}

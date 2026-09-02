@@ -150,6 +150,27 @@ def test_exact_human_escalation_approval_allows_one_final_complex_attempt() -> N
     assert "explicit one-role approval" in approved["profile_reason"]
 
 
+def test_persisted_model_exhaustion_cannot_reset_when_route_context_is_lost() -> None:
+    terminal = select(
+        previous_profile="complex",
+        previous_reasoning_effort="xhigh",
+        bounded_escalation_exhausted=True,
+    )
+    approved = select(
+        previous_profile="complex",
+        previous_reasoning_effort="xhigh",
+        bounded_escalation_exhausted=True,
+        human_escalation_approved=True,
+    )
+
+    assert terminal["execution_profile"] == "complex"
+    assert terminal["reasoning_effort"] == "high"
+    assert terminal["terminal_action"] == "human_or_dead_letter"
+    assert approved["reasoning_effort"] == "xhigh"
+    assert approved["terminal_action"] == ""
+    assert "explicit one-role approval" in approved["profile_reason"]
+
+
 def test_human_escalation_approval_does_not_change_nonterminal_or_deterministic_work() -> None:
     ordinary = select(human_escalation_approved=True)
     deterministic = select(

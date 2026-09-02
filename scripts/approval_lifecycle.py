@@ -250,6 +250,40 @@ def one_time_repair_extension_scope(
     }
 
 
+def model_escalation_terminal_state(workflow: dict[str, Any], role: str) -> bool:
+    """Recognize a durable terminal role entry or its legacy workflow mirror."""
+
+    profile = workflow.get("current_execution_profile", {})
+    current_role = str(workflow.get("current_role", ""))
+    if (
+        isinstance(profile, dict)
+        and profile.get("terminal_action") == "human_or_dead_letter"
+        and current_role in {"", role}
+    ):
+        return True
+    roles = workflow.get("roles", [])
+    if not isinstance(roles, list):
+        return False
+    latest = next(
+        (
+            item
+            for item in reversed(roles)
+            if isinstance(item, dict) and item.get("role") != "approval-gate"
+        ),
+        {},
+    )
+    result = latest.get("result", {}) if isinstance(latest, dict) else {}
+    latest_profile = latest.get("execution_profile", {}) if isinstance(latest, dict) else {}
+    return bool(
+        latest.get("role") == role
+        and isinstance(result, dict)
+        and result.get("status") == "awaiting_approval"
+        and result.get("summary") == MODEL_ESCALATION_SUMMARY
+        and isinstance(latest_profile, dict)
+        and latest_profile.get("terminal_action") == "human_or_dead_letter"
+    )
+
+
 def bounded_model_escalation_checkpoint(workflow: dict[str, Any], role: str) -> bool:
     """Recognize only the exact runner checkpoint that exhausted the model ladder."""
 
@@ -257,7 +291,6 @@ def bounded_model_escalation_checkpoint(workflow: dict[str, Any], role: str) -> 
         return False
     attention = workflow.get("attention", {})
     requirement = attention.get("requirement", {}) if isinstance(attention, dict) else {}
-    profile = workflow.get("current_execution_profile", {})
     if not (
         isinstance(attention, dict)
         and attention.get("required") is True
@@ -266,8 +299,7 @@ def bounded_model_escalation_checkpoint(workflow: dict[str, Any], role: str) -> 
         and attention.get("summary") == MODEL_ESCALATION_SUMMARY
         and isinstance(requirement, dict)
         and requirement.get("requirement_id") == MODEL_ESCALATION_REQUIREMENT
-        and isinstance(profile, dict)
-        and profile.get("terminal_action") == "human_or_dead_letter"
+        and model_escalation_terminal_state(workflow, role)
     ):
         return False
     roles = workflow.get("roles", [])
