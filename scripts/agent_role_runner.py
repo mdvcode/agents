@@ -1629,20 +1629,90 @@ def preflight_role_execution(
     return None
 
 
+def answered_image_capability_requirement(artifacts_dir: Path) -> bool:
+    """Return whether this run resolved the exact image-capability question."""
+
+    workflow_path = artifacts_dir.parent / "workflow.json"
+    human_input_path = artifacts_dir.parent / "human-input.json"
+    if not workflow_path.exists() or not human_input_path.exists():
+        return False
+    try:
+        workflow = load_json(workflow_path)
+        human_input = load_json(human_input_path)
+    except (OSError, ValueError):
+        return False
+
+    history = workflow.get("attention_history", [])
+    entries = human_input.get("entries", [])
+    if not isinstance(history, list) or not isinstance(entries, list):
+        return False
+    answered_fingerprints = {
+        str(item.get("fingerprint", ""))
+        for item in history
+        if isinstance(item, dict)
+        and item.get("role") == "implementation-agent"
+        and item.get("resolution") == "answer_recorded"
+        and isinstance(item.get("requirement"), dict)
+        and item["requirement"].get("requirement_id")
+        == "capability_implementation_unavailable"
+        and isinstance(item.get("details"), list)
+        and any(
+            "no image-generation capability" in str(detail).casefold()
+            for detail in item["details"]
+        )
+    }
+    answered_fingerprints.discard("")
+    return any(
+        isinstance(entry, dict)
+        and entry.get("requirement_id") == "capability_implementation_unavailable"
+        and entry.get("question_fingerprint") in answered_fingerprints
+        and bool(str(entry.get("response", "")).strip())
+        for entry in entries
+    )
+
+
 def missing_image_capability(goal: str, artifacts_dir: Path) -> str:
     """Return a prompt failure when a task requires image assets the role cannot create."""
+
+    if answered_image_capability_requirement(artifacts_dir):
+        return ""
 
     plan_path = artifacts_dir / "plan.md"
     plan = plan_path.read_text(encoding="utf-8") if plan_path.exists() else ""
     text_value = f"{goal}\n{plan}".casefold()
-    image_terms = ("image", "photo", "picture", "asset", "картин", "фотограф", "изображен")
+    image_terms = ("image", "photo", "picture", "картин", "фотограф", "изображен")
     generation_terms = (
         "generate", "create new", "new asset", "distinct", "unique", "six", "each category",
         "сгенер", "создай", "новые", "уникаль", "отдельн", "шесть", "каждой категории", "своя",
     )
+    no_generation_terms = (
+        "do not generate", "don't generate", "without image generation", "no new image",
+        "не генер", "не созда", "без генерац",
+    )
+    supplied_terms = (
+        "supplied", "provided", "attached", "existing",
+        "предоставлен", "приложен", "существующ",
+    )
+    explicit_generation_patterns = (
+        r"(?:generate|create new)[^\n.!?;]{0,80}(?:image|photo|picture)",
+        r"(?:сгенер|создай)[^\n.!?;]{0,80}(?:картин|фотограф|изображен)",
+    )
+    segments = [
+        segment
+        for segment in re.split(r"[\n.!?;]+", text_value)
+        if segment.strip()
+    ]
     if (
-        any(term in text_value for term in image_terms)
-        and any(term in text_value for term in generation_terms)
+        any(
+            any(term in segment for term in image_terms)
+            and any(term in segment for term in generation_terms)
+            and not any(term in segment for term in no_generation_terms)
+            and (
+                not any(term in segment for term in supplied_terms)
+                or any(re.search(pattern, segment) for pattern in explicit_generation_patterns)
+            )
+            for segment in segments
+        )
         and "image_generation" not in role_tools("implementation-agent")
     ):
         return (

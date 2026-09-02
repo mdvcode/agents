@@ -509,6 +509,147 @@ def test_missing_distinct_image_capability_fails_before_runtime(tmp_path: Path) 
     assert "no image-generation capability" in reason
 
 
+def test_image_capability_terms_in_unrelated_requirements_do_not_block(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "plan.md").write_text(
+        "Create only the project scaffold.\nUse provided assets without modifying them.\n",
+        encoding="utf-8",
+    )
+
+    reason = agent_role_runner.missing_image_capability(
+        "Используй предоставленные изображения.\nСоздай отдельный плагин.", artifacts
+    )
+
+    assert reason == ""
+
+
+def test_supplied_images_without_generation_do_not_block(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "plan.md").write_text(
+        "Use the six supplied images, with a distinct image for each category.\n",
+        encoding="utf-8",
+    )
+
+    reason = agent_role_runner.missing_image_capability(
+        "Do not generate new images; use the provided files.", artifacts
+    )
+
+    assert reason == ""
+
+
+def test_answered_image_capability_requirement_allows_resume(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "plan.md").write_text(
+        "Add six distinct new image assets for each category.\n", encoding="utf-8"
+    )
+    fingerprint = "sha256:image-capability"
+    (tmp_path / "workflow.json").write_text(
+        json.dumps(
+            {
+                "attention_history": [
+                    {
+                        "role": "implementation-agent",
+                        "resolution": "answer_recorded",
+                        "fingerprint": fingerprint,
+                        "requirement": {
+                            "requirement_id": "capability_implementation_unavailable"
+                        },
+                        "details": [
+                            "The plan requires images, but the role has no image-generation capability."
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "human-input.json").write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "requirement_id": "capability_implementation_unavailable",
+                        "question_fingerprint": fingerprint,
+                        "response": "Use the supplied image assets and continue.",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    reason = agent_role_runner.missing_image_capability(
+        "Добавь к каждой категории картинки, для каждой категории своя", artifacts
+    )
+
+    assert reason == ""
+
+
+@pytest.mark.parametrize(
+    ("fingerprint", "response"),
+    [("sha256:other-question", "Use supplied images"), ("sha256:image-capability", "")],
+)
+def test_unmatched_or_empty_image_capability_answer_does_not_bypass(
+    tmp_path: Path, fingerprint: str, response: str
+) -> None:
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "plan.md").write_text(
+        "Add six distinct new image assets for each category.\n", encoding="utf-8"
+    )
+    (tmp_path / "workflow.json").write_text(
+        json.dumps(
+            {
+                "attention_history": [
+                    {
+                        "role": "implementation-agent",
+                        "resolution": "answer_recorded",
+                        "fingerprint": "sha256:image-capability",
+                        "requirement": {
+                            "requirement_id": "capability_implementation_unavailable"
+                        },
+                        "details": ["No image-generation capability is available."],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "human-input.json").write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "requirement_id": "capability_implementation_unavailable",
+                        "question_fingerprint": fingerprint,
+                        "response": response,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    reason = agent_role_runner.missing_image_capability("Generate six new images.", artifacts)
+
+    assert "no image-generation capability" in reason
+
+
+def test_explicit_generation_from_supplied_reference_still_blocks(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "plan.md").write_text(
+        "Generate six new images using the supplied logo as a reference.\n", encoding="utf-8"
+    )
+
+    reason = agent_role_runner.missing_image_capability("Create the category art.", artifacts)
+
+    assert "no image-generation capability" in reason
+
+
 def test_fast_workflow_uses_only_implementation_model_for_non_code_change(
     tmp_path: Path,
     monkeypatch: object,
