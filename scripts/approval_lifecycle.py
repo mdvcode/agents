@@ -7,6 +7,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import re
 import secrets
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -16,6 +17,8 @@ from typing import Any
 from runtime_contracts import load_json as load_schema, validate_contract
 from security_approval import security_scope
 from task_queue import DEFAULT_DB, TaskQueue, TaskRecord
+from verifier_environment import verifier_artifact_unavailable
+from workflow_router import review_repair_extension_scope_valid
 from ai_harness.recovery.checkpoints import RoleCheckpoint, read_checkpoint, write_checkpoint
 from ai_harness.recovery.policy import load_recovery_policy
 
@@ -103,6 +106,13 @@ def append_error(run_dir: Path, *, code: str, message: str) -> None:
         handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+def _scope_integer(scope: dict[str, Any], key: str) -> int:
+    value = scope.get(key, 0)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ApprovalError(f"approval scope {key} must be an integer")
+    return value
+
+
 def canonical_scope(scope: dict[str, Any]) -> dict[str, Any]:
     actions = sorted({str(item) for item in scope.get("actions", []) if isinstance(item, str)})
     paths = sorted({str(item) for item in scope.get("paths", []) if isinstance(item, str)})
@@ -113,6 +123,12 @@ def canonical_scope(scope: dict[str, Any]) -> dict[str, Any]:
     risk_class = str(scope.get("risk_class", ""))
     security_fingerprint = str(scope.get("security_fingerprint", ""))
     verifier_fingerprint = str(scope.get("verifier_fingerprint", ""))
+    loop_name = str(scope.get("loop_name", ""))
+    at_iteration = _scope_integer(scope, "at_iteration")
+    max_iterations = _scope_integer(scope, "max_iterations")
+    failure_fingerprint = str(scope.get("failure_fingerprint", ""))
+    diff_fingerprint = str(scope.get("diff_fingerprint", ""))
+    additional_attempts = _scope_integer(scope, "additional_attempts")
     return {
         "actions": actions,
         "paths": paths,
@@ -121,6 +137,12 @@ def canonical_scope(scope: dict[str, Any]) -> dict[str, Any]:
         "finding_ids": finding_ids,
         "security_fingerprint": security_fingerprint,
         "verifier_fingerprint": verifier_fingerprint,
+        "loop_name": loop_name,
+        "at_iteration": at_iteration,
+        "max_iterations": max_iterations,
+        "failure_fingerprint": failure_fingerprint,
+        "diff_fingerprint": diff_fingerprint,
+        "additional_attempts": additional_attempts,
     }
 
 
@@ -167,60 +189,56 @@ def checkpoint_fingerprint(workflow: dict[str, Any], role: str, reason: str) -> 
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def verifier_artifact_unavailable(verifier: dict[str, Any]) -> bool:
-    """Return whether a verifier artifact reports an environmental limitation."""
-
-    if str(verifier.get("verdict", "")).lower() == "unavailable":
-        return True
-    markers = (
-        "unavailable",
-        "missing dependenc",
-        "command not found",
-        "browser",
-        "playwright",
-        "read-only",
-        "runtime capability",
-        "did not complete",
-    )
-    blockers = [
-        str(item).lower()
-        for item in verifier.get("blockers", [])
-        if isinstance(item, (str, int)) and str(item).strip()
-    ]
-    if blockers:
-        return all(any(marker in blocker for marker in markers) for blocker in blockers)
-    fallback = " ".join(
-        [
-            *[
-                str(item)
-                for item in verifier.get("warnings", [])
-                if isinstance(item, (str, int))
-            ],
-            *[
-                str(item)
-                for item in verifier.get("observed", [])
-                if isinstance(item, (str, int))
-            ],
-        ]
-    ).lower()
-    return any(marker in fallback for marker in markers)
-
-
-def one_time_repair_extension_available(workflow: dict[str, Any]) -> bool:
-    """Return whether the current exhausted loop can request one extra repair."""
+def one_time_repair_extension_scope(
+    workflow: dict[str, Any], verifier: dict[str, Any]
+) -> dict[str, Any]:
+    """Return one exact scope for an exhausted, progressing review repair."""
 
     last_route = workflow.get("last_route", {})
     loop = last_route.get("loop", {}) if isinstance(last_route, dict) else {}
     if not isinstance(loop, dict):
-        return False
+        return {}
     name = str(loop.get("name", ""))
-    if not name or int(loop.get("iteration", 0) or 0) < int(
-        loop.get("max_iterations", 0) or 0
+    iteration = int(loop.get("iteration", 0) or 0)
+    maximum = int(loop.get("max_iterations", 0) or 0)
+    if (
+        name != "review_repair"
+        or last_route.get("next_role") != "approval-gate"
+        or last_route.get("stop") is not True
+        or not maximum
+        or iteration != maximum
+        or loop.get("progress_detected") is not True
+        or str(verifier.get("verdict", "")).lower() != "broken"
+        or verifier_artifact_unavailable(verifier)
     ):
-        return False
+        return {}
     loops = workflow.get("loops", {})
     stored = loops.get(name, {}) if isinstance(loops, dict) else {}
-    return isinstance(stored, dict) and int(stored.get("extensions_used", 0) or 0) < 1
+    if (
+        not isinstance(stored, dict)
+        or int(stored.get("iterations", 0) or 0) != iteration
+        or int(stored.get("max_iterations", 0) or 0) != maximum
+        or stored.get("last_failure_fingerprint") != loop.get("failure_fingerprint")
+        or stored.get("last_diff_fingerprint") != loop.get("diff_fingerprint")
+        or stored.get("progress_detected") is not True
+        or int(stored.get("extensions_used", 0) or 0) >= 1
+    ):
+        return {}
+    failure_fingerprint = str(loop.get("failure_fingerprint", ""))
+    diff_fingerprint = str(loop.get("diff_fingerprint", ""))
+    if not all(
+        re.fullmatch(r"[0-9a-f]{64}", value)
+        for value in (failure_fingerprint, diff_fingerprint)
+    ):
+        return {}
+    return {
+        "loop_name": name,
+        "at_iteration": iteration,
+        "max_iterations": maximum,
+        "failure_fingerprint": failure_fingerprint,
+        "diff_fingerprint": diff_fingerprint,
+        "additional_attempts": 1,
+    }
 
 
 def default_scope(workflow: dict[str, Any], role: str) -> dict[str, Any]:
@@ -254,12 +272,16 @@ def default_scope(workflow: dict[str, Any], role: str) -> dict[str, Any]:
         verifier = read_json(verifier_path)
         if verifier_artifact_unavailable(verifier):
             actions.append("accept_unavailable_verification")
-        elif one_time_repair_extension_available(workflow):
-            actions.append("extend_repair_budget")
+            extension_details = {}
+        else:
+            extension_details = one_time_repair_extension_scope(workflow, verifier)
+            if extension_details:
+                actions.append("extend_review_repair_once")
         verifier_details = {
             "verifier_fingerprint": hashlib.sha256(
                 json.dumps(verifier, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            ).hexdigest()
+            ).hexdigest(),
+            **extension_details,
         }
     else:
         verifier_details = {}
@@ -295,6 +317,13 @@ def request_approval(
             raise ApprovalError("approval checkpoint role is missing")
         now = utc_now()
         requested_scope = canonical_scope(scope or default_scope(workflow, role))
+        if (
+            "extend_review_repair_once" in requested_scope.get("actions", [])
+            and requested_scope != default_scope(workflow, role)
+        ):
+            raise ApprovalError(
+                "one-time review repair must match the exact exhausted verifier scope"
+            )
         fingerprint = checkpoint_fingerprint(workflow, role, reason)
         approval_path = run_dir / "artifacts" / "approval.json"
         if approval_path.exists():
@@ -459,6 +488,42 @@ def _reset_checkpoint_for_resume(run_dir: Path, role: str) -> None:
     )
 
 
+def _role_result(workflow: dict[str, Any], role: str) -> dict[str, Any]:
+    roles = workflow.get("roles", [])
+    if not isinstance(roles, list):
+        return {}
+    for entry in reversed(roles):
+        if not isinstance(entry, dict) or entry.get("role") != role:
+            continue
+        result = entry.get("result", {})
+        return result if isinstance(result, dict) else {}
+    return {}
+
+
+def _approved_review_extension_valid(
+    run_dir: Path,
+    workflow: dict[str, Any],
+    role: str,
+    scope: dict[str, Any],
+) -> bool:
+    """Require a completed verifier checkpoint and an exact live extension scope."""
+
+    checkpoint = read_checkpoint(run_dir, role)
+    artifacts_dir = Path(str(workflow.get("artifacts_dir", "")))
+    return bool(
+        checkpoint is not None
+        and checkpoint.state == "role_completed"
+        and artifacts_dir.is_dir()
+        and review_repair_extension_scope_valid(
+            state=workflow,
+            role_result=_role_result(workflow, role),
+            artifacts_dir=artifacts_dir,
+            current_role=role,
+            scope=scope,
+        )
+    )
+
+
 def _exclude_approval_wait_from_recovery(
     workflow: dict[str, Any],
     approval: dict[str, Any],
@@ -509,7 +574,20 @@ def _prepare_resume_locked(run_dir: Path) -> dict[str, Any]:
         workflow["execution_status"] = "resuming"
         workflow["resume_role"] = role
         _resolve_approved_attention(workflow)
-        _reset_checkpoint_for_resume(run_dir, role)
+        approved_scope = approval.get("approved_scope", {})
+        approved_actions = approved_scope.get("actions", [])
+        extension_requested = "extend_review_repair_once" in approved_actions
+        if extension_requested and not _approved_review_extension_valid(
+            run_dir,
+            workflow,
+            role,
+            approved_scope,
+        ):
+            raise ApprovalError(
+                "one-time review repair scope no longer matches the completed verifier checkpoint"
+            )
+        if not extension_requested:
+            _reset_checkpoint_for_resume(run_dir, role)
         _exclude_approval_wait_from_recovery(
             workflow,
             approval,

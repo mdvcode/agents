@@ -23,6 +23,7 @@ from approval_lifecycle import (  # noqa: E402
     resume_run,
 )
 from task_queue import TaskQueue
+from workflow_router import diff_hash, failure_fingerprint
 
 
 def write_json(path: Path, value: dict[str, object]) -> None:
@@ -46,6 +47,73 @@ def awaiting_run(tmp_path: Path) -> Path:
                 {"role": "risk-classifier", "result": {"status": "completed"}},
                 {"role": "approval-gate", "result": {"status": "awaiting_approval"}},
             ],
+        },
+    )
+    return run
+
+
+def exhausted_reviewer_run(tmp_path: Path) -> Path:
+    run = awaiting_run(tmp_path)
+    workflow_path = run / "workflow.json"
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    result = {"status": "completed", "summary": "Concrete review blockers remain."}
+    workflow["roles"] = [
+        {"role": "reviewer", "result": result},
+        {"role": "approval-gate", "result": {"status": "awaiting_approval"}},
+    ]
+    artifacts_dir = run / "artifacts"
+    workflow["artifacts_dir"] = str(artifacts_dir)
+    write_json(
+        artifacts_dir / "review.json",
+        {
+            "verdict": "broken",
+            "status": "block",
+            "blockers": ["A concrete code defect remains."],
+            "blocker_ids": ["REV-001"],
+        },
+    )
+    failure = failure_fingerprint(
+        role_result=result,
+        state=workflow,
+        artifacts_dir=artifacts_dir,
+    )
+    current_diff = diff_hash(workflow, artifacts_dir)
+    workflow["last_route"] = {
+        "next_role": "approval-gate",
+        "stop": True,
+        "loop": {
+            "name": "review_repair",
+            "iteration": 3,
+            "max_iterations": 3,
+            "failure_fingerprint": failure,
+            "diff_fingerprint": current_diff,
+            "progress_detected": True,
+        },
+    }
+    workflow["loops"] = {
+        "review_repair": {
+            "iterations": 3,
+            "max_iterations": 3,
+            "last_failure_fingerprint": failure,
+            "last_diff_fingerprint": current_diff,
+            "progress_detected": True,
+            "extensions_used": 0,
+        }
+    }
+    write_json(workflow_path, workflow)
+    write_json(
+        run / "checkpoints" / "reviewer.json",
+        {
+            "run_id": "run-approval",
+            "role": "reviewer",
+            "state": "role_completed",
+            "attempt": 3,
+            "worktree": str(tmp_path / "worktree"),
+            "input_fingerprint": "task-fingerprint",
+            "output_fingerprint": "sha256:review-result",
+            "artifacts": ["review.json"],
+            "side_effects": [],
+            "created_at": datetime.now(timezone.utc).isoformat(),
         },
     )
     return run
@@ -362,9 +430,27 @@ def test_available_verifier_requests_one_time_repair_extension(tmp_path: Path) -
     ]
     workflow["artifacts_dir"] = str(run / "artifacts")
     workflow["last_route"] = {
-        "loop": {"name": "review_repair", "iteration": 3, "max_iterations": 3}
+        "next_role": "approval-gate",
+        "stop": True,
+        "loop": {
+            "name": "review_repair",
+            "iteration": 3,
+            "max_iterations": 3,
+            "progress_detected": True,
+            "failure_fingerprint": "a" * 64,
+            "diff_fingerprint": "b" * 64,
+        },
     }
-    workflow["loops"] = {"review_repair": {"iterations": 3, "extensions_used": 0}}
+    workflow["loops"] = {
+        "review_repair": {
+            "iterations": 3,
+            "max_iterations": 3,
+            "last_failure_fingerprint": "a" * 64,
+            "last_diff_fingerprint": "b" * 64,
+            "progress_detected": True,
+            "extensions_used": 0,
+        }
+    }
     write_json(workflow_path, workflow)
     write_json(
         run / "artifacts" / "architecture_consistency.json",
@@ -377,10 +463,17 @@ def test_available_verifier_requests_one_time_repair_extension(tmp_path: Path) -
     approval = request_approval(run, reason="Repair budget exhausted")
 
     assert approval["requested_scope"]["actions"] == [
-        "extend_repair_budget",
+        "extend_review_repair_once",
         "resume_workflow",
     ]
     assert "accept_unavailable_verification" not in approval["requested_scope"]["actions"]
+    assert approval["requested_scope"]["loop_name"] == "review_repair"
+    assert approval["requested_scope"]["at_iteration"] == 3
+    assert approval["requested_scope"]["max_iterations"] == 3
+    assert approval["requested_scope"]["failure_fingerprint"] == "a" * 64
+    assert approval["requested_scope"]["diff_fingerprint"] == "b" * 64
+    assert approval["requested_scope"]["additional_attempts"] == 1
+    assert len(approval["requested_scope"]["verifier_fingerprint"]) == 64
 
 
 def test_available_verifier_without_exhausted_loop_cannot_be_accepted(
@@ -401,5 +494,115 @@ def test_available_verifier_without_exhausted_loop_cannot_be_accepted(
     )
 
     approval = request_approval(run, reason="Concrete verifier blocker")
+
+    assert approval["requested_scope"]["actions"] == ["resume_workflow"]
+
+
+def test_stale_or_inconsistent_review_loop_does_not_offer_extension(
+    tmp_path: Path,
+) -> None:
+    run = exhausted_reviewer_run(tmp_path)
+    workflow_path = run / "workflow.json"
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    workflow["loops"]["review_repair"]["last_diff_fingerprint"] = "c" * 64
+    write_json(workflow_path, workflow)
+
+    approval = request_approval(run, reason="Stale repair checkpoint")
+
+    assert approval["requested_scope"]["actions"] == ["resume_workflow"]
+
+
+def test_explicit_unbound_review_extension_scope_is_rejected(tmp_path: Path) -> None:
+    run = awaiting_run(tmp_path)
+
+    with pytest.raises(ApprovalError, match="exact exhausted verifier scope"):
+        request_approval(
+            run,
+            reason="Unbound extension",
+            scope={
+                "actions": ["extend_review_repair_once", "resume_workflow"],
+                "gate": "risk-classifier",
+                "additional_attempts": 1,
+            },
+        )
+
+
+@pytest.mark.parametrize("value", [True, "1", 1.9])
+def test_extension_scope_integer_types_are_exact(
+    tmp_path: Path,
+    value: object,
+) -> None:
+    run = exhausted_reviewer_run(tmp_path)
+    requested = request_approval(run, reason="Repair budget exhausted")
+    expanded = dict(requested["requested_scope"])
+    expanded["additional_attempts"] = value
+
+    with pytest.raises(ApprovalError, match="must be an integer"):
+        approve_run(run, actor="reviewer", scope=expanded)
+
+
+def test_valid_review_extension_preserves_completed_verifier_checkpoint(
+    tmp_path: Path,
+) -> None:
+    run = exhausted_reviewer_run(tmp_path)
+    requested = request_approval(run, reason="Repair budget exhausted")
+    approve_run(run, actor="reviewer", reason="One local repair only")
+
+    resumed = prepare_resume(run)
+
+    checkpoint = json.loads(
+        (run / "checkpoints" / "reviewer.json").read_text(encoding="utf-8")
+    )
+    assert checkpoint["state"] == "role_completed"
+    assert checkpoint["output_fingerprint"] == "sha256:review-result"
+    assert checkpoint["artifacts"] == ["review.json"]
+    assert resumed["workflow"]["resume_role"] == "reviewer"
+    assert resumed["workflow"]["approval_override"]["scope"] == requested["requested_scope"]
+    assert len(resumed["workflow"]["approval_grants"]) == 1
+
+
+def test_invalid_verifier_checkpoint_cannot_suppress_reset_or_consume_extension(
+    tmp_path: Path,
+) -> None:
+    run = exhausted_reviewer_run(tmp_path)
+    checkpoint_path = run / "checkpoints" / "reviewer.json"
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    checkpoint["state"] = "role_validating"
+    write_json(checkpoint_path, checkpoint)
+    request_approval(run, reason="Repair budget exhausted")
+    approve_run(run, actor="reviewer", reason="One local repair only")
+
+    with pytest.raises(ApprovalError, match="completed verifier checkpoint"):
+        prepare_resume(run)
+
+    stored = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    workflow = json.loads((run / "workflow.json").read_text(encoding="utf-8"))
+    approval = json.loads((run / "artifacts" / "approval.json").read_text(encoding="utf-8"))
+    assert stored["state"] == "role_validating"
+    assert stored["output_fingerprint"] == "sha256:review-result"
+    assert workflow["execution_status"] == "awaiting_approval"
+    assert approval["status"] == "approved"
+
+
+def test_works_with_browser_warning_is_not_unavailable(tmp_path: Path) -> None:
+    run = awaiting_run(tmp_path)
+    workflow_path = run / "workflow.json"
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    workflow["roles"] = [
+        {"role": "reviewer", "result": {"status": "completed"}},
+        {"role": "approval-gate", "result": {"status": "awaiting_approval"}},
+    ]
+    workflow["artifacts_dir"] = str(run / "artifacts")
+    write_json(workflow_path, workflow)
+    write_json(
+        run / "artifacts" / "review.json",
+        {
+            "verdict": "works",
+            "blockers": [],
+            "warnings": ["Browser verification is unavailable."],
+        },
+    )
+
+    approval = request_approval(run, reason="Review completed with a warning")
 
     assert approval["requested_scope"]["actions"] == ["resume_workflow"]

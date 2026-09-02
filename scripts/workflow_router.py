@@ -15,6 +15,7 @@ import yaml
 
 from ai_harness.economics import BudgetAction, BudgetController, BudgetUsage
 from security_approval import scope_accepts_security, security_finding_ids
+from verifier_environment import verifier_artifact_unavailable
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +40,11 @@ LOOP_DEFAULTS = {
 }
 UI_AREAS = {"ui", "routing", "public_rendering", "dashboard_ui", "user_visible_behavior"}
 SECURITY_SEVERITY_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+VERIFIER_ARTIFACTS = {
+    "architecture-consistency-agent": "architecture_consistency.json",
+    "semantic-conflict-agent": "semantic_conflict.json",
+    "reviewer": "review.json",
+}
 CODE_EXTENSIONS = {
     ".c",
     ".cpp",
@@ -116,6 +122,10 @@ def adaptive_next_role(
             "frontend_verification_repair": "frontend-qa-agent",
         }
         target = repair_targets.get(loop_name)
+        if loop_name == "review_repair":
+            verification_role = str(active_loop.get("verification_role", ""))
+            if verification_role in VERIFIER_ARTIFACTS:
+                target = verification_role
         if target:
             return target, f"Adaptive {loop_name} requires re-running {target}."
     completed = completed_roles(state)
@@ -644,32 +654,7 @@ def verifier_environment_unavailable(artifacts_dir: Path, artifact_name: str) ->
     artifact = _artifact(artifacts_dir, artifact_name)
     if not isinstance(artifact, dict):
         return False
-    markers = (
-        "unavailable",
-        "missing dependenc",
-        "command not found",
-        "browser",
-        "playwright",
-        "read-only",
-        "runtime capability",
-        "did not complete",
-    )
-    if str(artifact.get("verdict", "")).lower() == "unavailable":
-        return True
-    blockers = [
-        str(item).lower()
-        for item in artifact.get("blockers", [])
-        if isinstance(item, (str, int)) and str(item).strip()
-    ]
-    if blockers:
-        return all(any(marker in blocker for marker in markers) for blocker in blockers)
-    fallback = " ".join(
-        [
-            *[str(item) for item in artifact.get("warnings", []) if isinstance(item, (str, int))],
-            *[str(item) for item in artifact.get("observed", []) if isinstance(item, (str, int))],
-        ]
-    ).lower()
-    return any(marker in fallback for marker in markers)
+    return verifier_artifact_unavailable(artifact)
 
 
 def verifier_artifact_fingerprint(artifacts_dir: Path, artifact_name: str) -> str:
@@ -686,12 +671,7 @@ def verifier_unavailability_accepted(
     artifacts_dir: Path,
     role: str,
 ) -> bool:
-    artifact_names = {
-        "architecture-consistency-agent": "architecture_consistency.json",
-        "semantic-conflict-agent": "semantic_conflict.json",
-        "reviewer": "review.json",
-    }
-    artifact_name = artifact_names.get(role)
+    artifact_name = VERIFIER_ARTIFACTS.get(role)
     if not artifact_name or not verifier_environment_unavailable(artifacts_dir, artifact_name):
         return False
     fingerprint = verifier_artifact_fingerprint(artifacts_dir, artifact_name)
@@ -787,6 +767,98 @@ def failure_fingerprint(
     }
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def review_repair_extension_scope_valid(
+    *,
+    state: dict[str, Any],
+    role_result: dict[str, Any],
+    artifacts_dir: Path,
+    current_role: str,
+    scope: dict[str, Any],
+) -> bool:
+    """Validate a one-time review repair grant against the live checkpoint."""
+
+    artifact_name = VERIFIER_ARTIFACTS.get(current_role)
+    if not artifact_name or scope.get("gate") != current_role:
+        return False
+    if set(_list_values(scope.get("actions"))) != {
+        "extend_review_repair_once",
+        "resume_workflow",
+    }:
+        return False
+    if (
+        isinstance(scope.get("additional_attempts"), bool)
+        or scope.get("additional_attempts") != 1
+    ):
+        return False
+
+    last_route = state.get("last_route", {})
+    loop = last_route.get("loop", {}) if isinstance(last_route, dict) else {}
+    if not isinstance(loop, dict):
+        return False
+    iteration = int(loop.get("iteration", 0) or 0)
+    maximum = int(loop.get("max_iterations", 0) or 0)
+    if (
+        loop.get("name") != "review_repair"
+        or last_route.get("next_role") != "approval-gate"
+        or last_route.get("stop") is not True
+        or scope.get("loop_name") != "review_repair"
+        or not maximum
+        or iteration != maximum
+        or isinstance(scope.get("at_iteration"), bool)
+        or scope.get("at_iteration") != iteration
+        or isinstance(scope.get("max_iterations"), bool)
+        or scope.get("max_iterations") != maximum
+        or loop.get("progress_detected") is not True
+    ):
+        return False
+
+    loops = state.get("loops", {})
+    stored = loops.get("review_repair", {}) if isinstance(loops, dict) else {}
+    if (
+        not isinstance(stored, dict)
+        or int(stored.get("iterations", 0) or 0) != iteration
+        or int(stored.get("max_iterations", 0) or 0) != maximum
+        or stored.get("last_failure_fingerprint") != loop.get("failure_fingerprint")
+        or stored.get("last_diff_fingerprint") != loop.get("diff_fingerprint")
+        or stored.get("progress_detected") is not True
+        or int(stored.get("extensions_used", 0) or 0) >= 1
+    ):
+        return False
+
+    artifact = _artifact(artifacts_dir, artifact_name)
+    if (
+        not isinstance(artifact, dict)
+        or str(artifact.get("verdict", "")).lower() != "broken"
+        or verifier_artifact_unavailable(artifact)
+    ):
+        return False
+    verifier_fingerprint = str(scope.get("verifier_fingerprint", ""))
+    failure_scope = str(scope.get("failure_fingerprint", ""))
+    diff_scope = str(scope.get("diff_fingerprint", ""))
+    if not all(
+        re.fullmatch(r"[0-9a-f]{64}", value)
+        for value in (verifier_fingerprint, failure_scope, diff_scope)
+    ):
+        return False
+    if verifier_fingerprint != verifier_artifact_fingerprint(artifacts_dir, artifact_name):
+        return False
+
+    expected_failure = failure_fingerprint(
+        role_result=role_result,
+        state=state,
+        artifacts_dir=artifacts_dir,
+    )
+    expected_diff = diff_hash(state, artifacts_dir)
+    return (
+        failure_scope
+        == loop.get("failure_fingerprint")
+        == expected_failure
+        and diff_scope
+        == loop.get("diff_fingerprint")
+        == expected_diff
+    )
 
 
 def _loop_config(name: str, routing: dict[str, Any]) -> dict[str, Any]:
@@ -1052,6 +1124,8 @@ def _repair_route(
     routing: dict[str, Any],
     approval_consumed: bool = False,
     repair_budget_extended: bool = False,
+    extension_approval_id: str = "",
+    source_role: str = "",
 ) -> dict[str, Any]:
     config = _loop_config(name, routing)
     loops = state.get("loops")
@@ -1060,6 +1134,10 @@ def _repair_route(
         state["loops"] = loops
     previous = loops.get(name, {}) if isinstance(loops.get(name), dict) else {}
     extensions_used = int(previous.get("extensions_used", 0) or 0)
+    recorded_extension_approval_id = str(previous.get("extension_approval_id", ""))
+    verification_role = str(previous.get("verification_role", ""))
+    if name == "review_repair" and source_role in VERIFIER_ARTIFACTS:
+        verification_role = source_role
     iteration = min(
         int(previous.get("iterations", 0)) + 1,
         config["max_iterations"],
@@ -1087,6 +1165,10 @@ def _repair_route(
         "elapsed_seconds": loop_elapsed,
         "extensions_used": extensions_used,
     }
+    if verification_role:
+        loop["verification_role"] = verification_role
+    if recorded_extension_approval_id:
+        loop["extension_approval_id"] = recorded_extension_approval_id
     loops[name] = {
         "iterations": iteration,
         "max_iterations": config["max_iterations"],
@@ -1099,6 +1181,10 @@ def _repair_route(
         "elapsed_seconds": loop_elapsed,
         "extensions_used": extensions_used,
     }
+    if verification_role:
+        loops[name]["verification_role"] = verification_role
+    if recorded_extension_approval_id:
+        loops[name]["extension_approval_id"] = recorded_extension_approval_id
     token_pressure = loop_tokens >= config["max_tokens"]
     exhausted = (
         iteration >= config["max_iterations"]
@@ -1131,12 +1217,20 @@ def _repair_route(
         if approval_consumed and repair_budget_extended and extensions_used < 1:
             loops[name]["extensions_used"] = extensions_used + 1
             loop["extensions_used"] = extensions_used + 1
+            if extension_approval_id:
+                loops[name]["extension_approval_id"] = extension_approval_id
+                loop["extension_approval_id"] = extension_approval_id
             return _route(
                 config["to"],
                 f"{config['name']} received a one-time approved repair extension.",
                 loop=loop,
                 warnings=[token_warning] if token_warning else None,
             )
+        if extensions_used >= 1:
+            return _blocked(
+                f"{reason} The one-time review repair extension was already used; no second extension is allowed.",
+                loop_warnings,
+            ) | {"loop": loop}
         if approval_consumed:
             return _blocked(
                 f"{reason} The scoped approval was consumed, but the same checkpoint is still unresolved; repair it before retrying.",
@@ -1173,29 +1267,46 @@ def decide_next_role(
     advisory = result.get("next_action")
     approval_override = state.get("approval_override")
     override_scope = approval_override.get("scope", {}) if isinstance(approval_override, dict) else {}
-    bypass_approval = (
+    approval_consumed = (
         isinstance(approval_override, dict)
         and approval_override.get("gate") == current_role
         and isinstance(override_scope, dict)
         and "resume_workflow" in override_scope.get("actions", [])
     )
-    repair_budget_extended = (
-        bypass_approval
+    extension_actions = {
+        action
+        for action in _list_values(override_scope.get("actions"))
+        if action.startswith("extend_")
+    }
+    extension_requested = (
+        approval_consumed
         and isinstance(override_scope, dict)
-        and "extend_repair_budget" in override_scope.get("actions", [])
+        and "extend_review_repair_once" in override_scope.get("actions", [])
     )
-    if bypass_approval:
+    repair_budget_extended = bool(
+        extension_requested
+        and review_repair_extension_scope_valid(
+            state=state,
+            role_result=result,
+            artifacts_dir=artifacts_dir,
+            current_role=current_role,
+            scope=override_scope,
+        )
+    )
+    extension_like_requested = approval_consumed and bool(extension_actions)
+    bypass_approval = approval_consumed and not extension_like_requested
+    extension_approval_id = (
+        str(approval_override.get("approval_id", ""))
+        if isinstance(approval_override, dict)
+        else ""
+    )
+    if approval_consumed:
         state.pop("approval_override", None)
         warnings.append("Consumed one scoped approval override for this checkpoint.")
     grants = state.get("approval_grants", [])
     valid_grants = [item for item in grants if isinstance(item, dict)] if isinstance(grants, list) else []
     active_verifier_acceptance = False
-    verifier_artifacts = {
-        "architecture-consistency-agent": "architecture_consistency.json",
-        "semantic-conflict-agent": "semantic_conflict.json",
-        "reviewer": "review.json",
-    }
-    verifier_artifact = verifier_artifacts.get(current_role)
+    verifier_artifact = VERIFIER_ARTIFACTS.get(current_role)
     if (
         bypass_approval
         and verifier_artifact
@@ -1237,6 +1348,10 @@ def decide_next_role(
     budget_approved = any(
         isinstance(item.get("scope"), dict)
         and "resume_workflow" in item["scope"].get("actions", [])
+        and not any(
+            action.startswith("extend_")
+            for action in _list_values(item["scope"].get("actions"))
+        )
         and "budget exceeded" in str(item.get("reason", "")).lower()
         for item in valid_grants
     )
@@ -1279,8 +1394,10 @@ def decide_next_role(
             role_result=result,
             artifacts_dir=artifacts_dir,
             routing=routing,
-            approval_consumed=bypass_approval,
+            approval_consumed=approval_consumed,
             repair_budget_extended=repair_budget_extended,
+            extension_approval_id=extension_approval_id,
+            source_role=current_role,
         )
 
     budget_blockers = _budget_blockers(state, workflows)
@@ -1303,6 +1420,11 @@ def decide_next_role(
                         "exhausted dimensions: " + ", ".join(decision.exhausted_dimensions),
                     ],
                 )
+    if extension_like_requested and not repair_budget_extended:
+        return _blocked(
+            "The one-time review repair approval no longer matches the live verifier, diff, or exhausted loop checkpoint.",
+            warnings + ["Retry from a fresh checkpoint; this scoped approval cannot be reused or broadened."],
+        )
     token_warning = _token_budget_warning(state, workflows)
     if token_warning:
         warnings.append(token_warning)
@@ -1327,8 +1449,10 @@ def decide_next_role(
                 role_result=result,
                 artifacts_dir=artifacts_dir,
                 routing=routing,
-                approval_consumed=bypass_approval,
+                approval_consumed=approval_consumed,
                 repair_budget_extended=repair_budget_extended,
+                extension_approval_id=extension_approval_id,
+                source_role=current_role,
             )
         else:
             route = _repair_route(
@@ -1337,8 +1461,10 @@ def decide_next_role(
                 role_result=result,
                 artifacts_dir=artifacts_dir,
                 routing=routing,
-                approval_consumed=bypass_approval,
+                approval_consumed=approval_consumed,
                 repair_budget_extended=repair_budget_extended,
+                extension_approval_id=extension_approval_id,
+                source_role=current_role,
             )
         if not route["stop"]:
             after_loop_budget = _budget_blockers(state, workflows)
@@ -1373,8 +1499,10 @@ def decide_next_role(
                 role_result=result,
                 artifacts_dir=artifacts_dir,
                 routing=routing,
-                approval_consumed=bypass_approval,
+                approval_consumed=approval_consumed,
                 repair_budget_extended=repair_budget_extended,
+                extension_approval_id=extension_approval_id,
+                source_role=current_role,
             )
             if not route["stop"]:
                 after_loop_budget = _budget_blockers(state, workflows)
@@ -1390,8 +1518,10 @@ def decide_next_role(
                 role_result=result,
                 artifacts_dir=artifacts_dir,
                 routing=routing,
-                approval_consumed=bypass_approval,
+                approval_consumed=approval_consumed,
                 repair_budget_extended=repair_budget_extended,
+                extension_approval_id=extension_approval_id,
+                source_role=current_role,
             )
             if not route["stop"]:
                 after_loop_budget = _budget_blockers(state, workflows)
@@ -1431,8 +1561,10 @@ def decide_next_role(
                     role_result=result,
                     artifacts_dir=artifacts_dir,
                     routing=routing,
-                    approval_consumed=bypass_approval,
+                    approval_consumed=approval_consumed,
                     repair_budget_extended=repair_budget_extended,
+                    extension_approval_id=extension_approval_id,
+                    source_role=current_role,
                 )
         if verification == "unavailable":
             if not unavailability_accepted:
