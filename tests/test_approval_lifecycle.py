@@ -512,6 +512,25 @@ def test_stale_or_inconsistent_review_loop_does_not_offer_extension(
     assert approval["requested_scope"]["actions"] == ["resume_workflow"]
 
 
+def test_repeated_exhausted_review_can_request_only_one_explicit_extension(
+    tmp_path: Path,
+) -> None:
+    run = exhausted_reviewer_run(tmp_path)
+    workflow_path = run / "workflow.json"
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    workflow["last_route"]["loop"]["progress_detected"] = False
+    workflow["loops"]["review_repair"]["progress_detected"] = False
+    write_json(workflow_path, workflow)
+
+    approval = request_approval(run, reason="Repeated exhausted review")
+
+    assert approval["requested_scope"]["actions"] == [
+        "extend_review_repair_once",
+        "resume_workflow",
+    ]
+    assert approval["requested_scope"]["additional_attempts"] == 1
+
+
 def test_explicit_unbound_review_extension_scope_is_rejected(tmp_path: Path) -> None:
     run = awaiting_run(tmp_path)
 

@@ -854,6 +854,33 @@ def test_consumed_one_time_repair_extension_starts_one_more_repair(tmp_path: Pat
     ) == []
 
 
+def test_repeated_exhausted_review_extension_is_still_exactly_once(
+    tmp_path: Path,
+) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    review = json.loads((artifacts_dir / "review.json").read_text(encoding="utf-8"))
+    review.update(
+        {
+            "verdict": "broken",
+            "status": "block",
+            "blockers": ["REV-LOOP"],
+            "blocker_ids": ["REV-LOOP"],
+            "repair_required": True,
+        }
+    )
+    artifact(artifacts_dir / "review.json", review)
+    state = completed_state(review_status="block")
+    result_payload = bind_review_extension(tmp_path, state)
+    state["last_route"]["loop"]["progress_detected"] = False  # type: ignore[index]
+    state["loops"]["review_repair"]["progress_detected"] = False  # type: ignore[index]
+
+    result = route(tmp_path, state, "reviewer", result_payload)
+
+    assert result["next_role"] == "implementation-agent"
+    assert result["stop"] is False
+    assert state["loops"]["review_repair"]["extensions_used"] == 1  # type: ignore[index]
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

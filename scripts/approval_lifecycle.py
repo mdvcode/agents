@@ -192,7 +192,7 @@ def checkpoint_fingerprint(workflow: dict[str, Any], role: str, reason: str) -> 
 def one_time_repair_extension_scope(
     workflow: dict[str, Any], verifier: dict[str, Any]
 ) -> dict[str, Any]:
-    """Return one exact scope for an exhausted, progressing review repair."""
+    """Return one exact scope for a bounded, exhausted review repair."""
 
     last_route = workflow.get("last_route", {})
     loop = last_route.get("loop", {}) if isinstance(last_route, dict) else {}
@@ -207,7 +207,7 @@ def one_time_repair_extension_scope(
         or last_route.get("stop") is not True
         or not maximum
         or iteration != maximum
-        or loop.get("progress_detected") is not True
+        or not isinstance(loop.get("progress_detected"), bool)
         or str(verifier.get("verdict", "")).lower() != "broken"
         or verifier_artifact_unavailable(verifier)
     ):
@@ -220,7 +220,7 @@ def one_time_repair_extension_scope(
         or int(stored.get("max_iterations", 0) or 0) != maximum
         or stored.get("last_failure_fingerprint") != loop.get("failure_fingerprint")
         or stored.get("last_diff_fingerprint") != loop.get("diff_fingerprint")
-        or stored.get("progress_detected") is not True
+        or stored.get("progress_detected") != loop.get("progress_detected")
         or int(stored.get("extensions_used", 0) or 0) >= 1
     ):
         return {}

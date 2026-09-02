@@ -810,7 +810,7 @@ def review_repair_extension_scope_valid(
         or scope.get("at_iteration") != iteration
         or isinstance(scope.get("max_iterations"), bool)
         or scope.get("max_iterations") != maximum
-        or loop.get("progress_detected") is not True
+        or not isinstance(loop.get("progress_detected"), bool)
     ):
         return False
 
@@ -822,7 +822,7 @@ def review_repair_extension_scope_valid(
         or int(stored.get("max_iterations", 0) or 0) != maximum
         or stored.get("last_failure_fingerprint") != loop.get("failure_fingerprint")
         or stored.get("last_diff_fingerprint") != loop.get("diff_fingerprint")
-        or stored.get("progress_detected") is not True
+        or stored.get("progress_detected") != loop.get("progress_detected")
         or int(stored.get("extensions_used", 0) or 0) >= 1
     ):
         return False
