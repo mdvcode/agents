@@ -18,6 +18,7 @@ from workflow_router import (  # noqa: E402
     verifier_artifact_fingerprint,
 )
 from security_approval import security_scope  # noqa: E402
+from runtime_contracts import load_json, validate_contract  # noqa: E402
 
 
 REQUIRED = [
@@ -780,6 +781,11 @@ def test_exhausted_review_repair_requests_one_scoped_approval(tmp_path: Path) ->
     assert result["next_role"] == "approval-gate"
     assert result["loop"]["iteration"] == 3
     assert state["loops"]["review_repair"]["iterations"] == 3  # type: ignore[index]
+    assert validate_contract(
+        result,
+        load_json(ROOT / "schemas" / "workflow_route.schema.json"),
+        "workflow_route",
+    ) == []
 
 
 def test_consumed_repair_approval_cannot_prompt_again(tmp_path: Path) -> None:
@@ -841,6 +847,11 @@ def test_consumed_one_time_repair_extension_starts_one_more_repair(tmp_path: Pat
         == "review-repair-extension"
     )  # type: ignore[index]
     assert result["publication_allowed"] is False
+    assert validate_contract(
+        result,
+        load_json(ROOT / "schemas" / "workflow_route.schema.json"),
+        "workflow_route",
+    ) == []
 
 
 @pytest.mark.parametrize(
