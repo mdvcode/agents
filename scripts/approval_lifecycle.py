@@ -7,6 +7,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import re
 import secrets
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -14,8 +15,12 @@ from pathlib import Path
 from typing import Any
 
 from runtime_contracts import load_json as load_schema, validate_contract
+from run_state import continuation_attachment_payload, continuation_project_identity
 from security_approval import security_scope
 from task_queue import DEFAULT_DB, TaskQueue, TaskRecord
+from verifier_environment import verifier_artifact_unavailable
+from workflow_router import diff_hash, review_repair_extension_scope_valid
+from ai_harness.execution_accounting import accounted_role_count
 from ai_harness.recovery.checkpoints import RoleCheckpoint, read_checkpoint, write_checkpoint
 from ai_harness.recovery.policy import load_recovery_policy
 
@@ -24,6 +29,8 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNS_DIR = ROOT / ".agent-runs"
 APPROVAL_SCHEMA = ROOT / "schemas" / "approval.schema.json"
 TERMINAL_APPROVAL_STATES = {"rejected", "expired", "consumed"}
+MODEL_ESCALATION_SUMMARY = "Bounded model escalation is exhausted."
+MODEL_ESCALATION_REQUIREMENT = "bounded_escalation_exhausted_model"
 
 
 class ApprovalError(ValueError):
@@ -103,6 +110,13 @@ def append_error(run_dir: Path, *, code: str, message: str) -> None:
         handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+def _scope_integer(scope: dict[str, Any], key: str) -> int:
+    value = scope.get(key, 0)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ApprovalError(f"approval scope {key} must be an integer")
+    return value
+
+
 def canonical_scope(scope: dict[str, Any]) -> dict[str, Any]:
     actions = sorted({str(item) for item in scope.get("actions", []) if isinstance(item, str)})
     paths = sorted({str(item) for item in scope.get("paths", []) if isinstance(item, str)})
@@ -113,6 +127,15 @@ def canonical_scope(scope: dict[str, Any]) -> dict[str, Any]:
     risk_class = str(scope.get("risk_class", ""))
     security_fingerprint = str(scope.get("security_fingerprint", ""))
     verifier_fingerprint = str(scope.get("verifier_fingerprint", ""))
+    loop_name = str(scope.get("loop_name", ""))
+    at_iteration = _scope_integer(scope, "at_iteration")
+    max_iterations = _scope_integer(scope, "max_iterations")
+    failure_fingerprint = str(scope.get("failure_fingerprint", ""))
+    diff_fingerprint = str(scope.get("diff_fingerprint", ""))
+    additional_attempts = _scope_integer(scope, "additional_attempts")
+    model_escalation_role = str(scope.get("model_escalation_role", ""))
+    model_escalation_uses = _scope_integer(scope, "model_escalation_uses")
+    model_escalation_fingerprint = str(scope.get("model_escalation_fingerprint", ""))
     return {
         "actions": actions,
         "paths": paths,
@@ -121,6 +144,15 @@ def canonical_scope(scope: dict[str, Any]) -> dict[str, Any]:
         "finding_ids": finding_ids,
         "security_fingerprint": security_fingerprint,
         "verifier_fingerprint": verifier_fingerprint,
+        "loop_name": loop_name,
+        "at_iteration": at_iteration,
+        "max_iterations": max_iterations,
+        "failure_fingerprint": failure_fingerprint,
+        "diff_fingerprint": diff_fingerprint,
+        "additional_attempts": additional_attempts,
+        "model_escalation_role": model_escalation_role,
+        "model_escalation_uses": model_escalation_uses,
+        "model_escalation_fingerprint": model_escalation_fingerprint,
     }
 
 
@@ -167,6 +199,180 @@ def checkpoint_fingerprint(workflow: dict[str, Any], role: str, reason: str) -> 
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+def one_time_repair_extension_scope(
+    workflow: dict[str, Any], verifier: dict[str, Any]
+) -> dict[str, Any]:
+    """Return one exact scope for a bounded, exhausted review repair."""
+
+    last_route = workflow.get("last_route", {})
+    loop = last_route.get("loop", {}) if isinstance(last_route, dict) else {}
+    if not isinstance(loop, dict):
+        return {}
+    name = str(loop.get("name", ""))
+    iteration = int(loop.get("iteration", 0) or 0)
+    maximum = int(loop.get("max_iterations", 0) or 0)
+    if (
+        name != "review_repair"
+        or last_route.get("next_role") != "approval-gate"
+        or last_route.get("stop") is not True
+        or not maximum
+        or iteration != maximum
+        or not isinstance(loop.get("progress_detected"), bool)
+        or str(verifier.get("verdict", "")).lower() != "broken"
+        or verifier_artifact_unavailable(verifier)
+    ):
+        return {}
+    loops = workflow.get("loops", {})
+    stored = loops.get(name, {}) if isinstance(loops, dict) else {}
+    if (
+        not isinstance(stored, dict)
+        or int(stored.get("iterations", 0) or 0) != iteration
+        or int(stored.get("max_iterations", 0) or 0) != maximum
+        or stored.get("last_failure_fingerprint") != loop.get("failure_fingerprint")
+        or stored.get("last_diff_fingerprint") != loop.get("diff_fingerprint")
+        or stored.get("progress_detected") != loop.get("progress_detected")
+        or int(stored.get("extensions_used", 0) or 0) >= 1
+    ):
+        return {}
+    failure_fingerprint = str(loop.get("failure_fingerprint", ""))
+    diff_fingerprint = str(loop.get("diff_fingerprint", ""))
+    if not all(
+        re.fullmatch(r"[0-9a-f]{64}", value)
+        for value in (failure_fingerprint, diff_fingerprint)
+    ):
+        return {}
+    return {
+        "loop_name": name,
+        "at_iteration": iteration,
+        "max_iterations": maximum,
+        "failure_fingerprint": failure_fingerprint,
+        "diff_fingerprint": diff_fingerprint,
+        "additional_attempts": 1,
+    }
+
+
+def model_escalation_terminal_state(workflow: dict[str, Any], role: str) -> bool:
+    """Recognize a durable terminal role entry or its legacy workflow mirror."""
+
+    profile = workflow.get("current_execution_profile", {})
+    current_role = str(workflow.get("current_role", ""))
+    if (
+        isinstance(profile, dict)
+        and profile.get("terminal_action") == "human_or_dead_letter"
+        and current_role in {"", role}
+    ):
+        return True
+    roles = workflow.get("roles", [])
+    if not isinstance(roles, list):
+        return False
+    latest = next(
+        (
+            item
+            for item in reversed(roles)
+            if isinstance(item, dict) and item.get("role") != "approval-gate"
+        ),
+        {},
+    )
+    result = latest.get("result", {}) if isinstance(latest, dict) else {}
+    latest_profile = latest.get("execution_profile", {}) if isinstance(latest, dict) else {}
+    return bool(
+        latest.get("role") == role
+        and isinstance(result, dict)
+        and result.get("status") == "awaiting_approval"
+        and result.get("summary") == MODEL_ESCALATION_SUMMARY
+        and isinstance(latest_profile, dict)
+        and latest_profile.get("terminal_action") == "human_or_dead_letter"
+    )
+
+
+def bounded_model_escalation_checkpoint(workflow: dict[str, Any], role: str) -> bool:
+    """Recognize only the exact runner checkpoint that exhausted the model ladder."""
+
+    if role not in {"implementation-agent", "ci-repair-agent"}:
+        return False
+    attention = workflow.get("attention", {})
+    requirement = attention.get("requirement", {}) if isinstance(attention, dict) else {}
+    if not (
+        isinstance(attention, dict)
+        and attention.get("required") is True
+        and attention.get("role") == role
+        and attention.get("action") == "answer"
+        and attention.get("summary") == MODEL_ESCALATION_SUMMARY
+        and isinstance(requirement, dict)
+        and requirement.get("requirement_id") == MODEL_ESCALATION_REQUIREMENT
+        and model_escalation_terminal_state(workflow, role)
+    ):
+        return False
+    roles = workflow.get("roles", [])
+    if not isinstance(roles, list):
+        return False
+    latest = next(
+        (
+            item
+            for item in reversed(roles)
+            if isinstance(item, dict) and item.get("role") != "approval-gate"
+        ),
+        {},
+    )
+    result = latest.get("result", {}) if isinstance(latest, dict) else {}
+    return bool(
+        latest.get("role") == role
+        and isinstance(result, dict)
+        and result.get("status") == "awaiting_approval"
+        and result.get("summary") == MODEL_ESCALATION_SUMMARY
+    )
+
+
+def model_escalation_fingerprint(workflow: dict[str, Any], role: str) -> str:
+    """Bind the one-role approval to the exact run, diff, and trusted proposal."""
+
+    prior_profile: dict[str, Any] = {}
+    roles = workflow.get("roles", [])
+    if isinstance(roles, list):
+        for item in reversed(roles):
+            if not isinstance(item, dict) or item.get("role") != role:
+                continue
+            result = item.get("result", {})
+            profile = item.get("execution_profile", {})
+            terminal_without_runtime = bool(
+                isinstance(result, dict)
+                and result.get("status") == "awaiting_approval"
+                and result.get("tokens_used", 0) == 0
+                and isinstance(profile, dict)
+                and profile.get("terminal_action") == "human_or_dead_letter"
+            )
+            if item.get("llm_invoked") is True and not terminal_without_runtime:
+                prior_profile = profile if isinstance(profile, dict) else {}
+                break
+    proposal = workflow.get("current_execution_profile", {})
+    proposal = proposal if isinstance(proposal, dict) else {}
+    artifacts_dir = Path(str(workflow.get("artifacts_dir", "")))
+    loops = workflow.get("loops", {})
+    review_loop = loops.get("review_repair", {}) if isinstance(loops, dict) else {}
+    payload = {
+        "run_id": workflow.get("run_id", ""),
+        "input_fingerprint": workflow.get("input_fingerprint", ""),
+        "role": role,
+        "role_count": accounted_role_count(roles),
+        "diff_fingerprint": diff_hash(workflow, artifacts_dir),
+        "previous_execution_profile": prior_profile.get("execution_profile", ""),
+        "previous_model": prior_profile.get("model", ""),
+        "previous_reasoning_effort": prior_profile.get("reasoning_effort", ""),
+        "proposed_execution_profile": proposal.get("execution_profile", ""),
+        "proposed_model": proposal.get("model", ""),
+        "proposed_reasoning_effort": "xhigh",
+        "proposed_service_tier": proposal.get("service_tier", ""),
+        "review_extension_approval_id": (
+            review_loop.get("extension_approval_id", "")
+            if isinstance(review_loop, dict)
+            else ""
+        ),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def default_scope(workflow: dict[str, Any], role: str) -> dict[str, Any]:
     changed = workflow.get("changed_files", [])
     paths = [str(item) for item in changed if isinstance(item, str)] if isinstance(changed, list) else []
@@ -195,15 +401,32 @@ def default_scope(workflow: dict[str, Any], role: str) -> dict[str, Any]:
     verifier_name = verifier_artifacts.get(role)
     verifier_path = Path(str(workflow.get("artifacts_dir", ""))) / str(verifier_name or "")
     if verifier_name and verifier_path.is_file():
-        actions.append("accept_unavailable_verification")
         verifier = read_json(verifier_path)
+        if verifier_artifact_unavailable(verifier):
+            actions.append("accept_unavailable_verification")
+            extension_details = {}
+        else:
+            extension_details = one_time_repair_extension_scope(workflow, verifier)
+            if extension_details:
+                actions.append("extend_review_repair_once")
         verifier_details = {
             "verifier_fingerprint": hashlib.sha256(
                 json.dumps(verifier, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            ).hexdigest()
+            ).hexdigest(),
+            **extension_details,
         }
     else:
         verifier_details = {}
+    if bounded_model_escalation_checkpoint(workflow, role):
+        actions.append("allow_one_model_escalation")
+        model_escalation_details = {
+            "additional_attempts": 1,
+            "model_escalation_role": role,
+            "model_escalation_uses": 1,
+            "model_escalation_fingerprint": model_escalation_fingerprint(workflow, role),
+        }
+    else:
+        model_escalation_details = {}
     return canonical_scope(
         {
             "actions": actions,
@@ -212,6 +435,7 @@ def default_scope(workflow: dict[str, Any], role: str) -> dict[str, Any]:
             "risk_class": risk_class,
             **security_details,
             **verifier_details,
+            **model_escalation_details,
         }
     )
 
@@ -235,7 +459,22 @@ def request_approval(
         if not role:
             raise ApprovalError("approval checkpoint role is missing")
         now = utc_now()
-        requested_scope = canonical_scope(scope or default_scope(workflow, role))
+        exact_default_scope = default_scope(workflow, role)
+        requested_scope = canonical_scope(scope or exact_default_scope)
+        if (
+            "extend_review_repair_once" in requested_scope.get("actions", [])
+            and requested_scope != exact_default_scope
+        ):
+            raise ApprovalError(
+                "one-time review repair must match the exact exhausted verifier scope"
+            )
+        if (
+            "allow_one_model_escalation" in requested_scope.get("actions", [])
+            and requested_scope != exact_default_scope
+        ):
+            raise ApprovalError(
+                "one-time model escalation must match the exact exhausted model checkpoint"
+            )
         fingerprint = checkpoint_fingerprint(workflow, role, reason)
         approval_path = run_dir / "artifacts" / "approval.json"
         if approval_path.exists():
@@ -400,6 +639,42 @@ def _reset_checkpoint_for_resume(run_dir: Path, role: str) -> None:
     )
 
 
+def _role_result(workflow: dict[str, Any], role: str) -> dict[str, Any]:
+    roles = workflow.get("roles", [])
+    if not isinstance(roles, list):
+        return {}
+    for entry in reversed(roles):
+        if not isinstance(entry, dict) or entry.get("role") != role:
+            continue
+        result = entry.get("result", {})
+        return result if isinstance(result, dict) else {}
+    return {}
+
+
+def _approved_review_extension_valid(
+    run_dir: Path,
+    workflow: dict[str, Any],
+    role: str,
+    scope: dict[str, Any],
+) -> bool:
+    """Require a completed verifier checkpoint and an exact live extension scope."""
+
+    checkpoint = read_checkpoint(run_dir, role)
+    artifacts_dir = Path(str(workflow.get("artifacts_dir", "")))
+    return bool(
+        checkpoint is not None
+        and checkpoint.state == "role_completed"
+        and artifacts_dir.is_dir()
+        and review_repair_extension_scope_valid(
+            state=workflow,
+            role_result=_role_result(workflow, role),
+            artifacts_dir=artifacts_dir,
+            current_role=role,
+            scope=scope,
+        )
+    )
+
+
 def _exclude_approval_wait_from_recovery(
     workflow: dict[str, Any],
     approval: dict[str, Any],
@@ -450,7 +725,20 @@ def _prepare_resume_locked(run_dir: Path) -> dict[str, Any]:
         workflow["execution_status"] = "resuming"
         workflow["resume_role"] = role
         _resolve_approved_attention(workflow)
-        _reset_checkpoint_for_resume(run_dir, role)
+        approved_scope = approval.get("approved_scope", {})
+        approved_actions = approved_scope.get("actions", [])
+        extension_requested = "extend_review_repair_once" in approved_actions
+        if extension_requested and not _approved_review_extension_valid(
+            run_dir,
+            workflow,
+            role,
+            approved_scope,
+        ):
+            raise ApprovalError(
+                "one-time review repair scope no longer matches the completed verifier checkpoint"
+            )
+        if not extension_requested:
+            _reset_checkpoint_for_resume(run_dir, role)
         _exclude_approval_wait_from_recovery(
             workflow,
             approval,
@@ -494,9 +782,29 @@ def prepare_resume(run_dir: Path) -> dict[str, Any]:
         return _prepare_resume_locked(run_dir)
 
 
+def continuation_attachments_for_run(run_dir: Path) -> dict[str, Any]:
+    """Validate immutable attachment metadata before any continuation mutation."""
+
+    try:
+        return continuation_attachment_payload(read_json(run_dir / "workflow.json"))
+    except ValueError as exc:
+        raise ApprovalError(str(exc)) from exc
+
+
+def continuation_project_for_run(run_dir: Path) -> dict[str, str]:
+    """Validate immutable project metadata before continuation mutation."""
+
+    try:
+        return continuation_project_identity(read_json(run_dir / "workflow.json"))
+    except ValueError as exc:
+        raise ApprovalError(str(exc)) from exc
+
+
 def resume_run(run_dir: Path, *, queue: TaskQueue) -> tuple[dict[str, Any], TaskRecord]:
     """Consume an approval and enqueue continuation from the same run/worktree."""
     with approval_lock(run_dir):
+        attachment_payload = continuation_attachments_for_run(run_dir)
+        project_identity = continuation_project_for_run(run_dir)
         result = _prepare_resume_locked(run_dir)
         workflow = result["workflow"]
         approval = result["approval"]
@@ -506,6 +814,7 @@ def resume_run(run_dir: Path, *, queue: TaskQueue) -> tuple[dict[str, Any], Task
                 "task_id": str(workflow.get("task_id", "task")),
                 "goal": str(workflow.get("goal", workflow.get("task_id", "task"))),
                 "project": str(workflow.get("project", "agent_workspace")),
+                **project_identity,
                 "repository": str(workflow.get("repository", "")),
                 "branch": str(workflow.get("task_branch", workflow.get("branch", ""))),
                 "base_branch": str(workflow.get("base_branch", "main")),
@@ -522,6 +831,7 @@ def resume_run(run_dir: Path, *, queue: TaskQueue) -> tuple[dict[str, Any], Task
                 "run_id": run_dir.name,
                 "source": "approval",
                 "event_id": str(approval["approval_id"]),
+                **attachment_payload,
             },
             priority=100,
             max_retries=2,

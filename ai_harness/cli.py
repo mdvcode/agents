@@ -1,4 +1,4 @@
-"""User-facing `agent` command for local project onboarding and daily tasks."""
+"""Tweebit AI Harness by Daryna command for local projects and daily tasks."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 import yaml
 
@@ -35,10 +35,12 @@ from .project import (
     default_config,
     discover_repository,
     load_project_config,
+    project_attachment_limits,
     project_is_trusted,
     register_local_project,
     safe_branch,
     slug,
+    trust_key,
     write_project_config,
 )
 from .recovery.checkpoints import RoleCheckpoint, read_checkpoint, write_checkpoint
@@ -46,6 +48,9 @@ from .recovery.models import sanitized_message
 from .recovery.policy import load_recovery_policy
 from .sdk_session import ManagedCodexSdkSession, SdkSessionUnavailable
 from .task_batch import BatchManifestError, parse_batch_manifest
+
+if TYPE_CHECKING:
+    from .attachments import AttachmentLimits
 
 
 AGENTS_TEMPLATE = """# AGENTS.md
@@ -74,6 +79,14 @@ class DoctorCheck:
     name: str
     status: str
     detail: str
+
+
+@dataclass(frozen=True)
+class SupersededCheckoutState:
+    queue_record: Any
+    cancelled_updated_at: float
+    workflow_path: Path
+    workflow_bytes: bytes | None
 
 
 RUNTIME_IMPORTS = (
@@ -237,6 +250,10 @@ def handle_init(args: argparse.Namespace) -> int:
             else args.base_branch
         ),
         branch_prefix=args.branch_prefix or (existing_config.branch_prefix if existing_config else "feat/"),
+        runtime_provider=(
+            existing_config.runtime_provider if existing_config else "codex-sdk"
+        ),
+        attachments=existing_config.attachments if existing_config else None,
     )
     if existing_config is not None and not args.force:
         config = existing_config
@@ -311,7 +328,180 @@ def generated_task_branch(branch_prefix: str, task_id: str) -> str:
     return f"task/{digest}"
 
 
-def supersede_paused_checkout_task(root: Path, queue: Any, conflict: Any, new_task_id: str) -> str:
+def bind_task_attachments(
+    *,
+    root: Path,
+    run_id: str,
+    set_ids: Sequence[str],
+    runtime_provider: str,
+    runtime_consent: bool,
+    limits: AttachmentLimits | None = None,
+) -> dict[str, Any]:
+    """Atomically bind validated staging sets to one immutable run input tree."""
+
+    from .attachments import (
+        MAX_ATTACHMENTS,
+        MAX_RUNTIME_IMAGE_REFERENCES,
+        AttachmentError,
+        AttachmentStore,
+    )
+
+    selected_ids = [str(value).strip() for value in set_ids if str(value).strip()]
+    if not selected_ids:
+        return {
+            "input_manifest": "",
+            "input_manifest_sha256": "",
+            "attachment_count": 0,
+            "attachment_status": "none",
+            "attachment_set_id": "",
+            "run_inputs": "",
+            "source_attachment_set_ids": [],
+            "combined_attachment_set": False,
+        }
+    if len(selected_ids) > MAX_ATTACHMENTS:
+        raise CLIError(f"no more than {MAX_ATTACHMENTS} attachments are allowed")
+    if len(set(selected_ids)) != len(selected_ids):
+        raise CLIError("duplicate attachment sets are not allowed")
+    if not runtime_consent:
+        raise CLIError(
+            "attachments require explicit consent to send their contents to the configured AI runtime"
+        )
+    store = AttachmentStore(root / ".agent-uploads", limits=limits)
+    store.cleanup_expired()
+    try:
+        attachment_sets = [store.load(set_id) for set_id in selected_ids]
+        local_image_references = sum(
+            store.validate_runtime_ready(attachment_set)
+            for attachment_set in attachment_sets
+        )
+        if local_image_references > MAX_RUNTIME_IMAGE_REFERENCES:
+            raise CLIError(
+                "attachments contain more than "
+                f"{MAX_RUNTIME_IMAGE_REFERENCES} runtime image references"
+            )
+        attachment_count = sum(
+            len(value.manifest.get("attachments", [])) for value in attachment_sets
+        )
+        if not 1 <= attachment_count <= MAX_ATTACHMENTS:
+            raise CLIError(f"attachment sets must contain between 1 and {MAX_ATTACHMENTS} files")
+        has_local_images = any(
+            isinstance(content, dict) and content.get("kind") == "local_image"
+            for attachment_set in attachment_sets
+            for attachment in attachment_set.manifest.get("attachments", [])
+            if isinstance(attachment, dict)
+            for content in attachment.get("content", [])
+            if isinstance(attachment.get("content", []), list)
+        )
+        if has_local_images and runtime_provider != "codex-sdk":
+            raise CLIError(
+                "image attachments and scanned PDF pages require the codex-sdk image capability"
+            )
+        if len(attachment_sets) == 1:
+            selected = attachment_sets[0]
+        else:
+            selected = store.combine(selected_ids, discard_sources=False)
+        run_root = (root / ".agent-runs" / run_id).resolve()
+        if run_root.parent != (root / ".agent-runs").resolve():
+            raise CLIError("generated run id resolves outside the run store")
+        run_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        bound = store.bind_to_run(selected.set_id, run_root / "inputs")
+        manifest_bytes = bound.manifest_path.read_bytes()
+    except AttachmentError as exc:
+        raise CLIError(f"attachment intake failed: {exc}") from exc
+    return {
+        "input_manifest": str(bound.manifest_path.resolve()),
+        "input_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "attachment_count": attachment_count,
+        "attachment_status": bound.status,
+        "attachment_set_id": bound.set_id,
+        "run_inputs": str(bound.root.resolve()),
+        "source_attachment_set_ids": selected_ids,
+        "combined_attachment_set": len(selected_ids) > 1,
+    }
+
+
+def restore_bound_task_attachments(*, root: Path, attachment_input: dict[str, Any]) -> str:
+    """Return bound inputs to private staging after a failed queue transaction."""
+
+    set_id = str(attachment_input.get("attachment_set_id", "")).strip()
+    run_inputs = str(attachment_input.get("run_inputs", "")).strip()
+    if not set_id or not run_inputs:
+        return ""
+    from .attachments import AttachmentError, AttachmentStore
+
+    try:
+        store = AttachmentStore(root / ".agent-uploads")
+        if attachment_input.get("combined_attachment_set") is True:
+            source_ids = attachment_input.get("source_attachment_set_ids", [])
+            if not isinstance(source_ids, list) or not source_ids:
+                return "combined attachment sources are unavailable"
+            # Verify every original before discarding the duplicate combined copy.
+            for source_id in source_ids:
+                store.load(str(source_id))
+            store.discard_bound_run(set_id, Path(run_inputs))
+        else:
+            store.restore_from_run(set_id, Path(run_inputs))
+    except AttachmentError as exc:
+        return str(exc)
+    return ""
+
+
+def finalize_bound_task_attachments(
+    *, root: Path, attachment_input: dict[str, Any]
+) -> str:
+    """Remove retained upload originals after the queue owns a combined run copy."""
+
+    if attachment_input.get("combined_attachment_set") is not True:
+        return ""
+    source_ids = attachment_input.get("source_attachment_set_ids", [])
+    if not isinstance(source_ids, list) or not source_ids:
+        return "combined attachment sources are unavailable"
+    from .attachments import AttachmentError, AttachmentStore
+
+    try:
+        AttachmentStore(root / ".agent-uploads").discard_staged(
+            str(value) for value in source_ids
+        )
+    except AttachmentError as exc:
+        return str(exc)
+    return ""
+
+
+def restore_superseded_checkout_task(
+    queue: Any, state: SupersededCheckoutState
+) -> str:
+    """Restore queue and workflow authority after replacement intake rolls back."""
+
+    errors: list[str] = []
+    if state.workflow_bytes is not None:
+        temporary = state.workflow_path.with_suffix(".json.replacement-rollback.tmp")
+        try:
+            if state.workflow_path.is_symlink() or temporary.is_symlink():
+                raise OSError("refusing to restore workflow state through a symbolic link")
+            with temporary.open("xb") as handle:
+                handle.write(state.workflow_bytes)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary.replace(state.workflow_path)
+        except OSError as exc:
+            errors.append(f"workflow restore failed: {exc}")
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+    try:
+        queue.restore_cancelled_replacement(
+            state.queue_record,
+            expected_cancelled_updated_at=state.cancelled_updated_at,
+        )
+    except (OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
+        errors.append(f"queue restore failed: {exc}")
+    return "; ".join(errors)
+
+
+def supersede_paused_checkout_task(
+    root: Path, queue: Any, conflict: Any, new_task_id: str
+) -> tuple[str, SupersededCheckoutState]:
     """Cancel one paused checkout owner while preserving its branch and run files."""
 
     run_id = str(conflict.run_id or conflict.payload.get("run_id", "")).strip()
@@ -325,22 +515,61 @@ def supersede_paused_checkout_task(root: Path, queue: Any, conflict: Any, new_ta
     temporary = workflow_path.with_suffix(".json.tmp")
     if workflow_path.is_symlink() or temporary.is_symlink():
         raise CLIError(f"refusing to update paused run {run_id!r} through a symbolic link")
+    current = queue.get(int(conflict.id))
+    if (
+        current is None
+        or current.run_id != run_id
+        or current.status != conflict.status
+        or current.status not in REPLACEABLE_CHECKOUT_STATUSES
+    ):
+        raise CLIError(
+            f"task {old_task_id!r} changed while the new task was submitted; retry after `agent status`"
+        )
+    try:
+        workflow_bytes = workflow_path.read_bytes() if workflow_path.is_file() else None
+    except OSError as exc:
+        raise CLIError(f"paused run {run_id!r} could not be snapshotted: {exc}") from exc
     record = queue.abort_run(run_id)
-    if record.status != "cancelled":
+    if record.id != current.id or record.status != "cancelled":
         raise CLIError(
             f"task {old_task_id!r} became active while the new task was submitted; "
             "cancellation was requested, and the new task can be retried after `agent status`"
         )
-    if workflow_path.is_file():
-        workflow = read_json_object(workflow_path)
-        workflow["execution_status"] = "cancelled"
-        workflow["recovery_action"] = ""
-        workflow["superseded_by_task_id"] = new_task_id
-        temporary.write_text(json.dumps(workflow, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        temporary.replace(workflow_path)
+    state = SupersededCheckoutState(
+        queue_record=current,
+        cancelled_updated_at=record.updated_at,
+        workflow_path=workflow_path,
+        workflow_bytes=workflow_bytes,
+    )
+    try:
+        if workflow_path.is_file():
+            workflow = read_json_object(workflow_path)
+            workflow["execution_status"] = "cancelled"
+            workflow["recovery_action"] = ""
+            workflow["superseded_by_task_id"] = new_task_id
+            temporary.write_text(
+                json.dumps(workflow, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(workflow_path)
+    except (OSError, ValueError) as exc:
+        rollback_error = restore_superseded_checkout_task(queue, state)
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        rollback_note = (
+            f"; replacement rollback failed: {rollback_error}" if rollback_error else ""
+        )
+        raise CLIError(
+            f"paused task {old_task_id!r} could not be marked as replaced: {exc}{rollback_note}"
+        ) from exc
     return (
-        f"paused task {old_task_id} ({run_id}) was replaced by this new task; "
-        "its branch and run files were preserved"
+        (
+            f"paused task {old_task_id} ({run_id}) was replaced by this new task; "
+            "its branch and run files were preserved"
+        ),
+        state,
     )
 
 
@@ -388,11 +617,15 @@ def handle_task(args: argparse.Namespace) -> int:
         )
     if branch in {config.base_branch, "main", "master", "trunk"}:
         raise CLIError("task branch must not be a protected/default branch")
-    external_id = f"{config.project_id}:{task_id}"
+    project_key = trust_key(repository)
+    external_id = f"{project_key}:{task_id}"
+    run_id = datetime.now(timezone.utc).strftime(f"%Y%m%dT%H%M%S.%fZ-{task_id}")
     payload = {
         "external_id": external_id,
         "task_id": task_id,
-        "task_key": f"cli:{config.project_id}:{task_id}",
+        "task_key": f"cli:{project_key}:{task_id}",
+        "project_id": config.project_id,
+        "project_key": project_key,
         "goal": goal,
         "branch": branch,
         "base_branch": config.base_branch,
@@ -408,7 +641,7 @@ def handle_task(args: argparse.Namespace) -> int:
         "allowed_child_repositories": list(
             getattr(args, "allowed_child_repositories", []) or [str(repository)]
         ),
-        "run_id": datetime.now(timezone.utc).strftime(f"%Y%m%dT%H%M%S.%fZ-{task_id}"),
+        "run_id": run_id,
         "checkout_path": str(repository),
         "task_branch": branch,
         "base_sha": intake_base_sha,
@@ -420,10 +653,16 @@ def handle_task(args: argparse.Namespace) -> int:
             payload=payload,
             repository=repository,
             project=config.profile,
+            project_id=config.project_id,
+            project_key=project_key,
         )
     except event_ingestion.EventError as exc:
         raise CLIError(f"task request is invalid: {exc}") from exc
+    legacy_task_key = f"cli:{config.project_id}:{task_id}"
+    envelope["idempotency_aliases"] = [legacy_task_key]
     if args.dry_run:
+        if getattr(args, "attachment_sets", []):
+            raise CLIError("attachment sets cannot be consumed by a dry run")
         dry_result = {"status": "dry_run", "envelope": envelope, "task_id": task_id, "repository": str(repository)}
         collector = getattr(args, "result_collector", None)
         if callable(collector):
@@ -448,6 +687,17 @@ def handle_task(args: argparse.Namespace) -> int:
         raise CLIError(f"missing runtime dependencies: {', '.join(missing)}; {dependency_repair_hint()}")
     if config.runtime_provider == "codex-sdk":
         verify_managed_sdk_session(root)
+    requested_attachment_sets = list(getattr(args, "attachment_sets", []) or [])
+    attachment_input: dict[str, Any] = {
+        "input_manifest": "",
+        "input_manifest_sha256": "",
+        "attachment_count": 0,
+        "attachment_status": "none",
+        "attachment_set_id": "",
+        "run_inputs": "",
+        "source_attachment_set_ids": [],
+        "combined_attachment_set": False,
+    }
     task_queue = load_harness_module(root, "task_queue")
     queue_path = root / ".agent-queue" / "tasks.db"
     try:
@@ -455,29 +705,45 @@ def handle_task(args: argparse.Namespace) -> int:
     except (sqlite3.Error, ValueError) as exc:
         raise CLIError(f"task queue could not be opened: {exc}") from exc
     queued_items = queue.list() if queue is not None else []
+    equivalent_task_keys = {str(envelope["task_key"]), legacy_task_key}
     existing_same_task = next(
-        (item for item in queued_items if item.task_key == envelope["task_key"]),
+        (
+            item
+            for item in queued_items
+            if item.task_key in equivalent_task_keys
+            and bool(item.payload.get("repository"))
+            and Path(str(item.payload["repository"])).resolve() == repository.resolve()
+        ),
         None,
     )
+    if existing_same_task is not None:
+        # Reuse a matching legacy key so upgrading an initialized project does
+        # not enqueue the same task a second time.  New tasks always retain the
+        # collision-safe key based on the canonical repository identity.
+        envelope["task_key"] = existing_same_task.task_key
+    if requested_attachment_sets and existing_same_task is not None:
+        raise CLIError(
+            f"task id {task_id!r} already exists; use a new task id when submitting attachments"
+        )
     current_branch_conflicts = [
         item
         for item in queued_items
-        if item.task_key != envelope["task_key"]
+        if (existing_same_task is None or item.id != existing_same_task.id)
         and item.status not in {"completed", "cancelled"}
         and item.payload.get("workspace_mode") in {"checkout", "current_branch"}
         and bool(item.payload.get("repository"))
         and Path(str(item.payload["repository"])).resolve() == repository.resolve()
     ]
     supersession_warnings: list[str] = []
+    supersession_candidate: Any | None = None
+    superseded_state: SupersededCheckoutState | None = None
     if (
         workspace_mode == "checkout"
         and len(current_branch_conflicts) == 1
         and not args.keep_paused
         and current_branch_conflicts[0].status in REPLACEABLE_CHECKOUT_STATUSES
     ):
-        supersession_warnings.append(
-            supersede_paused_checkout_task(root, queue, current_branch_conflicts[0], task_id)
-        )
+        supersession_candidate = current_branch_conflicts[0]
         current_branch_conflicts = []
     if workspace_mode == "checkout" and current_branch_conflicts:
         conflict = current_branch_conflicts[0]
@@ -503,14 +769,108 @@ def handle_task(args: argparse.Namespace) -> int:
         envelope["task_branch"] = branch
         envelope["branch_owner_run_id"] = str(envelope.get("run_id", ""))
     try:
-        queue = queue or task_queue.TaskQueue(queue_path)
-        record = event_ingestion.enqueue_envelope(queue, envelope)
-    except (sqlite3.Error, RuntimeError, ValueError) as exc:
+        attachment_input = bind_task_attachments(
+            root=root,
+            run_id=run_id,
+            set_ids=requested_attachment_sets,
+            runtime_provider=config.runtime_provider,
+            runtime_consent=bool(getattr(args, "attachment_runtime_consent", False)),
+            limits=project_attachment_limits(config),
+        )
+    except CLIError as exc:
         rollback_errors: list[str] = []
         if prepared is not None:
+            assert worktree_manager is not None
             rollback_errors = worktree_manager.rollback_prepared_task_branch(repository, prepared)
-        rollback_note = f"; branch rollback failed: {'; '.join(rollback_errors)}" if rollback_errors else ""
+        rollback_note = (
+            f"; branch rollback failed: {'; '.join(rollback_errors)}"
+            if rollback_errors
+            else ""
+        )
+        raise CLIError(f"{exc}{rollback_note}") from exc
+    if attachment_input["attachment_count"]:
+        envelope.update(
+            {
+                "input_manifest": attachment_input["input_manifest"],
+                "input_manifest_sha256": attachment_input["input_manifest_sha256"],
+                "attachment_count": attachment_input["attachment_count"],
+                "attachment_runtime_consent": True,
+            }
+        )
+    try:
+        if supersession_candidate is not None:
+            supersession_warning, superseded_state = supersede_paused_checkout_task(
+                root, queue, supersession_candidate, task_id
+            )
+            supersession_warnings.append(supersession_warning)
+            branch_warnings.extend(supersession_warnings)
+        queue = queue or task_queue.TaskQueue(queue_path)
+        record = event_ingestion.enqueue_envelope(queue, envelope)
+    except (CLIError, OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
+        attachment_rollback_error = restore_bound_task_attachments(
+            root=root, attachment_input=attachment_input
+        )
+        rollback_errors: list[str] = []
+        if prepared is not None:
+            assert worktree_manager is not None
+            rollback_errors = worktree_manager.rollback_prepared_task_branch(repository, prepared)
+        rollback_notes = []
+        if superseded_state is not None:
+            supersession_rollback_error = restore_superseded_checkout_task(
+                queue, superseded_state
+            )
+            if supersession_rollback_error:
+                rollback_notes.append(
+                    f"replacement rollback failed: {supersession_rollback_error}"
+                )
+        if attachment_rollback_error:
+            rollback_notes.append(
+                f"attachment rollback failed: {attachment_rollback_error}"
+            )
+        if rollback_errors:
+            rollback_notes.append(
+                f"branch rollback failed: {'; '.join(rollback_errors)}"
+            )
+        rollback_note = f"; {'; '.join(rollback_notes)}" if rollback_notes else ""
         raise CLIError(f"task could not be queued: {exc}{rollback_note}") from exc
+    if requested_attachment_sets and record.run_id != run_id:
+        attachment_rollback_error = restore_bound_task_attachments(
+            root=root, attachment_input=attachment_input
+        )
+        rollback_errors: list[str] = []
+        if prepared is not None:
+            assert worktree_manager is not None
+            rollback_errors = worktree_manager.rollback_prepared_task_branch(repository, prepared)
+        rollback_notes = []
+        if superseded_state is not None:
+            supersession_rollback_error = restore_superseded_checkout_task(
+                queue, superseded_state
+            )
+            if supersession_rollback_error:
+                rollback_notes.append(
+                    f"replacement rollback failed: {supersession_rollback_error}"
+                )
+        if attachment_rollback_error:
+            rollback_notes.append(
+                f"attachment rollback failed: {attachment_rollback_error}"
+            )
+        if rollback_errors:
+            rollback_notes.append(
+                f"branch rollback failed: {'; '.join(rollback_errors)}"
+            )
+        rollback_note = f"; {'; '.join(rollback_notes)}" if rollback_notes else ""
+        raise CLIError(
+            f"task id {task_id!r} was queued concurrently; attachments were not consumed; "
+            f"use a new task id{rollback_note}"
+        )
+    attachment_finalize_error = finalize_bound_task_attachments(
+        root=root, attachment_input=attachment_input
+    )
+    if attachment_finalize_error:
+        branch_warnings.append(
+            "temporary attachment originals could not be removed immediately; "
+            f"TTL cleanup will retry ({attachment_finalize_error})"
+        )
     try:
         worker = ensure_worker_service(root, workers=3)
     except CLIError as exc:
@@ -525,17 +885,35 @@ def handle_task(args: argparse.Namespace) -> int:
         "task_id": task_id,
         "task_key": record.task_key,
         "run_id": record.run_id,
+        "project_id": str(record.payload.get("project_id", config.project_id)),
+        "project_key": str(record.payload.get("project_key", project_key)),
         "repository": str(repository),
         "branch": stored_branch,
         "workspace_mode": str(record.payload.get("workspace_mode", workspace_mode)),
         "mode": str(record.payload.get("mode", args.mode)),
         "queue_db": str(queue_path),
-        "idempotent": record.payload.get("event_id") == envelope["event_id"],
+        "idempotent": (
+            existing_same_task is not None
+            or record.payload.get("event_id") == envelope["event_id"]
+        ),
         "worker": {
             "status": str(worker.get("status", "starting")),
             "pid": safe_int(worker.get("pid", 0)),
         },
         "warnings": branch_warnings,
+        "attachments": {
+            "count": int(
+                record.payload.get(
+                    "attachment_count", attachment_input["attachment_count"]
+                )
+                or 0
+            ),
+            "status": str(
+                attachment_input["attachment_status"]
+                if attachment_input["attachment_count"]
+                else ("bound" if record.payload.get("attachment_count") else "none")
+            ),
+        },
     }
     collector = getattr(args, "result_collector", None)
     if callable(collector):
@@ -853,6 +1231,19 @@ def project_tasks(db_path: Path, repository: Path) -> list[dict[str, Any]]:
 
 
 def workflow_attention(workflow: dict[str, Any]) -> dict[str, Any]:
+    status = str(workflow.get("execution_status", ""))
+    attention_statuses = {"awaiting_approval", "blocked", "dead_letter", "failed"}
+    if status and status not in attention_statuses:
+        return {
+            "required": False,
+            "summary": "",
+            "details": [],
+            "role": "",
+            "action": "",
+            "question": {},
+            "repeated_question": False,
+            "repeated_requirement": False,
+        }
     raw = workflow.get("attention")
     if isinstance(raw, dict) and raw.get("required") is True:
         details = raw.get("details", [])
@@ -866,8 +1257,7 @@ def workflow_attention(workflow: dict[str, Any]) -> dict[str, Any]:
             "repeated_question": raw.get("repeated_question") is True,
             "repeated_requirement": raw.get("repeated_requirement") is True,
         }
-    status = str(workflow.get("execution_status", ""))
-    if status not in {"awaiting_approval", "blocked", "dead_letter", "failed"}:
+    if status not in attention_statuses:
         return {
             "required": False,
             "summary": "",
@@ -1156,6 +1546,96 @@ def reset_role_checkpoint_for_rerun(run_dir: Path, workflow: dict[str, Any]) -> 
     workflow["resume_role"] = role
 
 
+def resolve_retry_attention(workflow: dict[str, Any]) -> bool:
+    """Clear repaired retry state and return whether the current role must rerun."""
+
+    attention = workflow.get("attention")
+    if not isinstance(attention, dict) or attention.get("action") != "fix_then_retry":
+        blockers = workflow.get("blockers", [])
+        approval_expired = isinstance(blockers, list) and any(
+            str(item).strip() == "approval expired" for item in blockers
+        )
+        requirement = attention.get("requirement", {}) if isinstance(attention, dict) else {}
+        if (
+            approval_expired
+            and isinstance(requirement, dict)
+            and requirement.get("requirement_id") == "bounded_escalation_exhausted_model"
+            and attention.get("summary") == "Bounded model escalation is exhausted."
+            and attention.get("role") in {"implementation-agent", "ci-repair-agent"}
+        ):
+            requests = workflow.get("missing_requirement_requests", [])
+            if isinstance(requests, list):
+                retained: list[Any] = []
+                expired: list[Any] = []
+                attention_fingerprint = str(attention.get("fingerprint", ""))
+                for request in requests:
+                    matches = bool(
+                        isinstance(request, dict)
+                        and request.get("requirement_id")
+                        == "bounded_escalation_exhausted_model"
+                        and request.get("role") == attention.get("role")
+                        and bool(attention_fingerprint)
+                        and request.get("fingerprint") == attention_fingerprint
+                    )
+                    (expired if matches else retained).append(request)
+                workflow["missing_requirement_requests"] = retained
+                if expired:
+                    history = workflow.get("expired_requirement_requests", [])
+                    if not isinstance(history, list):
+                        history = []
+                    expired_at = datetime.now(timezone.utc).isoformat()
+                    history.extend(
+                        {
+                            **request,
+                            "expired_at": expired_at,
+                            "resolution": "approval_expired",
+                        }
+                        for request in expired
+                        if isinstance(request, dict)
+                    )
+                    workflow["expired_requirement_requests"] = history[-50:]
+        if isinstance(blockers, list):
+            workflow["blockers"] = [
+                item for item in blockers if str(item).strip() != "approval expired"
+            ]
+        return True
+    details = attention.get("details", [])
+    active_values = {str(attention.get("summary", "")).strip()}
+    if isinstance(details, list):
+        active_values.update(str(item).strip() for item in details)
+    active_values.discard("")
+    workflow.pop("attention", None)
+    history = workflow.get("attention_history", [])
+    if not isinstance(history, list):
+        history = []
+    history.append(
+        {
+            **attention,
+            "required": False,
+            "resolved_at": datetime.now(timezone.utc).isoformat(),
+            "resolution": "retry_requested",
+        }
+    )
+    workflow["attention_history"] = history[-50:]
+    blockers = workflow.get("blockers", [])
+    if isinstance(blockers, list):
+        workflow["blockers"] = [
+            item for item in blockers if str(item).strip() not in active_values
+        ]
+    role = str(attention.get("role", workflow.get("current_role", "")))
+    roles = workflow.get("roles", [])
+    if isinstance(roles, list):
+        for checkpoint in reversed(roles):
+            if not isinstance(checkpoint, dict) or checkpoint.get("role") != role:
+                continue
+            result = checkpoint.get("result", {})
+            completed = isinstance(result, dict) and result.get("status") == "completed"
+            if completed:
+                workflow["resume_role"] = role
+            return not completed
+    return True
+
+
 def resolve_answer_attention(run_dir: Path) -> None:
     """Archive the answer and rerun the paused role with the new information."""
     path = run_dir / "workflow.json"
@@ -1252,6 +1732,12 @@ def handle_answer(args: argparse.Namespace) -> int:
         for option in options
     ):
         raise CLIError("the selected option requires accompanying details")
+    approval_lifecycle = load_harness_module(root, "approval_lifecycle")
+    task_queue = load_harness_module(root, "task_queue")
+    try:
+        approval_lifecycle.continuation_attachments_for_run(run_dir)
+    except approval_lifecycle.ApprovalError as exc:
+        raise CLIError(str(exc)) from exc
     record_human_input(
         run_dir,
         run_id=args.run_id,
@@ -1259,8 +1745,6 @@ def handle_answer(args: argparse.Namespace) -> int:
         response=response,
         attention=attention,
     )
-    approval_lifecycle = load_harness_module(root, "approval_lifecycle")
-    task_queue = load_harness_module(root, "task_queue")
     try:
         approval = approval_lifecycle.approve_run(
             run_dir,
@@ -1799,7 +2283,7 @@ def handle_start(args: argparse.Namespace) -> int:
         payload,
         as_json=args.json,
         lines=(
-            f"AI Harness started for {config.project_id}.",
+            f"Tweebit AI Harness by Daryna started for {config.project_id}.",
             f"  worker: {payload.get('status', 'starting')}",
             f"  base branch: {config.base_branch} ({base_ref})",
             f"  log: {root / '.agent-queue' / 'worker-service.log'}",
@@ -1816,7 +2300,7 @@ def handle_stop(args: argparse.Namespace) -> int:
         payload,
         as_json=args.json,
         lines=(
-            f"AI Harness stop: {payload.get('status', 'requested')}",
+            f"Tweebit AI Harness by Daryna stop: {payload.get('status', 'requested')}",
             "Use `agent worker status` to confirm shutdown.",
         ),
     )
@@ -1912,7 +2396,8 @@ def handle_recovery_command(args: argparse.Namespace) -> int:
                 workflow["execution_status"] = "retry_wait" if args.command == "retry" else "resuming"
                 workflow["recovery_action"] = args.command
                 if args.command == "retry":
-                    reset_role_checkpoint_for_rerun(run_dir, workflow)
+                    if resolve_retry_attention(workflow):
+                        reset_role_checkpoint_for_rerun(run_dir, workflow)
                 recovery = workflow.get("recovery", {})
                 if not isinstance(recovery, dict):
                     recovery = {}
@@ -2014,7 +2499,7 @@ def validate_local_update_source(source: Path) -> None:
         raise CLIError(f"{source} is not an AI Harness download")
 
 
-def refresh_git_source(source: Path) -> None:
+def ensure_clean_git_source(source: Path) -> None:
     status = update_process(
         ["git", "-C", str(source), "status", "--porcelain=v1", "--untracked-files=normal"],
         label="checking the downloaded system",
@@ -2027,6 +2512,10 @@ def refresh_git_source(source: Path) -> None:
             f"update stopped because the downloaded system has local changes: {visible}; "
             "commit or stash them, then run `agent update` again"
         )
+
+
+def refresh_git_source(source: Path) -> None:
+    ensure_clean_git_source(source)
     update_process(
         ["git", "-C", str(source), "pull", "--ff-only"],
         label="downloading the update",
@@ -2093,8 +2582,14 @@ def handle_update(args: argparse.Namespace) -> int:
     install_spec, local_source, source_kind = selected_update_source(args.source, installed_source)
     git_updated = False
     if local_source is not None and (local_source / ".git").exists():
-        refresh_git_source(local_source)
-        git_updated = True
+        # An explicitly selected local checkout is already the release input:
+        # verify that it is reviewable, but never replace it with a hidden pull.
+        # Ordinary no-argument updates retain the existing pull behavior.
+        if args.source:
+            ensure_clean_git_source(local_source)
+        else:
+            refresh_git_source(local_source)
+            git_updated = True
     worker_root, worker_was_running = pause_worker_for_update()
     try:
         if local_source is not None or args.source or install_spec == DEFAULT_UPDATE_SOURCE:
@@ -2427,7 +2922,7 @@ def handle_doctor(args: argparse.Namespace) -> int:
         payload,
         as_json=args.json,
         lines=(
-            f"AI Harness {__version__}: {'problems found' if failed else ('ready with warnings' if warned else 'ready')}",
+            f"Tweebit AI Harness by Daryna {__version__}: {'problems found' if failed else ('ready with warnings' if warned else 'ready')}",
             *(f"  [{check.status.upper()}] {check.name}: {check.detail}" for check in checks),
             *(f"Next: {action}" for action in next_actions),
         ),
@@ -2514,6 +3009,18 @@ def build_parser() -> argparse.ArgumentParser:
         dest="allowed_child_repositories",
         action="append",
         default=[],
+        help=argparse.SUPPRESS,
+    )
+    task_parser.add_argument(
+        "--attachment-set",
+        dest="attachment_sets",
+        action="append",
+        default=[],
+        help=argparse.SUPPRESS,
+    )
+    task_parser.add_argument(
+        "--attachment-runtime-consent",
+        action="store_true",
         help=argparse.SUPPRESS,
     )
     task_parser.add_argument("--dry-run", action="store_true")

@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+from ai_harness.project import trust_key
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "context_compiler.py"
 sys.path.insert(0, str(MODULE_PATH.parent))
@@ -138,6 +140,68 @@ def test_context_manifest_includes_retrieved_project_knowledge(tmp_path: Path, m
     package = Path(manifest["context_package_path"]).read_text(encoding="utf-8")
     assert "Rule-based project knowledge retrieval keeps provenance" in package
     assert manifest["repo_intelligence"]["context_engine"]["status"] == "compiled"
+
+
+def test_project_key_prevents_duplicate_display_id_context_leak(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    control_root = tmp_path / "control"
+    first_repository = tmp_path / "repo-a"
+    second_repository = tmp_path / "repo-b"
+    first_repository.mkdir()
+    second_repository.mkdir()
+    first_key = trust_key(first_repository)
+    second_key = trust_key(second_repository)
+    legacy = control_root / "docs/projects/shared/wiki/legacy.md"
+    keyed_root = control_root / "docs/projects/by-key" / first_key
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("# Legacy secret\nMust not cross repositories.\n", encoding="utf-8")
+    (keyed_root / "wiki").mkdir(parents=True)
+    (keyed_root / "privacy.md").write_text("# Private\n", encoding="utf-8")
+    (keyed_root / "wiki/context.md").write_text(
+        "# Bound context\nRepository-bound planning context.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(context_compiler, "MEMORY_CONTROL_ROOT", control_root)
+
+    first = context_compiler.create_context_manifest(
+        run_id="run-keyed-a",
+        role="planner",
+        goal="Use repository-bound planning context",
+        repository=first_repository,
+        artifacts_dir=tmp_path / "artifacts-a",
+        context_dir=tmp_path / "context-a",
+        project="shared",
+        project_key=first_key,
+        project_profile="nextjs_web",
+        token_budget=12000,
+        allowed_tools=["filesystem_read"],
+        previous_roles=[],
+    )
+    second = context_compiler.create_context_manifest(
+        run_id="run-keyed-b",
+        role="planner",
+        goal="Use repository-bound planning context",
+        repository=second_repository,
+        artifacts_dir=tmp_path / "artifacts-b",
+        context_dir=tmp_path / "context-b",
+        project="shared",
+        project_key=second_key,
+        project_profile="nextjs_web",
+        token_budget=12000,
+        allowed_tools=["filesystem_read"],
+        previous_roles=[],
+    )
+
+    first_manifest = json.loads(first.read_text(encoding="utf-8"))
+    second_manifest = json.loads(second.read_text(encoding="utf-8"))
+    first_package = Path(first_manifest["context_package_path"]).read_text(encoding="utf-8")
+    second_package = Path(second_manifest["context_package_path"]).read_text(encoding="utf-8")
+    assert first_manifest["project_key"] == first_key
+    assert "Repository-bound planning context" in first_package
+    assert "Must not cross repositories" not in first_package
+    assert "Repository-bound planning context" not in second_package
+    assert "Must not cross repositories" not in second_package
 
 
 def test_local_skills_have_yaml_frontmatter() -> None:

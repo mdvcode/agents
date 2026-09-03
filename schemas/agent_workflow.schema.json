@@ -14,6 +14,7 @@
     "base_branch_sha_before",
     "base_branch_sha_after"
   ],
+  "all_or_none": [["project_id", "project_key"]],
   "enums": {
     "execution_status": ["planned", "created", "running", "role_pending", "role_running", "role_output_received", "role_validating", "role_completed", "retry_wait", "repairing", "resuming", "awaiting_approval", "completed", "blocked", "dead_letter", "failed", "cancelled"],
     "workspace_mode": ["checkout", "worktree", "isolated", "current_branch"],
@@ -24,6 +25,8 @@
     "run_id": "str",
     "workflow": "str",
     "task_id": "str",
+    "project_id": "str",
+    "project_key": "str",
     "execution_status": "str",
     "roles": "list",
     "loops": "dict",

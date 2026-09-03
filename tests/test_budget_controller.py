@@ -75,3 +75,48 @@ def test_usage_counts_uncached_tokens_model_calls_repairs_and_escalations() -> N
     assert usage.output_tokens == 200
     assert usage.repair_attempts == 2
     assert usage.model_escalations == 1
+
+
+def test_usage_ignores_terminal_selection_and_completed_checkpoint_replay() -> None:
+    actual_result = {
+        "input_tokens": 100,
+        "cached_input_tokens": 20,
+        "output_tokens": 10,
+    }
+    state = {
+        "roles": [
+            {
+                "role": "implementation-agent",
+                "llm_invoked": True,
+                "execution_profile": {"escalation_level": 1},
+                "result": actual_result,
+            },
+            {
+                "role": "implementation-agent",
+                "llm_invoked": True,
+                "execution_profile": {
+                    "escalation_level": 2,
+                    "terminal_action": "human_or_dead_letter",
+                },
+                "result": {"status": "awaiting_approval", "tokens_used": 0},
+            },
+            {
+                "role": "implementation-agent",
+                "llm_invoked": False,
+                "cache_provenance": "completed_checkpoint_replay",
+                "result": actual_result,
+            },
+            {
+                "role": "approval-gate",
+                "llm_invoked": False,
+                "result": {"status": "awaiting_approval"},
+            },
+        ]
+    }
+
+    usage = BudgetUsage.from_state(state)
+
+    assert usage.model_calls == 1
+    assert usage.uncached_input_tokens == 80
+    assert usage.output_tokens == 10
+    assert usage.model_escalations == 1

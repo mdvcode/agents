@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fcntl
 import hashlib
 import json
 import os
@@ -17,6 +18,7 @@ import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -31,17 +33,37 @@ HARNESS_ROOT = SCRIPT_DIR.parent
 if str(HARNESS_ROOT) not in sys.path:
     sys.path.insert(0, str(HARNESS_ROOT))
 
-from approval_lifecycle import ApprovalError, request_approval
+from approval_lifecycle import (
+    ApprovalError,
+    MODEL_ESCALATION_REQUIREMENT,
+    MODEL_ESCALATION_SUMMARY,
+    approval_lock,
+    bounded_model_escalation_checkpoint,
+    model_escalation_fingerprint,
+    model_escalation_terminal_state,
+    read_json as read_approval_workflow,
+    request_approval,
+    write_json_atomic as write_approval_workflow,
+)
 from ai_harness.model_policy import select_execution_profile
 from ai_harness.economics import BudgetAction, BudgetController, BudgetUsage
+from ai_harness.execution_accounting import (
+    accounted_role_count,
+    accounted_tokens_used,
+    incremental_tokens,
+    role_entry_invoked_model,
+)
 from ai_harness.planning import RolePolicy, TaskAnalyzer, WorkflowCompiler
 from ai_harness.planning.workflow_compiler import COMPILER_VERSION
+from ai_harness.project import trust_key
 from context_compiler import create_context_manifest, role_capability, role_contract
 from repository_registry import RepositoryRecord, find_by_remote, load_local_project_record
 from runtime_contracts import contract_section, load_json, validate_contract
 from runtimes import RuntimeConfigurationError, create_runtime
 from run_state import (
     RunLayout,
+    continuation_attachment_payload,
+    continuation_project_identity,
     file_contents_snapshot,
     file_snapshot,
     find_completed_run,
@@ -101,6 +123,33 @@ ROLE_CHAIN = [
 ]
 INTERNAL_ROLES = {"issue-intake", "context-compiler", "publication-prepare"}
 ADAPTER_ROLES = set(ROLE_CHAIN) - INTERNAL_ROLES - {"publication"}
+
+
+def serialized_run_execution(function: Any) -> Any:
+    """Hold one OS-backed execution lease for every write in a named run."""
+
+    @wraps(function)
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        run_id = str(kwargs.get("run_id", ""))
+        if not run_id and len(args) > 1:
+            run_id = str(args[1])
+        if not run_id:
+            return function(*args, **kwargs)
+        if Path(run_id).name != run_id or run_id in {".", ".."}:
+            raise ValueError(f"unsafe run id: {run_id!r}")
+        run_dir = (RUNS / run_id).resolve()
+        if run_dir.parent != RUNS.resolve():
+            raise ValueError(f"run directory escapes .agent-runs: {run_dir}")
+        run_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = run_dir / "runner.lock"
+        with lock_path.open("a+", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                return function(*args, **kwargs)
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    return wrapped
 
 
 def task_graph_metadata() -> dict[str, Any]:
@@ -659,13 +708,7 @@ def artifact_result(summary: str, artifacts_created: list[str], next_action: str
 
 def role_budget_tokens(result: dict[str, Any]) -> int:
     """Return incremental token usage, excluding input served from cache."""
-    input_tokens = result.get("input_tokens")
-    cached_input_tokens = result.get("cached_input_tokens")
-    output_tokens = result.get("output_tokens")
-    if all(isinstance(value, int) for value in (input_tokens, cached_input_tokens, output_tokens)):
-        return max(input_tokens - cached_input_tokens, 0) + output_tokens
-    tokens_used = result.get("tokens_used", 0)
-    return int(tokens_used) if isinstance(tokens_used, (int, float)) else 0
+    return incremental_tokens(result)
 
 
 def resume_runtime_command(
@@ -1197,6 +1240,8 @@ def previous_execution_profile(state: dict[str, Any], role: str) -> str:
     for entry in reversed(state.get("roles", [])):
         if not isinstance(entry, dict) or entry.get("role") != role:
             continue
+        if not role_entry_invoked_model(entry):
+            continue
         profile = entry.get("execution_profile", {})
         if isinstance(profile, dict):
             return str(profile.get("execution_profile", ""))
@@ -1207,10 +1252,179 @@ def previous_reasoning_effort(state: dict[str, Any], role: str) -> str:
     for entry in reversed(state.get("roles", [])):
         if not isinstance(entry, dict) or entry.get("role") != role:
             continue
+        if not role_entry_invoked_model(entry):
+            continue
         profile = entry.get("execution_profile", {})
         if isinstance(profile, dict):
             return str(profile.get("reasoning_effort", ""))
     return ""
+
+
+def execution_settings_invoke_runtime(
+    settings: dict[str, Any], *, used_cached_result: bool = False
+) -> bool:
+    return bool(
+        settings.get("execution_profile")
+        and not used_cached_result
+        and settings.get("terminal_action") != "human_or_dead_letter"
+    )
+
+
+def active_model_escalation_approval_id(state: dict[str, Any], role: str) -> str:
+    """Return one exact unused model-escalation grant for the current role."""
+
+    if role not in {"implementation-agent", "ci-repair-agent"}:
+        return ""
+    override = state.get("approval_override", {})
+    scope = override.get("scope", {}) if isinstance(override, dict) else {}
+    approval_id = str(override.get("approval_id", "")) if isinstance(override, dict) else ""
+    if not (
+        approval_id
+        and override.get("gate") == role
+        and isinstance(scope, dict)
+        and scope.get("gate") == role
+        and scope.get("model_escalation_role") == role
+        and set(str(item) for item in scope.get("actions", []) if isinstance(item, str))
+        == {"allow_one_model_escalation", "resume_workflow"}
+        and not isinstance(scope.get("additional_attempts"), bool)
+        and scope.get("additional_attempts") == 1
+        and not isinstance(scope.get("model_escalation_uses"), bool)
+        and scope.get("model_escalation_uses") == 1
+        and scope.get("model_escalation_fingerprint")
+        == model_escalation_fingerprint(state, role)
+    ):
+        return ""
+    if not model_escalation_terminal_state(state, role):
+        return ""
+    history = state.get("attention_history", [])
+    if not isinstance(history, list) or not any(
+        isinstance(item, dict)
+        and item.get("resolution") == "approval_consumed"
+        and item.get("role") == role
+        and item.get("summary") == MODEL_ESCALATION_SUMMARY
+        and isinstance(item.get("requirement"), dict)
+        and item["requirement"].get("requirement_id") == MODEL_ESCALATION_REQUIREMENT
+        for item in reversed(history)
+    ):
+        return ""
+    grants = state.get("approval_grants", [])
+    if not isinstance(grants, list):
+        return ""
+    matches = [
+        grant
+        for grant in grants
+        if isinstance(grant, dict)
+        and grant.get("approval_id") == approval_id
+        and grant.get("gate") == role
+        and grant.get("scope") == scope
+        and grant.get("reason") == MODEL_ESCALATION_SUMMARY
+    ]
+    uses = state.get("approval_action_uses", [])
+    already_used = isinstance(uses, list) and any(
+        isinstance(item, dict)
+        and item.get("approval_id") == approval_id
+        and item.get("action") == "allow_one_model_escalation"
+        for item in uses
+    )
+    if (
+        len(matches) != 1
+        or matches[0].get("model_escalation_started_at")
+        or already_used
+    ):
+        return ""
+    return approval_id
+
+
+def mark_model_escalation_started(
+    state: dict[str, Any], *, role: str, approval_id: str
+) -> bool:
+    """Consume the exact approval in durable state before invoking the runtime."""
+
+    if not approval_id or active_model_escalation_approval_id(state, role) != approval_id:
+        return False
+    started_at = datetime.now(timezone.utc).isoformat()
+    matches = [
+        grant
+        for grant in state.get("approval_grants", [])
+        if isinstance(grant, dict) and grant.get("approval_id") == approval_id
+    ]
+    if len(matches) != 1:
+        return False
+    matches[0]["model_escalation_role"] = role
+    matches[0]["model_escalation_started_at"] = started_at
+    uses = state.get("approval_action_uses", [])
+    if not isinstance(uses, list):
+        uses = []
+    uses.append(
+        {
+            "approval_id": approval_id,
+            "action": "allow_one_model_escalation",
+            "role": role,
+            "started_at": started_at,
+        }
+    )
+    state["approval_action_uses"] = uses
+    return True
+
+
+def consume_model_escalation_approval(
+    run_dir: Path,
+    state: dict[str, Any],
+    *,
+    role: str,
+    approval_id: str,
+) -> bool:
+    """Atomically consume one model action across overlapping resume processes."""
+
+    with approval_lock(run_dir):
+        durable = read_approval_workflow(run_dir / "workflow.json")
+        if active_model_escalation_approval_id(durable, role) != approval_id:
+            state.clear()
+            state.update(durable)
+            return False
+        if not mark_model_escalation_started(
+            durable,
+            role=role,
+            approval_id=approval_id,
+        ):
+            state.clear()
+            state.update(durable)
+            return False
+        write_approval_workflow(run_dir / "workflow.json", durable)
+        state.clear()
+        state.update(durable)
+        return True
+
+
+def active_budget_approval_override(state: dict[str, Any], role: str) -> bool:
+    """Do not treat risk, repair, or model approvals as adaptive budget authority."""
+
+    override = state.get("approval_override", {})
+    scope = override.get("scope", {}) if isinstance(override, dict) else {}
+    approval_id = str(override.get("approval_id", "")) if isinstance(override, dict) else ""
+    if not (
+        approval_id
+        and override.get("gate") == role
+        and isinstance(scope, dict)
+        and set(str(item) for item in scope.get("actions", []) if isinstance(item, str))
+        == {"resume_workflow"}
+    ):
+        return False
+    grants = state.get("approval_grants", [])
+    return bool(
+        isinstance(grants, list)
+        and any(
+            isinstance(grant, dict)
+            and grant.get("approval_id") == approval_id
+            and grant.get("gate") == role
+            and grant.get("scope") == scope
+            and (
+                "budget exceeded" in str(grant.get("reason", "")).casefold()
+                or "hard execution bound" in str(grant.get("reason", "")).casefold()
+            )
+            for grant in grants
+        )
+    )
 
 
 def model_failure_type(state: dict[str, Any]) -> str:
@@ -1629,20 +1843,90 @@ def preflight_role_execution(
     return None
 
 
+def answered_image_capability_requirement(artifacts_dir: Path) -> bool:
+    """Return whether this run resolved the exact image-capability question."""
+
+    workflow_path = artifacts_dir.parent / "workflow.json"
+    human_input_path = artifacts_dir.parent / "human-input.json"
+    if not workflow_path.exists() or not human_input_path.exists():
+        return False
+    try:
+        workflow = load_json(workflow_path)
+        human_input = load_json(human_input_path)
+    except (OSError, ValueError):
+        return False
+
+    history = workflow.get("attention_history", [])
+    entries = human_input.get("entries", [])
+    if not isinstance(history, list) or not isinstance(entries, list):
+        return False
+    answered_fingerprints = {
+        str(item.get("fingerprint", ""))
+        for item in history
+        if isinstance(item, dict)
+        and item.get("role") == "implementation-agent"
+        and item.get("resolution") == "answer_recorded"
+        and isinstance(item.get("requirement"), dict)
+        and item["requirement"].get("requirement_id")
+        == "capability_implementation_unavailable"
+        and isinstance(item.get("details"), list)
+        and any(
+            "no image-generation capability" in str(detail).casefold()
+            for detail in item["details"]
+        )
+    }
+    answered_fingerprints.discard("")
+    return any(
+        isinstance(entry, dict)
+        and entry.get("requirement_id") == "capability_implementation_unavailable"
+        and entry.get("question_fingerprint") in answered_fingerprints
+        and bool(str(entry.get("response", "")).strip())
+        for entry in entries
+    )
+
+
 def missing_image_capability(goal: str, artifacts_dir: Path) -> str:
     """Return a prompt failure when a task requires image assets the role cannot create."""
+
+    if answered_image_capability_requirement(artifacts_dir):
+        return ""
 
     plan_path = artifacts_dir / "plan.md"
     plan = plan_path.read_text(encoding="utf-8") if plan_path.exists() else ""
     text_value = f"{goal}\n{plan}".casefold()
-    image_terms = ("image", "photo", "picture", "asset", "картин", "фотограф", "изображен")
+    image_terms = ("image", "photo", "picture", "картин", "фотограф", "изображен")
     generation_terms = (
         "generate", "create new", "new asset", "distinct", "unique", "six", "each category",
         "сгенер", "создай", "новые", "уникаль", "отдельн", "шесть", "каждой категории", "своя",
     )
+    no_generation_terms = (
+        "do not generate", "don't generate", "without image generation", "no new image",
+        "не генер", "не созда", "без генерац",
+    )
+    supplied_terms = (
+        "supplied", "provided", "attached", "existing",
+        "предоставлен", "приложен", "существующ",
+    )
+    explicit_generation_patterns = (
+        r"(?:generate|create new)[^\n.!?;]{0,80}(?:image|photo|picture)",
+        r"(?:сгенер|создай)[^\n.!?;]{0,80}(?:картин|фотограф|изображен)",
+    )
+    segments = [
+        segment
+        for segment in re.split(r"[\n.!?;]+", text_value)
+        if segment.strip()
+    ]
     if (
-        any(term in text_value for term in image_terms)
-        and any(term in text_value for term in generation_terms)
+        any(
+            any(term in segment for term in image_terms)
+            and any(term in segment for term in generation_terms)
+            and not any(term in segment for term in no_generation_terms)
+            and (
+                not any(term in segment for term in supplied_terms)
+                or any(re.search(pattern, segment) for pattern in explicit_generation_patterns)
+            )
+            for segment in segments
+        )
         and "image_generation" not in role_tools("implementation-agent")
     ):
         return (
@@ -2037,6 +2321,8 @@ def run_issue_intake(
     task_id: str,
     goal: str,
     project: str,
+    project_id: str,
+    project_key: str,
     repository: Path,
     worktree: Path,
     branch: str,
@@ -2048,6 +2334,11 @@ def run_issue_intake(
         "task_id": task_id,
         "goal": goal,
         "project": project,
+        **(
+            {"project_id": project_id, "project_key": project_key}
+            if project_id and project_key
+            else {}
+        ),
         "repository": str(repository.resolve()),
         "worktree": str(worktree.resolve()),
         "branch": branch,
@@ -2070,6 +2361,7 @@ def run_context_compiler(
     run_id: str,
     goal: str,
     project: str,
+    project_key: str,
     worktree: Path,
     artifacts_dir: Path,
     context_dir: Path,
@@ -2170,6 +2462,7 @@ def run_context_compiler(
         artifacts_dir=artifacts_dir,
         context_dir=context_dir,
         project=project,
+        project_key=project_key,
         project_profile=project_profile,
         token_budget=token_budget,
         allowed_tools=role_tools("planner"),
@@ -2298,6 +2591,7 @@ def run_adaptive_read_only_verifier(
         artifacts_dir=artifacts_dir,
         context_dir=context_dir,
         project=project,
+        project_key=str(state.get("project_key", "")),
         project_profile=project_profile,
         token_budget=role_budget,
         allowed_tools=role_tools(role),
@@ -2378,6 +2672,7 @@ def run_adaptive_read_only_verifier(
     ), settings
 
 
+@serialized_run_execution
 def run_roles(
     workflow: str = "full_agent_workflow",
     run_id: str = "",
@@ -2386,6 +2681,8 @@ def run_roles(
     task_id: str = "task",
     goal: str = "",
     project: str = "",
+    project_id: str = "",
+    project_key: str = "",
     repository: Path = ROOT,
     branch: str = "",
     base_branch: str = "main",
@@ -2406,6 +2703,30 @@ def run_roles(
             "blockers": ["mode must be auto, adaptive, fast, full, or goal"],
         }
     graph_metadata = task_graph_metadata()
+    input_manifest = os.environ.get("AGENT_INPUT_MANIFEST", "").strip()
+    input_manifest_sha256 = os.environ.get("AGENT_INPUT_MANIFEST_SHA256", "").strip()
+    try:
+        attachment_count = int(os.environ.get("AGENT_ATTACHMENT_COUNT", "0") or 0)
+    except ValueError:
+        attachment_count = -1
+    raw_attachment_consent = os.environ.get("AGENT_ATTACHMENT_RUNTIME_CONSENT", "").strip()
+    try:
+        attachment_payload = continuation_attachment_payload(
+            {
+                "input_manifest": input_manifest,
+                "input_manifest_sha256": input_manifest_sha256,
+                "attachment_count": attachment_count,
+                "attachment_runtime_consent": raw_attachment_consent == "1",
+            }
+        )
+        if raw_attachment_consent not in {"", "1"}:
+            raise ValueError("attachment runtime consent environment is invalid")
+    except ValueError as exc:
+        return {
+            "run_id": run_id or "invalid-attachments",
+            "execution_status": "blocked",
+            "blockers": [str(exc)],
+        }
     run_id = run_id or make_run_id(workflow)
     existing_workflow = RUNS / run_id / "workflow.json"
     existing: dict[str, Any] = {}
@@ -2414,6 +2735,31 @@ def run_roles(
             existing = load_json(existing_workflow)
         except (OSError, json.JSONDecodeError, ValueError):
             existing = {}
+    try:
+        requested_project_identity = continuation_project_identity(
+            {"project_id": project_id, "project_key": project_key}
+            if project_id or project_key
+            else {}
+        )
+        existing_project_identity = continuation_project_identity(existing)
+    except ValueError as exc:
+        return {
+            **existing,
+            "run_id": run_id,
+            "execution_status": "blocked",
+            "blockers": [str(exc)],
+        }
+    if (
+        resume
+        and requested_project_identity
+        and requested_project_identity != existing_project_identity
+    ):
+        return {
+            **existing,
+            "execution_status": "blocked",
+            "blockers": ["project identity changed since this run started"],
+        }
+    project_identity = existing_project_identity or requested_project_identity
     if resume:
         if not existing:
             return {"run_id": run_id, "execution_status": "blocked", "blockers": ["resume state is missing"]}
@@ -2431,6 +2777,20 @@ def run_roles(
         base_branch = str(existing.get("base_branch", base_branch))
         workflow = str(existing.get("workflow", workflow))
         mode = str(existing.get("mode", mode))
+        try:
+            existing_attachment_payload = continuation_attachment_payload(existing)
+        except ValueError as exc:
+            return {
+                **existing,
+                "execution_status": "blocked",
+                "blockers": [str(exc)],
+            }
+        if existing_attachment_payload != attachment_payload:
+            return {
+                **existing,
+                "execution_status": "blocked",
+                "blockers": ["attachment manifest changed since this run started"],
+            }
         fingerprint = str(existing.get("input_fingerprint", ""))
     else:
         repository = repository.resolve()
@@ -2443,6 +2803,7 @@ def run_roles(
             base_branch=base_branch,
             workspace_mode="checkout" if current_branch else "worktree",
             workflow_mode=mode,
+            input_manifest_sha256=input_manifest_sha256,
         )
         if existing.get("execution_status") == "completed" and existing.get("input_fingerprint") == fingerprint:
             return existing
@@ -2457,6 +2818,15 @@ def run_roles(
         duplicate = find_completed_run(RUNS, fingerprint, exclude_run_id=run_id)
         if duplicate is not None:
             return {**duplicate, "deduplicated": True, "duplicate_of": duplicate.get("run_id", "")}
+    if project_identity and project_identity["project_key"] != trust_key(repository):
+        return {
+            **existing,
+            "run_id": run_id,
+            "execution_status": "blocked",
+            "blockers": [
+                "project identity does not match the canonical repository"
+            ],
+        }
     layout = RunLayout.create(RUNS, run_id)
     try:
         layout.assert_artifacts_dir(artifacts_dir)
@@ -2473,6 +2843,8 @@ def run_roles(
             "tokens_used": 0,
             "blockers": [str(exc)],
             "input_fingerprint": fingerprint,
+            **project_identity,
+            **attachment_payload,
         }
         write_json(layout.workflow, state)
         record_failure(layout, stage="initialization", code="NON_AUTHORITATIVE_STATE", message=str(exc))
@@ -2484,14 +2856,14 @@ def run_roles(
     requests_dir = layout.requests
     raw_dir = layout.raw_events
     resume_cached_result: dict[str, Any] | None = None
+    resume_cached_result_is_replay = False
+    resume_cached_runtime_invoked = False
+    resume_cached_execution_settings: dict[str, Any] = {}
     checkpoint_problem = ""
     if resume:
         state = existing
-        state["tokens_used"] = sum(
-            role_budget_tokens(item.get("result", {}))
-            for item in state.get("roles", [])
-            if isinstance(item, dict) and isinstance(item.get("result"), dict)
-        )
+        state["role_count"] = accounted_role_count(state.get("roles", []))
+        state["tokens_used"] = accounted_tokens_used(state.get("roles", []))
         project_profile = str(state.get("project_profile", project_profile_for(project)))
         worktree = Path(str(state.get("checkout_path", state.get("worktree", "")))).resolve()
         effective_branch = str(state.get("task_branch", state.get("branch", branch)))
@@ -2560,6 +2932,10 @@ def run_roles(
                         if not isinstance(cached, dict):
                             raise CheckpointError("validation checkpoint is missing cached role output")
                         resume_cached_result = cached
+                        resume_cached_runtime_invoked = pending.get("runtime_invoked") is True
+                        pending_settings = pending.get("execution_profile", {})
+                        if isinstance(pending_settings, dict):
+                            resume_cached_execution_settings = pending_settings
                     elif operation == "next_role":
                         last_route = state.get("last_route", {})
                         next_role = str(last_route.get("next_role", "")) if isinstance(last_route, dict) else ""
@@ -2567,6 +2943,7 @@ def run_roles(
                             role = next_role
                         elif next_role == "approval-gate":
                             resume_cached_result = completed_role_result(state, role)
+                            resume_cached_result_is_replay = resume_cached_result is not None
             except (CheckpointError, OSError, json.JSONDecodeError, ValueError) as exc:
                 checkpoint_problem = str(exc)
                 setup_errors.append(checkpoint_problem)
@@ -2611,6 +2988,7 @@ def run_roles(
             "task_id": task_id,
             "goal": goal,
             "project": project,
+            **project_identity,
             "project_profile": project_profile,
             "repository": str(repository),
             "worktree": str(worktree.resolve()),
@@ -2632,6 +3010,7 @@ def run_roles(
             "role_count": 0,
             "tokens_used": 0,
             "input_fingerprint": fingerprint,
+            **attachment_payload,
             "runtime": runtime.descriptor.as_json() if runtime is not None else {
                 "provider": selected_provider,
                 "kind": "runtime_adapter",
@@ -2793,6 +3172,8 @@ def run_roles(
     role_visits: dict[str, int] = {
         name: prior_roles.count(name) for name in set(prior_roles)
     }
+    state["role_count"] = accounted_role_count(state.get("roles", []))
+    write_json(layout.workflow, state)
     source_snapshot_before = git_snapshot(repository)
     guard = 0
     elapsed_before_resume = int(state.get("elapsed_seconds", 0) or 0)
@@ -2810,30 +3191,33 @@ def run_roles(
             else goal
         )
         write_json(layout.workflow, state)
-        role_checkpoint(
-            run_dir=run_dir,
-            run_id=run_id,
-            role=role,
-            state_name="role_pending",
-            attempt=role_visits[role],
-            worktree=worktree,
-            input_fingerprint=fingerprint,
-        )
-        role_checkpoint(
-            run_dir=run_dir,
-            run_id=run_id,
-            role=role,
-            state_name="role_running",
-            attempt=role_visits[role],
-            worktree=worktree,
-            input_fingerprint=fingerprint,
-        )
+        if resume_cached_result is None:
+            role_checkpoint(
+                run_dir=run_dir,
+                run_id=run_id,
+                role=role,
+                state_name="role_pending",
+                attempt=role_visits[role],
+                worktree=worktree,
+                input_fingerprint=fingerprint,
+            )
+            role_checkpoint(
+                run_dir=run_dir,
+                run_id=run_id,
+                role=role,
+                state_name="role_running",
+                attempt=role_visits[role],
+                worktree=worktree,
+                input_fingerprint=fingerprint,
+            )
         artifact_contents_before = file_contents_snapshot(run_artifacts)
         artifact_snapshot_before = file_snapshot(run_artifacts)
         role_repo_snapshot_before = git_snapshot(worktree)
         max_roles = int(state.get("budgets", {}).get("max_roles", 40))
         effective_mode = str(state.get("effective_mode", effective_mode))
         used_cached_result = False
+        cached_result_replay = False
+        runtime_invoked = False
         execution_settings: dict[str, Any] = {}
         parallel_role_results: dict[str, dict[str, Any]] = {}
         parallel_role_settings: dict[str, dict[str, Any]] = {}
@@ -2853,7 +3237,7 @@ def run_roles(
                 timeout_seconds=timeout_seconds,
                 required_checks=security_required_checks(state),
             )
-        if effective_mode == "adaptive":
+        if effective_mode == "adaptive" and resume_cached_result is None:
             plan_path = Path(str(state.get("execution_plan_path", "")))
             execution_plan = load_json(plan_path) if plan_path.is_file() else {}
             context_budgets = (
@@ -2868,10 +3252,8 @@ def run_roles(
                 role_token_budget = configured_role_budget
             if isinstance(execution_plan, dict):
                 state["elapsed_seconds"] = elapsed_before_resume + int(time.monotonic() - workflow_started)
-                approval_override = state.get("approval_override", {})
                 budget_override = (
-                    isinstance(approval_override, dict)
-                    and approval_override.get("gate") == role
+                    active_budget_approval_override(state, role)
                     and isinstance(state.get("budget_action"), dict)
                     and state["budget_action"].get("action") == BudgetAction.REQUIRE_APPROVAL.value
                 )
@@ -2896,7 +3278,17 @@ def run_roles(
                     ):
                         state["budget_action"] = soft_workflow_pressure
                 write_json(layout.workflow, state)
-        if (
+        if resume_cached_result is not None:
+            result = resume_cached_result
+            resume_cached_result = None
+            used_cached_result = True
+            cached_result_replay = resume_cached_result_is_replay
+            resume_cached_result_is_replay = False
+            runtime_invoked = resume_cached_runtime_invoked
+            resume_cached_runtime_invoked = False
+            execution_settings = resume_cached_execution_settings
+            resume_cached_execution_settings = {}
+        elif (
             effective_mode == "adaptive"
             and state.get("budget_action", {}).get("action") == BudgetAction.REQUIRE_APPROVAL.value
         ):
@@ -2914,10 +3306,6 @@ def run_roles(
             result = completed_result("Optional role skipped under soft task cost pressure.")
         elif security_preflight is not None and security_preflight.get("status") != "completed":
             result = security_preflight
-        elif resume_cached_result is not None:
-            result = resume_cached_result
-            resume_cached_result = None
-            used_cached_result = True
         elif guard > max_roles:
             result = blocked_result("Workflow routing exceeded the safety limit.", ["dynamic routing loop detected"])
         elif role == "issue-intake":
@@ -2926,6 +3314,8 @@ def run_roles(
                 task_id=task_id,
                 goal=goal,
                 project=project,
+                project_id=str(state.get("project_id", "")),
+                project_key=str(state.get("project_key", "")),
                 repository=repository,
                 worktree=worktree,
                 branch=effective_branch,
@@ -2936,7 +3326,8 @@ def run_roles(
             result = run_context_compiler(
                 run_id=run_id,
                 goal=goal,
-                project=project,
+                project=str(state.get("project_id", "")) or project,
+                project_key=str(state.get("project_key", "")),
                 worktree=worktree,
                 artifacts_dir=run_artifacts,
                 context_dir=context_dir,
@@ -2991,7 +3382,7 @@ def run_roles(
                             state=dict(state),
                             role=companion,
                             goal=goal,
-                            project=project,
+                            project=str(state.get("project_id", "")) or project,
                             project_profile=project_profile,
                             repository=worktree,
                             artifacts_dir=run_artifacts,
@@ -3053,7 +3444,8 @@ def run_roles(
                     repository=worktree,
                     artifacts_dir=run_artifacts,
                     context_dir=context_dir,
-                    project=project,
+                    project=str(state.get("project_id", "")) or project,
+                    project_key=str(state.get("project_key", "")),
                     project_profile=project_profile,
                     token_budget=role_token_budget,
                     allowed_tools=role_tools(role),
@@ -3111,6 +3503,12 @@ def run_roles(
                             if isinstance(execution_plan_value, dict)
                             else {}
                         )
+                        model_escalation_approval_id = active_model_escalation_approval_id(
+                            state, role
+                        )
+                        bounded_escalation_exhausted = bool(
+                            model_escalation_approval_id
+                        ) or bounded_model_escalation_checkpoint(state, role)
                         execution_settings = select_execution_profile(
                             role=role,
                             goal=role_goal,
@@ -3152,7 +3550,29 @@ def run_roles(
                                 if isinstance(plan_budgets, dict)
                                 else 2
                             ),
+                            human_escalation_approved=bool(model_escalation_approval_id),
+                            bounded_escalation_exhausted=bounded_escalation_exhausted,
                         )
+                        if (
+                            model_escalation_approval_id
+                            and execution_settings.get("terminal_action")
+                            != "human_or_dead_letter"
+                        ):
+                            if not consume_model_escalation_approval(
+                                run_dir,
+                                state,
+                                role=role,
+                                approval_id=model_escalation_approval_id,
+                            ):
+                                append_trace(
+                                    layout,
+                                    {
+                                        "event": "runtime.model_escalation_already_consumed",
+                                        "role": role,
+                                        "approval_id": model_escalation_approval_id,
+                                    },
+                                )
+                                return state
                         state["current_execution_profile"] = execution_settings
                         write_json(layout.workflow, state)
                         append_trace(
@@ -3182,6 +3602,7 @@ def run_roles(
                                 execution_settings=execution_settings,
                             )
                             write_json(requests_dir / f"{role}.json", request)
+                            runtime_invoked = True
                             result = execute_runtime_observed(
                                 runtime,
                                 run_dir=run_dir,
@@ -3205,36 +3626,39 @@ def run_roles(
                 "message": "Run artifacts exceeded the configured byte limit.",
             }
 
-        role_checkpoint(
-            run_dir=run_dir,
-            run_id=run_id,
-            role=role,
-            state_name="role_output_received",
-            attempt=role_visits[role],
-            worktree=worktree,
-            input_fingerprint=fingerprint,
-            result=result,
-        )
-        if not isinstance(result.get("_failure"), dict):
-            write_json(
-                layout.role_results / f"{role}-pending.json",
-                {
-                    "time": datetime.now(timezone.utc).isoformat(),
-                    "role": role,
-                    "state": "role_output_received",
-                    "result": result,
-                },
+        if not used_cached_result:
+            role_checkpoint(
+                run_dir=run_dir,
+                run_id=run_id,
+                role=role,
+                state_name="role_output_received",
+                attempt=role_visits[role],
+                worktree=worktree,
+                input_fingerprint=fingerprint,
+                result=result,
             )
-        role_checkpoint(
-            run_dir=run_dir,
-            run_id=run_id,
-            role=role,
-            state_name="role_validating",
-            attempt=role_visits[role],
-            worktree=worktree,
-            input_fingerprint=fingerprint,
-            result=result,
-        )
+            if not isinstance(result.get("_failure"), dict):
+                write_json(
+                    layout.role_results / f"{role}-pending.json",
+                    {
+                        "time": datetime.now(timezone.utc).isoformat(),
+                        "role": role,
+                        "state": "role_output_received",
+                        "result": result,
+                        "runtime_invoked": runtime_invoked,
+                        "execution_profile": execution_settings,
+                    },
+                )
+            role_checkpoint(
+                run_dir=run_dir,
+                run_id=run_id,
+                role=role,
+                state_name="role_validating",
+                attempt=role_visits[role],
+                worktree=worktree,
+                input_fingerprint=fingerprint,
+                result=result,
+            )
         result_errors = validate_role_result(result, role)
         if result_errors:
             result = blocked_result("Role result failed schema validation.", result_errors)
@@ -3310,7 +3734,16 @@ def run_roles(
             "time": datetime.now(timezone.utc).isoformat(),
             "role": role,
             "execution_kind": planned_execution_kind(state, role),
-            "llm_invoked": bool(execution_settings) and not used_cached_result,
+            "llm_invoked": runtime_invoked,
+            "cached_result": used_cached_result,
+            "cached_result_replay": cached_result_replay,
+            "cache_provenance": (
+                "completed_checkpoint_replay"
+                if cached_result_replay
+                else "pending_output"
+                if used_cached_result
+                else ""
+            ),
             "prompt_file": PROMPT_FILES.get(role, ""),
             "prompt": role_prompt(role),
             "result": result,
@@ -3349,7 +3782,9 @@ def run_roles(
                 "time": datetime.now(timezone.utc).isoformat(),
                 "role": parallel_role,
                 "execution_kind": planned_execution_kind(state, parallel_role),
-                "llm_invoked": bool(parallel_role_settings.get(parallel_role, {}).get("execution_profile")),
+                "llm_invoked": execution_settings_invoke_runtime(
+                    parallel_role_settings.get(parallel_role, {})
+                ),
                 "prompt_file": PROMPT_FILES.get(parallel_role, ""),
                 "prompt": role_prompt(parallel_role),
                 "parallel_group": [role, parallel_role],
@@ -3392,12 +3827,8 @@ def run_roles(
                 role=role,
                 result=result,
             )
-            state["role_count"] = len(state["roles"])
-            state["tokens_used"] = sum(
-                role_budget_tokens(item.get("result", {}))
-                for item in state["roles"]
-                if isinstance(item, dict) and isinstance(item.get("result"), dict)
-            )
+            state["role_count"] = accounted_role_count(state["roles"])
+            state["tokens_used"] = accounted_tokens_used(state["roles"])
             state["elapsed_seconds"] = elapsed_before_resume + int(time.monotonic() - workflow_started)
             write_json(layout.workflow, state)
             write_metrics(layout, state)
@@ -3476,12 +3907,8 @@ def run_roles(
             if pending_path.exists():
                 pending_path.unlink()
 
-        state["role_count"] = len(state["roles"])
-        state["tokens_used"] = sum(
-            role_budget_tokens(item.get("result", {}))
-            for item in state["roles"]
-            if isinstance(item.get("result"), dict)
-        )
+        state["role_count"] = accounted_role_count(state["roles"])
+        state["tokens_used"] = accounted_tokens_used(state["roles"])
         state["elapsed_seconds"] = elapsed_before_resume + int(time.monotonic() - workflow_started)
         route = decide_next_role(
             current_role=role,
@@ -3672,7 +4099,7 @@ def run_roles(
                         "result": approval,
                     }
                     state["roles"].append(approval_checkpoint)
-                    state["role_count"] = len(state["roles"])
+                    state["role_count"] = accounted_role_count(state["roles"])
                     write_json(layout.role_results / "approval-gate-1.json", approval_checkpoint)
                     write_json(layout.workflow, state)
                     try:
@@ -3750,6 +4177,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task-id", default="task")
     parser.add_argument("--goal", default="")
     parser.add_argument("--project", default="")
+    parser.add_argument("--project-id", default="")
+    parser.add_argument("--project-key", default="")
     parser.add_argument("--repo", type=Path, default=ROOT)
     parser.add_argument("--branch", default="")
     parser.add_argument("--base-branch", default="main")
@@ -3776,6 +4205,8 @@ def main() -> int:
         task_id=args.task_id,
         goal=args.goal,
         project=args.project,
+        project_id=args.project_id,
+        project_key=args.project_key,
         repository=args.repo,
         branch=args.branch,
         base_branch=args.base_branch,

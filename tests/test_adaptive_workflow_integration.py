@@ -159,3 +159,45 @@ def test_adaptive_router_ignores_historical_repair_counters(tmp_path: Path) -> N
     )
 
     assert route["next_role"] == "security-agent"
+
+
+def test_adaptive_review_repair_reruns_originating_architecture_verifier(
+    tmp_path: Path,
+) -> None:
+    plan_path = tmp_path / "execution-plan.json"
+    plan(plan_path)
+    artifacts = tmp_path / "artifacts"
+    write_json(
+        artifacts / "risk.json",
+        {
+            "risk_class": "low",
+            "changed_areas": [],
+            "high_risk_triggers": [],
+            "protected_paths_touched": [],
+            "protected_actions_required": [],
+            "reasons": [],
+            "autonomy_allowed": {},
+        },
+    )
+    workflow = state(
+        plan_path,
+        ["issue-intake", "context-compiler", "implementation-agent"],
+    )
+    workflow["last_route"] = {
+        "next_role": "implementation-agent",
+        "loop": {
+            "name": "review_repair",
+            "verification_role": "architecture-consistency-agent",
+        },
+    }
+
+    route = decide_next_role(
+        current_role="implementation-agent",
+        role_result={"status": "completed"},
+        run_dir=tmp_path,
+        artifacts_dir=artifacts,
+        workflow_state=workflow,
+    )
+
+    assert route["next_role"] == "architecture-consistency-agent"
+    assert route["publication_allowed"] is False

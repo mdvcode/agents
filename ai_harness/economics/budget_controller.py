@@ -6,6 +6,12 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any, Mapping, Sequence
 
+from ai_harness.execution_accounting import (
+    accounted_checkpoints,
+    role_entry_invoked_model,
+    safe_int,
+)
+
 
 class BudgetAction(StrEnum):
     CONTINUE = "continue"
@@ -35,7 +41,7 @@ class BudgetUsage:
     @classmethod
     def from_state(cls, state: Mapping[str, Any]) -> "BudgetUsage":
         roles = state.get("roles", [])
-        checkpoints = [item for item in roles if isinstance(item, dict)] if isinstance(roles, list) else []
+        checkpoints = accounted_checkpoints(roles)
         input_tokens = 0
         cached_tokens = 0
         output_tokens = 0
@@ -45,10 +51,10 @@ class BudgetUsage:
             result = checkpoint.get("result", {})
             if not isinstance(result, dict):
                 continue
-            input_tokens += int(result.get("input_tokens", 0) or 0)
-            cached_tokens += int(result.get("cached_input_tokens", 0) or 0)
-            output_tokens += int(result.get("output_tokens", 0) or 0)
-            if checkpoint.get("llm_invoked") is True:
+            input_tokens += safe_int(result.get("input_tokens", 0))
+            cached_tokens += safe_int(result.get("cached_input_tokens", 0))
+            output_tokens += safe_int(result.get("output_tokens", 0))
+            if role_entry_invoked_model(checkpoint):
                 model_calls += 1
             profile = checkpoint.get("execution_profile", {})
             if not isinstance(profile, dict):

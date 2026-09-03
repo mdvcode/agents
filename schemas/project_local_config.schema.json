@@ -22,6 +22,15 @@
         "provider": {"type": "string", "enum": ["codex-sdk", "codex-cli"]}
       },
       "additionalProperties": false
+    },
+    "attachments": {
+      "type": "object",
+      "properties": {
+        "max_files": {"type": "integer", "minimum": 1, "maximum": 5},
+        "max_file_bytes": {"type": "integer", "minimum": 1, "maximum": 536870912},
+        "max_task_bytes": {"type": "integer", "minimum": 1, "maximum": 2684354560}
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

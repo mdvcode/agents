@@ -1,8 +1,28 @@
-# AI Harness
+# Tweebit AI Harness by Daryna
 
-AI Harness runs software tasks in local Git repositories through one command-line interface: `agent`. Users describe the required result; the Harness prepares the Git workspace, selects a safe execution path, runs implementation and verification, repairs recoverable failures, and returns a reviewable branch or pull request.
+Tweebit AI Harness by Daryna runs software tasks in local Git repositories through one command-line interface: `agent` and a private loopback dashboard. Users describe the required result; the Harness prepares the Git workspace, selects a safe execution path, runs implementation and verification, repairs recoverable failures, and returns a reviewable branch or pull request. The Python distribution remains named `ai-harness` for upgrade compatibility.
 
 It supports single tasks, parallel work in isolated Git worktrees, batches across several repositories, background recovery, and explicit human approval when a decision cannot be made safely. Merge and deployment always remain human actions.
+
+The local Tweebit v0.4.0 release candidate keeps this standalone architecture—there is no Chrome
+extension or cloud synchronization. Its local **Проекты** catalog reads only explicitly
+initialized, trusted repositories and uses the same folder, Git workspace, `AGENTS.md`, and
+`.agent/project.yaml` as Codex. The dashboard uses a lightweight, collapsible desktop sidebar and a
+mobile off-canvas menu to separate **Проекты**, **Задачи**, **Статистика**, and **Adaptive Lab**,
+with **Новая задача** remaining the single focused composer. Project and task records stay
+distinct: every new task belongs to one project, while the global task list remains an operational
+view across all projects. The composer keeps Auto/Adaptive/Fast/Full/Goal visible and adds private
+five-file/PDF intake with defaults of 100 MiB per file and 500 MiB per task. A locally trusted
+project may raise those limits to the hard ceilings of 512 MiB per file and 2.5 GiB per task.
+Pending uploads are bounded to 32 sets and 6 GiB; direct runtime images are limited to 10 MiB each
+and 20 references. File tasks require explicit per-task runtime consent.
+
+Attachment upload, validation, processing, run provenance, and runtime context are implemented.
+Both runtimes receive bounded text and PDF-text excerpts as explicitly untrusted data. The Codex SDK
+also receives revalidated direct images and scanned PDF pages; the Codex CLI compatibility runtime
+accepts text and PDF text only. Text injection is limited to 120,000 bytes total and 24,000 bytes per
+reference; image context is fail-closed above 20 references rather than silently truncated. See
+[`docs/tweebit-ai-harness-by-daryna-release-comparison.md`](docs/tweebit-ai-harness-by-daryna-release-comparison.md).
 
 ## How a task runs
 
@@ -33,14 +53,24 @@ The installer creates an isolated application environment, installs the official
 
 ## Install
 
-Download and unpack the repository, open a terminal in that directory, and run:
+Tweebit v0.4.0 is currently a local, unpublished release candidate. Install it only from the exact
+reviewed local checkout that contains the candidate:
 
 ```sh
-cd ~/Downloads/agents-main
+cd /absolute/path/to/reviewed/tweebit-checkout
 ./install.sh
 ```
 
-You can also install directly from the official repository:
+For an existing Harness installation, select that checkout explicitly and verify it:
+
+```sh
+agent update --source /absolute/path/to/reviewed/tweebit-checkout
+hash -r
+agent doctor --full
+```
+
+The public `mdvcode/agents` installer below installs the public baseline, **not** this unpublished
+Tweebit candidate:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mdvcode/agents/main/install.sh | sh
@@ -99,13 +129,37 @@ Or use the local browser dashboard:
 agent dashboard
 ```
 
-The dashboard does not require YAML: use **Launch several tasks** to add ordinary
-project-and-task rows. YAML remains available only under the advanced import section.
+The dashboard opens on **Новая задача** for focused single-task intake. **Проекты** lists
+only repositories already registered by `agent init`; it does not scan the computer. Opening a
+project shows its task scope and durable local context, while **Новая задача** reuses the same
+composer with that project preselected. **Задачи** remains the global operational list across all
+projects and contains attention, active work, history, and the progressive-disclosure batch
+builder. YAML remains available only under the advanced import section. **Статистика** is a separate
+full section for operational counters, service health, and worker state; task details remain in
+**Задачи**.
 
-The dashboard's **Adaptive / Efficiency** section reads the backend acceptance report and
+**Открыть в Codex** uses the selected project's trusted canonical folder and the supported local
+Codex workspace launcher. Tweebit does not read or mutate private Codex application databases and
+does not claim to create or synchronize native Codex sidebar projects. The existing provider-neutral
+runtime remains authoritative for execution; Codex SDK is one shipped provider, not the project
+identity itself.
+
+Project detail keeps **Memory**, **Skills**, and **Tools** under one compact context summary instead
+of adding three more top-level sections. This release does not claim automatic long-term learning:
+instructions, selected repository documentation, run artifacts, the run's Codex thread, and
+consented attachments form the effective task context. Skills are role-scoped Harness playbooks;
+Tools are governed capabilities and permissions, not memory. A curated editable project-memory
+surface remains deferred until its provenance, freshness, retention, and runtime indexing can be
+shown honestly.
+
+The dashboard's **Adaptive Lab** section reads the backend acceptance report and
 compares Full with Adaptive. `NOT ENOUGH DATA` means that the representative paired A/B acceptance
 run has not been completed; it is not a failure of the current task and does not prevent explicit
-`--mode adaptive` runs. Until that acceptance passes, `auto` does not select Adaptive by default.
+`--mode adaptive` runs. **Auto** currently selects Fast or Full from task risk and does not select
+Adaptive until the authoritative acceptance verdict is `PASS`; **Adaptive** is a manual Beta opt-in
+before that point. They are mutually exclusive values of one execution-mode selector, not a mode
+plus a checkbox. The execution mode keeps the name **Adaptive**; **Adaptive Lab** names only the
+analytics and evidence section.
 
 `agent task` refuses a stale source/install combination, starts or repairs the background worker when needed, and waits for worker readiness before reporting a healthy launch. If the task was already queued when worker startup failed, the error preserves its run id and prints the exact restart/watch commands instead of discarding the work. The project checkout must be clean before a task can create or switch branches.
 
@@ -169,7 +223,7 @@ agent batch --file tasks.yaml
 agent dashboard
 ```
 
-`parallel: true` gives that task an isolated worktree. `max_parallel_tasks` is enforced when workers claim tasks, so a busy repository or shared test database cannot consume more than its configured capacity. The dashboard displays all repositories together and can filter by lifecycle, repository, branch, or worker.
+`parallel: true` gives that task an isolated worktree. `max_parallel_tasks` is enforced when workers claim tasks, so a busy repository or shared test database cannot consume more than its configured capacity. The dashboard's **Задачи** section can filter authoritative task data by attention, lifecycle, repository, branch, or worker.
 
 The loopback API accepts the same data at `POST /tasks/batch`, either as a YAML `manifest` string or as `repositories` and `tasks` JSON fields. The dashboard is the simplest visual API client and preserves the existing loopback authentication boundary.
 
@@ -211,13 +265,13 @@ agent task --mode goal "Complete a checkpointed multi-hour objective"
 
 | Mode | Behavior |
 | --- | --- |
-| `auto` | Uses the guarded fast workflow for ordinary work and selects the full workflow when the goal names sensitive or broad changes. It never selects `goal`. |
-| `adaptive` | Opts into deterministic task analysis and an auditable minimum-safe execution DAG. Optional roles may be skipped, independent read-only checks may run in parallel, and model-backed roles receive scoped context and the cheapest sufficient profile. Low confidence expands the plan safely. |
+| `auto` | Selects the guarded Fast or Full workflow from task risk. It cannot select Adaptive until the authoritative acceptance verdict is `PASS`, and it never selects `goal`. |
+| `adaptive` | Manual Beta opt-in to deterministic task analysis and an auditable minimum-safe execution DAG. Optional roles may be skipped, independent read-only checks may run in parallel, and model-backed roles receive scoped context and the cheapest sufficient profile. Low confidence expands the plan safely. |
 | `fast` | Runs the short workflow for at most 15 minutes, with implementation and review as the only model-backed roles. Context, quality, security, and verdict stages are deterministic. |
 | `full` | Runs the complete specialist workflow for at most 60 minutes. |
 | `goal` | Explicitly runs a checkpointed long objective for at most 4 hours. Use it only when the success condition genuinely needs multiple hours. |
 
-Use `auto` for the current accepted production behavior and `adaptive` when explicitly evaluating or using the new planner. Fast mode automatically escalates to the full workflow before publication if the patch touches protected areas, changes more than five files, exceeds 200 changed lines, or reports increased risk. Required checks and approval gates are never bypassed. The 30-minute role timeout is an emergency limit for one model executor, not the duration of the whole task; workflow, recovery, iteration, and human-attention limits are tracked separately.
+Choose exactly one execution mode per task; Adaptive is not an additional checkbox. Use `auto` for the current accepted production behavior and `adaptive` when explicitly evaluating or using the Beta planner. Fast mode automatically escalates to the full workflow before publication if the patch touches protected areas, changes more than five files, exceeds 200 changed lines, or reports increased risk. Required checks and approval gates are never bypassed. The 30-minute role timeout is an emergency limit for one model executor, not the duration of the whole task; workflow, recovery, iteration, and human-attention limits are tracked separately.
 
 ## Branch and workspace modes
 
@@ -279,8 +333,11 @@ agent update --json
 ```
 
 - `agent --version` prints the installed version.
-- `agent update` installs the latest version and restarts the worker service.
+- `agent update` installs from the configured/public source and restarts the worker service; it does
+  not discover this unpublished local Tweebit candidate.
 - `--source` installs an explicitly selected local folder, `git+https`, or `git+ssh` source.
+- Until Tweebit is published, use `agent update --source
+  /absolute/path/to/reviewed/tweebit-checkout` for every candidate install or update.
 
 ### Project initialization
 
@@ -344,7 +401,24 @@ agent worker stop [--json]
 agent dashboard [--repo PATH] [--port PORT] [--no-open]
 ```
 
-The dashboard binds to loopback, opens in the default browser, and provides single-task launch plus a visual multi-task builder that does not require YAML. YAML import remains available as an advanced option. The dashboard also provides execution-mode (`auto`, `adaptive`, `fast`, `full`, or explicit `goal`) and Git-workspace selection, lifecycle/repository/branch/worker filters, probable-conflict hints, status, structured answer choices with a custom-answer fallback, approval, retry, and abort controls. Its Adaptive section compares evaluator-produced Full/Adaptive metrics, exposes filterable paired-run evidence, and shows each run's persisted execution plan, executed/skipped/deterministic roles, model profiles, cache and token use, repair loops, and escalation counters. The browser never calculates or overrides the authoritative acceptance, security, or approval verdict. `NOT ENOUGH DATA` is the expected status until authoritative paired acceptance evidence exists. Answered questions are fingerprinted so the same question cannot silently reopen in a loop. `--no-open` starts the dashboard server without opening a browser. `Ctrl+C` stops the dashboard server but does not stop the worker service.
+The dashboard binds to loopback and opens in the default browser. A lightweight collapsible sidebar
+on desktop, and an accessible off-canvas menu on mobile, navigate between **Создать**, **Задачи**,
+**Статистика**, and **Adaptive Lab**. **Создать** provides focused single-task launch, the current initialized-project
+selector, attachment context, execution-mode (`auto`, `adaptive`, `fast`, `full`, or explicit
+`goal`), and Git-workspace selection. It does not introduce a project catalog or another project
+authority. **Задачи** contains attention-first task filtering, active work, history, probable-conflict
+hints, structured answer choices with a custom-answer fallback, approval, retry, abort controls, and
+the progressive-disclosure visual/YAML batch tools. **Статистика** is a separate full section for
+operational counters, service health, and worker state; it does not duplicate task details.
+**Adaptive Lab** is reserved for efficiency analysis: it compares evaluator-produced Full/Adaptive
+metrics and exposes filterable paired-run evidence, persisted execution plans,
+executed/skipped/deterministic roles, model profiles, cache and token use, repair loops, and
+escalation counters. The execution mode itself remains named **Adaptive**. The browser never
+calculates or overrides the authoritative acceptance, security, or approval verdict. `NOT ENOUGH
+DATA` is the expected status until authoritative paired acceptance evidence exists. Answered
+questions are fingerprinted so the same question cannot silently reopen in a loop. `--no-open`
+starts the dashboard server without opening a browser. `Ctrl+C` stops the dashboard server but does
+not stop the worker service.
 
 ### Status and monitoring
 

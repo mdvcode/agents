@@ -39,6 +39,15 @@
         },
         "elapsed_seconds": {
           "type": "integer"
+        },
+        "extensions_used": {
+          "type": "integer"
+        },
+        "verification_role": {
+          "type": "string"
+        },
+        "extension_approval_id": {
+          "type": "string"
         }
       },
       "required": [

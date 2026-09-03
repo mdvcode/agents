@@ -6,12 +6,16 @@ import os
 import stat
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
+from ai_harness.project import trust_key
+from ai_harness import cli as agent_cli
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from approval_lifecycle import approve_run, prepare_resume  # noqa: E402
+from approval_lifecycle import approve_run, prepare_resume, request_approval  # noqa: E402
 from runtimes.codex_cli import CodexCliRuntime  # noqa: E402
 from runtimes.codex_sdk import CodexSdkRuntime  # noqa: E402
 
@@ -33,6 +37,332 @@ def test_workflow_token_ceiling_is_economy_pressure_not_a_blocker() -> None:
     assert action is not None
     assert action["action"] == "economy"
     assert action["exhausted_dimensions"] == ["tokens_used"]
+
+
+def model_escalation_state() -> dict[str, object]:
+    role = "implementation-agent"
+    terminal_profile = {
+        "execution_profile": "complex",
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "high",
+        "service_tier": "fast",
+        "terminal_action": "human_or_dead_letter",
+    }
+    state: dict[str, object] = {
+        "run_id": "run-model-approval",
+        "input_fingerprint": "input-fingerprint",
+        "role_count": 3,
+        "diff_hash": "d" * 64,
+        "current_execution_profile": terminal_profile,
+        "roles": [
+            {
+                "role": role,
+                "llm_invoked": True,
+                "execution_profile": {
+                    **terminal_profile,
+                    "reasoning_effort": "xhigh",
+                    "terminal_action": "",
+                },
+                "result": {"status": "completed", "tokens_used": 50},
+            }
+        ],
+        "loops": {
+            "review_repair": {"extension_approval_id": "review-extension"}
+        },
+        "attention_history": [
+            {
+                "resolution": "approval_consumed",
+                "role": role,
+                "summary": agent_role_runner.MODEL_ESCALATION_SUMMARY,
+                "requirement": {
+                    "requirement_id": agent_role_runner.MODEL_ESCALATION_REQUIREMENT,
+                },
+            }
+        ],
+    }
+    scope = {
+        "actions": ["allow_one_model_escalation", "resume_workflow"],
+        "gate": role,
+        "additional_attempts": 1,
+        "model_escalation_role": role,
+        "model_escalation_uses": 1,
+        "model_escalation_fingerprint": agent_role_runner.model_escalation_fingerprint(
+            state, role
+        ),
+    }
+    state["approval_override"] = {
+        "approval_id": "model-approval",
+        "gate": role,
+        "scope": scope,
+    }
+    state["approval_grants"] = [
+        {
+            "approval_id": "model-approval",
+            "gate": role,
+            "scope": scope,
+            "reason": agent_role_runner.MODEL_ESCALATION_SUMMARY,
+        }
+    ]
+    return state
+
+
+def test_model_escalation_grant_is_consumed_once_before_runtime() -> None:
+    state = model_escalation_state()
+
+    approval_id = agent_role_runner.active_model_escalation_approval_id(
+        state, "implementation-agent"
+    )
+    first = agent_role_runner.mark_model_escalation_started(
+        state,
+        role="implementation-agent",
+        approval_id=approval_id,
+    )
+    second = agent_role_runner.mark_model_escalation_started(
+        state,
+        role="implementation-agent",
+        approval_id=approval_id,
+    )
+
+    assert approval_id == "model-approval"
+    assert first is True
+    assert second is False
+    assert agent_role_runner.active_model_escalation_approval_id(
+        state, "implementation-agent"
+    ) == ""
+    assert state["approval_action_uses"] == [
+        {
+            "approval_id": "model-approval",
+            "action": "allow_one_model_escalation",
+            "role": "implementation-agent",
+            "started_at": state["approval_action_uses"][0]["started_at"],
+        }
+    ]
+
+
+def test_legacy_inflated_role_count_does_not_invalidate_consumed_model_grant(
+    tmp_path: Path,
+) -> None:
+    role = "implementation-agent"
+    run_dir = tmp_path / "run-model-approval"
+    (run_dir / "artifacts").mkdir(parents=True)
+    state = model_escalation_state()
+    terminal_profile = dict(state["current_execution_profile"])
+    terminal_result = {
+        "status": "awaiting_approval",
+        "summary": agent_role_runner.MODEL_ESCALATION_SUMMARY,
+        "tokens_used": 0,
+    }
+    state.update(
+        {
+            "execution_status": "awaiting_approval",
+            "role_count": 40,
+            "tokens_used": 999_999,
+            "artifacts_dir": str(run_dir / "artifacts"),
+            "roles": [
+                *state["roles"],
+                {
+                    "role": role,
+                    "llm_invoked": False,
+                    "execution_profile": terminal_profile,
+                    "result": terminal_result,
+                },
+                {
+                    "role": "approval-gate",
+                    "llm_invoked": False,
+                    "result": {"status": "awaiting_approval"},
+                },
+            ],
+            "attention": {
+                "required": True,
+                "role": role,
+                "action": "answer",
+                "summary": agent_role_runner.MODEL_ESCALATION_SUMMARY,
+                "requirement": {
+                    "requirement_id": agent_role_runner.MODEL_ESCALATION_REQUIREMENT,
+                },
+            },
+        }
+    )
+    state.pop("approval_override", None)
+    state.pop("approval_grants", None)
+    state.pop("attention_history", None)
+    (run_dir / "workflow.json").write_text(json.dumps(state), encoding="utf-8")
+
+    requested = request_approval(
+        run_dir,
+        reason=agent_role_runner.MODEL_ESCALATION_SUMMARY,
+    )
+    approve_run(run_dir, actor="reviewer", scope=requested["requested_scope"])
+    resumed = prepare_resume(run_dir)["workflow"]
+
+    # Match the runner's early legacy-state reconciliation before it selects a
+    # model. The approval fingerprint must use the same canonical count.
+    resumed["role_count"] = agent_role_runner.accounted_role_count(resumed["roles"])
+    resumed["tokens_used"] = agent_role_runner.accounted_tokens_used(resumed["roles"])
+
+    assert resumed["role_count"] == 1
+    assert agent_role_runner.active_model_escalation_approval_id(resumed, role) == requested[
+        "approval_id"
+    ]
+
+
+def test_model_escalation_grant_is_atomically_consumed_across_resumes(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    (run_dir / "artifacts").mkdir(parents=True)
+    durable = model_escalation_state()
+    (run_dir / "workflow.json").write_text(json.dumps(durable), encoding="utf-8")
+    copies = [json.loads(json.dumps(durable)), json.loads(json.dumps(durable))]
+
+    def consume(state: dict[str, object]) -> bool:
+        return agent_role_runner.consume_model_escalation_approval(
+            run_dir,
+            state,
+            role="implementation-agent",
+            approval_id="model-approval",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(consume, copies))
+
+    stored = json.loads((run_dir / "workflow.json").read_text(encoding="utf-8"))
+    assert sorted(outcomes) == [False, True]
+    assert len(stored["approval_action_uses"]) == 1
+    assert stored["approval_grants"][0]["model_escalation_started_at"]
+    assert all(copy["approval_action_uses"] == stored["approval_action_uses"] for copy in copies)
+    assert all(
+        copy["approval_grants"][0]["model_escalation_started_at"]
+        == stored["approval_grants"][0]["model_escalation_started_at"]
+        for copy in copies
+    )
+
+
+@pytest.mark.parametrize("mismatch", ["approval_id", "gate", "scope", "reason"])
+def test_model_escalation_grant_mismatch_fails_closed(mismatch: str) -> None:
+    state = model_escalation_state()
+    grant = state["approval_grants"][0]
+    if mismatch == "approval_id":
+        grant["approval_id"] = "different"
+    elif mismatch == "gate":
+        grant["gate"] = "reviewer"
+    elif mismatch == "scope":
+        grant["scope"] = {"actions": ["resume_workflow"]}
+    else:
+        grant["reason"] = "Different approval"
+
+    assert agent_role_runner.active_model_escalation_approval_id(
+        state, "implementation-agent"
+    ) == ""
+
+
+def test_terminal_profile_is_not_a_model_call_or_role_budget_entry() -> None:
+    actual = {
+        "role": "implementation-agent",
+        "llm_invoked": True,
+        "execution_profile": {
+            "execution_profile": "complex",
+            "reasoning_effort": "xhigh",
+            "terminal_action": "",
+        },
+        "result": {"status": "completed", "tokens_used": 20},
+    }
+    terminal = {
+        "role": "implementation-agent",
+        "llm_invoked": True,
+        "execution_profile": {
+            "execution_profile": "complex",
+            "reasoning_effort": "high",
+            "terminal_action": "human_or_dead_letter",
+        },
+        "result": {
+            "status": "awaiting_approval",
+            "summary": agent_role_runner.MODEL_ESCALATION_SUMMARY,
+            "tokens_used": 0,
+        },
+    }
+    verifier = {
+        "role": "architecture-consistency-agent",
+        "llm_invoked": True,
+        "execution_profile": {
+            "execution_profile": "complex",
+            "reasoning_effort": "high",
+            "terminal_action": "",
+        },
+        "result": {"status": "completed", "tokens_used": 10},
+    }
+    cached_replay = {
+        "role": "architecture-consistency-agent",
+        "llm_invoked": False,
+        "result": {"status": "completed", "tokens_used": 10},
+        "cached_result": True,
+        "cache_provenance": "completed_checkpoint_replay",
+    }
+    approval_gate = {"role": "approval-gate", "llm_invoked": False, "result": {}}
+    state = {"roles": [actual, terminal, verifier, cached_replay, approval_gate]}
+
+    assert agent_role_runner.role_entry_invoked_model(terminal) is False
+    assert agent_role_runner.previous_execution_profile(state, "implementation-agent") == "complex"
+    assert agent_role_runner.previous_reasoning_effort(state, "implementation-agent") == "xhigh"
+    assert agent_role_runner.accounted_role_count(state["roles"]) == 2
+    assert agent_role_runner.accounted_tokens_used(state["roles"]) == 30
+
+
+def test_pending_output_recovery_counts_once_but_completed_replay_does_not() -> None:
+    pending_output = {
+        "role": "implementation-agent",
+        "llm_invoked": True,
+        "cached_result": True,
+        "cache_provenance": "pending_output",
+        "execution_profile": {
+            "execution_profile": "complex",
+            "reasoning_effort": "xhigh",
+            "terminal_action": "",
+        },
+        "result": {"status": "completed", "tokens_used": 25},
+    }
+    completed_replay = {
+        **pending_output,
+        "llm_invoked": False,
+        "execution_profile": {},
+        "cache_provenance": "completed_checkpoint_replay",
+    }
+
+    assert agent_role_runner.accounted_role_count([pending_output]) == 1
+    assert agent_role_runner.accounted_tokens_used([pending_output]) == 25
+    assert agent_role_runner.accounted_role_count(
+        [pending_output, completed_replay]
+    ) == 1
+    assert agent_role_runner.accounted_tokens_used(
+        [pending_output, completed_replay]
+    ) == 25
+
+
+def test_model_approval_is_not_an_adaptive_budget_override() -> None:
+    state = model_escalation_state()
+
+    assert agent_role_runner.active_budget_approval_override(
+        state, "implementation-agent"
+    ) is False
+
+    scope = {"actions": ["resume_workflow"], "gate": "implementation-agent"}
+    state["approval_override"] = {
+        "approval_id": "budget-approval",
+        "gate": "implementation-agent",
+        "scope": scope,
+    }
+    state["approval_grants"] = [
+        {
+            "approval_id": "budget-approval",
+            "gate": "implementation-agent",
+            "scope": scope,
+            "reason": "Adaptive hard execution bound exhausted; execution is awaiting approval.",
+        }
+    ]
+
+    assert agent_role_runner.active_budget_approval_override(
+        state, "implementation-agent"
+    ) is True
 
 
 def test_publication_requires_central_registration(monkeypatch: object, tmp_path: Path) -> None:
@@ -509,6 +839,147 @@ def test_missing_distinct_image_capability_fails_before_runtime(tmp_path: Path) 
     assert "no image-generation capability" in reason
 
 
+def test_image_capability_terms_in_unrelated_requirements_do_not_block(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "plan.md").write_text(
+        "Create only the project scaffold.\nUse provided assets without modifying them.\n",
+        encoding="utf-8",
+    )
+
+    reason = agent_role_runner.missing_image_capability(
+        "Используй предоставленные изображения.\nСоздай отдельный плагин.", artifacts
+    )
+
+    assert reason == ""
+
+
+def test_supplied_images_without_generation_do_not_block(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "plan.md").write_text(
+        "Use the six supplied images, with a distinct image for each category.\n",
+        encoding="utf-8",
+    )
+
+    reason = agent_role_runner.missing_image_capability(
+        "Do not generate new images; use the provided files.", artifacts
+    )
+
+    assert reason == ""
+
+
+def test_answered_image_capability_requirement_allows_resume(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "plan.md").write_text(
+        "Add six distinct new image assets for each category.\n", encoding="utf-8"
+    )
+    fingerprint = "sha256:image-capability"
+    (tmp_path / "workflow.json").write_text(
+        json.dumps(
+            {
+                "attention_history": [
+                    {
+                        "role": "implementation-agent",
+                        "resolution": "answer_recorded",
+                        "fingerprint": fingerprint,
+                        "requirement": {
+                            "requirement_id": "capability_implementation_unavailable"
+                        },
+                        "details": [
+                            "The plan requires images, but the role has no image-generation capability."
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "human-input.json").write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "requirement_id": "capability_implementation_unavailable",
+                        "question_fingerprint": fingerprint,
+                        "response": "Use the supplied image assets and continue.",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    reason = agent_role_runner.missing_image_capability(
+        "Добавь к каждой категории картинки, для каждой категории своя", artifacts
+    )
+
+    assert reason == ""
+
+
+@pytest.mark.parametrize(
+    ("fingerprint", "response"),
+    [("sha256:other-question", "Use supplied images"), ("sha256:image-capability", "")],
+)
+def test_unmatched_or_empty_image_capability_answer_does_not_bypass(
+    tmp_path: Path, fingerprint: str, response: str
+) -> None:
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "plan.md").write_text(
+        "Add six distinct new image assets for each category.\n", encoding="utf-8"
+    )
+    (tmp_path / "workflow.json").write_text(
+        json.dumps(
+            {
+                "attention_history": [
+                    {
+                        "role": "implementation-agent",
+                        "resolution": "answer_recorded",
+                        "fingerprint": "sha256:image-capability",
+                        "requirement": {
+                            "requirement_id": "capability_implementation_unavailable"
+                        },
+                        "details": ["No image-generation capability is available."],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "human-input.json").write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "requirement_id": "capability_implementation_unavailable",
+                        "question_fingerprint": fingerprint,
+                        "response": response,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    reason = agent_role_runner.missing_image_capability("Generate six new images.", artifacts)
+
+    assert "no image-generation capability" in reason
+
+
+def test_explicit_generation_from_supplied_reference_still_blocks(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "plan.md").write_text(
+        "Generate six new images using the supplied logo as a reference.\n", encoding="utf-8"
+    )
+
+    reason = agent_role_runner.missing_image_capability("Create the category art.", artifacts)
+
+    assert "no image-generation capability" in reason
+
+
 def test_fast_workflow_uses_only_implementation_model_for_non_code_change(
     tmp_path: Path,
     monkeypatch: object,
@@ -520,6 +991,8 @@ def test_fast_workflow_uses_only_implementation_model_for_non_code_change(
     state = agent_role_runner.run_roles(
         run_id="fast-role-bound",
         repository=tmp_path,
+        project_id="fast-project",
+        project_key=trust_key(tmp_path),
         adapter_command=command,
         dry_run=True,
         mode="auto",
@@ -533,6 +1006,31 @@ def test_fast_workflow_uses_only_implementation_model_for_non_code_change(
     }
     assert state["budgets"]["max_duration_seconds"] == 900
     assert state["effective_mode"] == "fast"
+    assert state["project_id"] == "fast-project"
+    assert state["project_key"] == trust_key(tmp_path)
+    issue = json.loads(
+        (
+            tmp_path
+            / ".agent-runs"
+            / "fast-role-bound"
+            / "artifacts"
+            / "issue.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert issue["project_id"] == "fast-project"
+    assert issue["project_key"] == trust_key(tmp_path)
+    implementation_context = json.loads(
+        (
+            tmp_path
+            / ".agent-runs"
+            / "fast-role-bound"
+            / "context-manifests"
+            / "implementation-agent.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert implementation_context["project"] == "fast-project"
+    assert implementation_context["project_key"] == trust_key(tmp_path)
+    assert implementation_context["project_profile"] == "agent_workspace"
 
 
 def test_resume_production_runtime_reloads_trusted_command() -> None:
@@ -553,6 +1051,37 @@ def test_resume_fixture_runtime_reuses_stored_command() -> None:
     }
 
     assert agent_role_runner.resume_runtime_command(stored) == "python fake_adapter.py"
+
+
+def test_resume_rejects_project_identity_change(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    runs = tmp_path / ".agent-runs"
+    run_dir = runs / "identity-resume"
+    run_dir.mkdir(parents=True)
+    (run_dir / "workflow.json").write_text(
+        json.dumps(
+            {
+                "run_id": "identity-resume",
+                "execution_status": "resuming",
+                "project_id": "project",
+                "project_key": "2" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agent_role_runner, "RUNS", runs)
+
+    state = agent_role_runner.run_roles(
+        run_id="identity-resume",
+        resume=True,
+        project_id="project",
+        project_key="3" * 64,
+    )
+
+    assert state["execution_status"] == "blocked"
+    assert state["blockers"] == ["project identity changed since this run started"]
 
 
 def test_agent_role_runner_preflights_configured_runtime_before_roles(tmp_path: Path, monkeypatch: object) -> None:
@@ -715,6 +1244,295 @@ def test_technical_publication_failure_does_not_create_approval_gate(
     assert state["attention"]["action"] == "fix_then_retry"
     assert state["attention"]["summary"] == "Publication executor blocked or failed."
     assert not (run_dir / "artifacts" / "approval.json").exists()
+
+
+def test_terminal_model_resume_requests_exact_one_use_approval_without_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runs = tmp_path / ".agent-runs"
+    monkeypatch.setattr(agent_role_runner, "RUNS", runs)
+    run_id = "terminal-model-resume"
+    initial = agent_role_runner.run_roles(
+        run_id=run_id,
+        repository=tmp_path,
+        adapter_command=fake_adapter_script(tmp_path / "fake_adapter.py"),
+        mode="full",
+        dry_run=True,
+    )
+    run_dir = runs / run_id
+    workflow_path = run_dir / "workflow.json"
+    role = "implementation-agent"
+    terminal_profile = {
+        "execution_profile": "complex",
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "high",
+        "service_tier": "fast",
+        "profile_reason": (
+            "the bounded model ladder is exhausted and requires human review or dead-letter"
+        ),
+        "escalation_level": 2,
+        "terminal_action": "human_or_dead_letter",
+    }
+    terminal_result = agent_role_runner.awaiting_approval_result(
+        agent_role_runner.MODEL_ESCALATION_SUMMARY,
+        ["Human review is required before retrying or dead-lettering this role."],
+    )
+    terminal_entry = {
+        "role": role,
+        "llm_invoked": False,
+        "execution_profile": terminal_profile,
+        "result": terminal_result,
+    }
+    initial["roles"].append(terminal_entry)
+    initial.update(
+        {
+            "execution_status": "resuming",
+            "current_role": role,
+            "resume_role": role,
+            "current_execution_profile": {
+                **terminal_profile,
+                "escalation_level": 0,
+                "terminal_action": "",
+            },
+            "attention": {
+                "required": True,
+                "role": role,
+                "action": "answer",
+                "summary": agent_role_runner.MODEL_ESCALATION_SUMMARY,
+                "details": list(terminal_result["blockers"]),
+                "fingerprint": "sha256:" + "a" * 64,
+                "requirement": {
+                    "requirement_id": agent_role_runner.MODEL_ESCALATION_REQUIREMENT,
+                },
+            },
+            "last_route": {
+                "next_role": "approval-gate",
+                "reason": agent_role_runner.MODEL_ESCALATION_SUMMARY,
+                "stop": True,
+                "publication_allowed": False,
+                "loop": None,
+                "warnings": [],
+            },
+            "blockers": ["approval expired"],
+            "approval_grants": [],
+            "missing_requirement_requests": [
+                {
+                    "requirement_id": agent_role_runner.MODEL_ESCALATION_REQUIREMENT,
+                    "semantic_aliases": ["bounded escalation exhausted model"],
+                    "source_question_id": "",
+                    "role": role,
+                    "fingerprint": "sha256:" + "a" * 64,
+                    "summary": agent_role_runner.MODEL_ESCALATION_SUMMARY,
+                    "requested_at": "2026-09-02T10:44:02+00:00",
+                }
+            ],
+        }
+    )
+    initial.pop("approval_override", None)
+    assert agent_cli.resolve_retry_attention(initial) is True
+    assert initial["blockers"] == []
+    assert initial["missing_requirement_requests"] == []
+    agent_role_runner.write_json(workflow_path, initial)
+    agent_role_runner.role_checkpoint(
+        run_dir=run_dir,
+        run_id=run_id,
+        role=role,
+        state_name="role_running",
+        attempt=2,
+        worktree=Path(str(initial["checkout_path"])),
+        input_fingerprint=str(initial["input_fingerprint"]),
+    )
+
+    assert agent_role_runner.bounded_model_escalation_checkpoint(initial, role) is True
+
+    def reject_runtime(*args: object, **kwargs: object) -> dict[str, object]:
+        raise AssertionError("a terminal model checkpoint must not invoke the runtime")
+
+    monkeypatch.setattr(agent_role_runner, "execute_runtime_observed", reject_runtime)
+
+    resumed = agent_role_runner.run_roles(run_id=run_id, resume=True, dry_run=True)
+
+    approval_path = run_dir / "artifacts" / "approval.json"
+    assert approval_path.is_file(), resumed.get("attention")
+    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    scope = approval["requested_scope"]
+    assert resumed["execution_status"] == "awaiting_approval"
+    assert resumed["attention"]["summary"] == agent_role_runner.MODEL_ESCALATION_SUMMARY
+    assert resumed["attention"]["requirement"]["requirement_id"] == (
+        agent_role_runner.MODEL_ESCALATION_REQUIREMENT
+    )
+    assert resumed["last_route"]["loop"] is None
+    assert resumed.get("approval_grants") == []
+    assert approval["status"] == "pending"
+    assert approval["checkpoint_role"] == role
+    assert scope["actions"] == ["allow_one_model_escalation", "resume_workflow"]
+    assert scope["gate"] == role
+    assert scope["additional_attempts"] == 1
+    assert scope["model_escalation_role"] == role
+    assert scope["model_escalation_uses"] == 1
+    assert len(scope["model_escalation_fingerprint"]) == 64
+    latest = next(
+        entry
+        for entry in reversed(resumed["roles"])
+        if entry.get("role") != "approval-gate"
+    )
+    assert latest["role"] == role
+    assert latest["llm_invoked"] is False
+    assert latest["execution_profile"]["terminal_action"] == "human_or_dead_letter"
+
+
+@pytest.mark.parametrize(
+    ("checkpoint_state", "budget_action"),
+    [
+        ("role_output_received", agent_role_runner.BudgetAction.REQUIRE_APPROVAL.value),
+        ("role_validating", agent_role_runner.BudgetAction.SKIP_OPTIONAL.value),
+    ],
+)
+def test_adaptive_resume_validates_pending_output_before_budget_or_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    checkpoint_state: str,
+    budget_action: str,
+) -> None:
+    runs = tmp_path / ".agent-runs"
+    monkeypatch.setattr(agent_role_runner, "RUNS", runs)
+    run_id = f"pending-{checkpoint_state}"
+    initial = agent_role_runner.run_roles(
+        run_id=run_id,
+        repository=tmp_path,
+        adapter_command=fake_adapter_script(tmp_path / "fake_adapter.py"),
+        mode="full",
+        dry_run=True,
+    )
+    run_dir = runs / run_id
+    workflow_path = run_dir / "workflow.json"
+    role = "planner"
+    prior = next(
+        entry
+        for entry in initial["roles"]
+        if entry.get("role") == role and entry.get("result", {}).get("status") == "completed"
+    )
+    saved_result = {
+        **prior["result"],
+        "summary": f"saved output from {checkpoint_state}",
+        "tokens_used": 41,
+    }
+    execution_plan = agent_role_runner.compile_adaptive_execution_plan(
+        task_id=str(initial["task_id"]),
+        goal=str(initial["goal"]),
+        project_profile=str(initial["project_profile"]),
+        requested_paths=[],
+        repository=tmp_path,
+    )
+    execution_plan_path = run_dir / "execution-plan.json"
+    agent_role_runner.write_json(execution_plan_path, execution_plan)
+    initial.update(
+        {
+            "mode": "adaptive",
+            "effective_mode": "adaptive",
+            "execution_status": "resuming",
+            "resume_role": role,
+            "execution_plan_path": str(execution_plan_path.resolve()),
+            "execution_plan_fingerprint": "sha256:"
+            + agent_role_runner.hashlib.sha256(
+                json.dumps(execution_plan, sort_keys=True, ensure_ascii=True).encode("utf-8")
+            ).hexdigest(),
+            "budget_action": {
+                "action": budget_action,
+                "reason": "The saved hard-budget action must not replace pending output.",
+                "pressure": 1.0,
+                "exhausted_dimensions": ["roles_used"],
+            },
+        }
+    )
+    agent_role_runner.write_json(workflow_path, initial)
+    pending_path = run_dir / "role-results" / f"{role}-pending.json"
+    agent_role_runner.write_json(
+        pending_path,
+        {
+            "role": role,
+            "state": "role_output_received",
+            "result": saved_result,
+            "runtime_invoked": True,
+            "execution_profile": prior.get("execution_profile", {}),
+        },
+    )
+    agent_role_runner.role_checkpoint(
+        run_dir=run_dir,
+        run_id=run_id,
+        role=role,
+        state_name=checkpoint_state,
+        attempt=2,
+        worktree=Path(str(initial["checkout_path"])),
+        input_fingerprint=str(initial["input_fingerprint"]),
+        result=saved_result,
+    )
+
+    events: list[str] = []
+    original_validate = agent_role_runner.validate_role_result
+    original_checkpoint = agent_role_runner.role_checkpoint
+
+    def validate_pending(result: dict[str, object], validated_role: str) -> list[str]:
+        if validated_role == role:
+            checkpoint = agent_role_runner.read_checkpoint(run_dir, role)
+            assert checkpoint is not None
+            events.append(
+                f"validate:{checkpoint.state}:{result.get('summary', '')}"
+            )
+        return original_validate(result, validated_role)
+
+    def record_checkpoint(**kwargs: object) -> None:
+        events.append(f"checkpoint:{kwargs['state_name']}")
+        original_checkpoint(**kwargs)
+
+    def reject_budget_assessment(cls: object, plan: dict[str, object]) -> object:
+        events.append("budget")
+        raise AssertionError("pending output must bypass adaptive budget assessment")
+
+    def reject_runtime(*args: object, **kwargs: object) -> dict[str, object]:
+        events.append("runtime")
+        raise AssertionError("pending output must not re-invoke the role runtime")
+
+    monkeypatch.setattr(agent_role_runner, "validate_role_result", validate_pending)
+    monkeypatch.setattr(agent_role_runner, "role_checkpoint", record_checkpoint)
+    monkeypatch.setattr(
+        agent_role_runner.BudgetController,
+        "from_plan",
+        classmethod(reject_budget_assessment),
+    )
+    monkeypatch.setattr(agent_role_runner, "execute_runtime_observed", reject_runtime)
+    monkeypatch.setattr(
+        agent_role_runner,
+        "adaptive_node",
+        lambda _state, _role: {"mandatory": False},
+    )
+    monkeypatch.setattr(
+        agent_role_runner,
+        "decide_next_role",
+        lambda **_kwargs: {
+            "next_role": "",
+            "reason": "Pending output was validated.",
+            "stop": True,
+            "publication_allowed": False,
+            "warnings": [],
+        },
+    )
+
+    resumed = agent_role_runner.run_roles(run_id=run_id, resume=True, dry_run=True)
+
+    assert events == [
+        f"validate:{checkpoint_state}:{saved_result['summary']}",
+        "checkpoint:role_completed",
+    ]
+    recovered = next(entry for entry in reversed(resumed["roles"]) if entry.get("role") == role)
+    assert recovered["result"]["summary"] == saved_result["summary"]
+    assert recovered["cached_result"] is True
+    assert recovered["cache_provenance"] == "pending_output"
+    assert recovered["llm_invoked"] is True
+    assert resumed["budget_action"]["action"] == budget_action
+    assert role not in resumed.get("budget_skipped_roles", [])
+    assert not pending_path.exists()
 
 
 def test_resumed_run_stops_instead_of_reopening_the_same_question(

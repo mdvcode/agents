@@ -1,6 +1,6 @@
-# Agent Workspace Index
+# Tweebit AI Harness by Daryna
 
-This repository is the local operating base for agents working across supported project profiles.
+This repository is the local operating base and product source for Tweebit AI Harness by Daryna.
 
 ## Start Here
 - `docs/onboarding.md`: how a new agent should enter the workspace.
@@ -8,6 +8,8 @@ This repository is the local operating base for agents working across supported 
 - `docs/evaluation-framework.md`: versioned run scoring, 30-case production corpus, frozen comparisons, CI regression gate, coverage, and leaderboard workflow.
 - `docs/observability.md`: OpenTelemetry traces and metrics, operational snapshot, privacy boundaries, and loopback dashboard.
 - `docs/cli.md`: install and use the `agent` product CLI from any project.
+- `docs/tweebit-ai-harness-by-daryna-release-comparison.md`: factual public-baseline versus local
+  release-candidate comparison, including attachment privacy and runtime-bridge status.
 - `docs/operator-runbook.md`: one copyable start path plus failure, approval, and recovery actions.
 - `docs/git-and-logs.md`: git, logs, docs, and artifact expectations.
 - `docs/issues/README.md`: per-GitHub-issue history and branch tracking.
