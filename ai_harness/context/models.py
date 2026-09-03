@@ -39,6 +39,22 @@ class DocumentType(StrEnum):
     ARTIFACT = "artifact"
 
 
+class PrivacyClass(StrEnum):
+    """Where a context item may be sent after policy evaluation."""
+
+    PUBLIC = "public"
+    PROJECT_PRIVATE = "project-private"
+    LOCAL_ONLY = "local-only"
+    SECRET_NEVER_MODEL = "secret-never-model"
+
+
+class TrustStatus(StrEnum):
+    """Whether content may carry authority or is reference-only input."""
+
+    TRUSTED = "trusted"
+    UNTRUSTED_REFERENCE = "untrusted-reference"
+
+
 @dataclass(frozen=True)
 class KnowledgeRequest:
     task: str
@@ -60,6 +76,8 @@ class KnowledgeDocument:
     document_type: DocumentType
     priority: int
     metadata: Mapping[str, str] = field(default_factory=dict)
+    privacy: PrivacyClass = PrivacyClass.PROJECT_PRIVATE
+    trust: TrustStatus = TrustStatus.UNTRUSTED_REFERENCE
 
 
 @dataclass(frozen=True)

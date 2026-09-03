@@ -53,6 +53,27 @@ def test_build_fingerprint_covers_execution_policy_and_make_targets(tmp_path: Pa
     assert harness_build_fingerprint(root) != initial
 
 
+def test_build_fingerprint_covers_bundled_skills_and_templates(tmp_path: Path) -> None:
+    root = tmp_path / "harness"
+    (root / "ai_harness").mkdir(parents=True)
+    (root / "scripts").mkdir()
+    skill = root / ".agents" / "skills" / "context-engineering" / "SKILL.md"
+    template = root / "docs" / "templates" / "goal.md"
+    skill.parent.mkdir(parents=True)
+    template.parent.mkdir(parents=True)
+    skill.write_text("version one\n", encoding="utf-8")
+    template.write_text("goal version one\n", encoding="utf-8")
+    initial = harness_build_fingerprint(root)
+
+    skill.write_text("version two\n", encoding="utf-8")
+    changed_skill = harness_build_fingerprint(root)
+    template.write_text("goal version two\n", encoding="utf-8")
+    changed_template = harness_build_fingerprint(root)
+
+    assert changed_skill != initial
+    assert changed_template != changed_skill
+
+
 def test_worker_service_registers_reports_health_and_stops_gracefully(tmp_path: Path) -> None:
     queue = TaskQueue(tmp_path / "queue.db")
     state_path = tmp_path / "service.json"

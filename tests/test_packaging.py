@@ -23,6 +23,12 @@ def test_pyproject_exposes_installable_agent_command_and_runtime_resources() -> 
     assert "share/ai-harness/evals/baselines" in data_files
     assert "share/ai-harness/evals/experiments" in data_files
     assert "share/ai-harness/.agents/prompts" in data_files
+    skill_paths = sorted((ROOT / ".agents" / "skills").glob("*/SKILL.md"))
+    assert skill_paths
+    for skill_path in skill_paths:
+        destination = f"share/ai-harness/.agents/skills/{skill_path.parent.name}"
+        assert str(skill_path.relative_to(ROOT)) in data_files[destination]
+    assert "docs/templates/goal.md" in data_files["share/ai-harness/docs/templates"]
     root_files = data_files["share/ai-harness"]
     assert "install.sh" in root_files
     assert ".agent-repositories.yaml" not in root_files

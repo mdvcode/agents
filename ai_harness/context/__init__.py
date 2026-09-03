@@ -13,8 +13,10 @@ from .models import (
     KnowledgeDocument,
     KnowledgeRequest,
     KnowledgeType,
+    PrivacyClass,
     RetrievalResult,
     RetrievedDocument,
+    TrustStatus,
 )
 from .retrieval import Retriever, RuleBasedRetriever
 from .sources import KnowledgeSource, ObsidianSource
@@ -34,6 +36,7 @@ __all__ = [
     "KnowledgeRequest",
     "KnowledgeSource",
     "KnowledgeType",
+    "PrivacyClass",
     "MemoryManager",
     "MemoryRecord",
     "ObsidianSource",
@@ -41,6 +44,7 @@ __all__ = [
     "RetrievedDocument",
     "Retriever",
     "RuleBasedRetriever",
+    "TrustStatus",
     "estimate_tokens",
     "canonicalize",
     "chunk_fingerprint",

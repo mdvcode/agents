@@ -12,7 +12,13 @@ from typing import Iterable, Protocol, Sequence
 
 import yaml
 
-from .models import DocumentType, KnowledgeDocument, KnowledgeRequest, KnowledgeType
+from .models import (
+    DocumentType,
+    KnowledgeDocument,
+    KnowledgeRequest,
+    KnowledgeType,
+    TrustStatus,
+)
 
 
 DEFAULT_MAX_SOURCE_BYTES = 256_000
@@ -149,6 +155,18 @@ def _file_document(
         document_type=document_type,
         priority=priority,
         metadata=metadata or {},
+        trust=(
+            TrustStatus.TRUSTED
+            if knowledge_type
+            in {
+                KnowledgeType.ARTIFACT,
+                KnowledgeType.CONTRACT,
+                KnowledgeType.POLICY,
+                KnowledgeType.PROJECT_PROFILE,
+                KnowledgeType.SKILL,
+            }
+            else TrustStatus.UNTRUSTED_REFERENCE
+        ),
     )
 
 
@@ -407,6 +425,7 @@ class ProjectProfileSource:
                 knowledge_type=KnowledgeType.PROJECT_PROFILE,
                 document_type=DocumentType.PROJECT_PROFILE,
                 priority=95,
+                trust=TrustStatus.TRUSTED,
             )
         )
         return tuple(documents)
@@ -491,6 +510,7 @@ class ContractSource:
                     document_type=DocumentType.CONTRACT,
                     priority=78,
                     metadata={"role": request.role},
+                    trust=TrustStatus.TRUSTED,
                 )
             )
         return tuple(documents)
@@ -593,6 +613,7 @@ class RuntimeDeltaSource:
                 document_type=DocumentType.ARTIFACT,
                 priority=99,
                 metadata={"layer": "delta", "authoritative": "true"},
+                trust=TrustStatus.TRUSTED,
             ),
         )
 

@@ -10,12 +10,12 @@ import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from .models import Context, KnowledgeDocument
 
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 IGNORED_PARTS = {".git", ".agent-cache", ".agent-runs", ".agent-queue", "__pycache__", "node_modules"}
 
 
@@ -94,6 +94,40 @@ def document_fingerprints(documents: tuple[KnowledgeDocument, ...]) -> dict[str,
     }
 
 
+def document_revision(
+    documents: Sequence[KnowledgeDocument],
+    *,
+    project_profile_version: str,
+    policy_version: str,
+    compiler_version: str,
+) -> str:
+    """Fingerprint every discovered input that can affect Effective Context."""
+
+    sources = [
+        {
+            "id": document.id,
+            "title": document.title,
+            "source": document.source,
+            "path": document.path,
+            "knowledge_type": document.knowledge_type.value,
+            "document_type": document.document_type.value,
+            "priority": document.priority,
+            "privacy": document.privacy.value,
+            "trust": document.trust.value,
+            "metadata": dict(sorted(document.metadata.items())),
+            "content": fingerprint_text(document.content),
+        }
+        for document in documents
+    ]
+    payload = {
+        "compiler_version": compiler_version,
+        "policy_version": policy_version,
+        "project_profile_version": project_profile_version,
+        "sources": sorted(sources, key=lambda item: (item["source"], item["path"], item["id"])),
+    }
+    return fingerprint_text(json.dumps(payload, sort_keys=True, ensure_ascii=True))
+
+
 @dataclass(frozen=True)
 class ContextCacheKey:
     repository_head_sha: str
@@ -128,6 +162,7 @@ class CachedContext:
     token_estimate: int
     token_budget: int
     source_fingerprints: Mapping[str, str]
+    context_revision: str
     context_log: Mapping[str, object]
     created_at: str
 
@@ -140,6 +175,7 @@ class CachedContext:
             "token_estimate": self.token_estimate,
             "token_budget": self.token_budget,
             "source_fingerprints": dict(self.source_fingerprints),
+            "context_revision": self.context_revision,
             "context_log": dict(self.context_log),
             "created_at": self.created_at,
         }
@@ -160,6 +196,7 @@ class CachedContext:
             token_estimate=int(value.get("token_estimate", 0)),
             token_budget=int(value.get("token_budget", 0)),
             source_fingerprints=dict(value.get("source_fingerprints", {})),
+            context_revision=str(value.get("context_revision", "")),
             context_log=dict(value.get("context_log", {})),
             created_at=str(value.get("created_at", "")),
         )
@@ -205,20 +242,26 @@ class ContextCache:
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             return None
 
-    def get(self, key: ContextCacheKey) -> CachedContext | None:
-        return self._read(self._path(key))
+    def get(self, key: ContextCacheKey, *, context_revision: str = "") -> CachedContext | None:
+        entry = self._read(self._path(key))
+        if entry is not None and context_revision and entry.context_revision != context_revision:
+            return None
+        return entry
 
     def get_compatible(
         self,
         key: ContextCacheKey,
         *,
         source_fingerprints: Mapping[str, str],
+        context_revision: str = "",
     ) -> CachedContext | None:
         if not self.root.is_dir():
             return None
         for path in sorted(self.root.glob("*.json"), reverse=True)[:1000]:
             entry = self._read(path)
             if entry is None or entry.key.compatible_identity() != key.compatible_identity():
+                continue
+            if context_revision and entry.context_revision != context_revision:
                 continue
             if all(
                 source_fingerprints.get(source_id) == fingerprint
@@ -233,6 +276,7 @@ class ContextCache:
         context: Context,
         *,
         source_fingerprints: Mapping[str, str],
+        context_revision: str = "",
     ) -> CachedContext:
         self._prepare()
         retrieved_sources = tuple(
@@ -261,6 +305,11 @@ class ContextCache:
             token_estimate=context.tokens_used,
             token_budget=context.token_budget,
             source_fingerprints=selected_fingerprints,
+            context_revision=(
+                context_revision
+                or str(context.log.get("context_revision", ""))
+                or fingerprint_text(json.dumps(dict(source_fingerprints), sort_keys=True))
+            ),
             context_log=dict(context.log),
             created_at=datetime.now(timezone.utc).isoformat(),
         )
@@ -305,6 +354,7 @@ class ContextCache:
         current: Mapping[str, str],
         *,
         key: ContextCacheKey | None = None,
+        context_revision: str = "",
     ) -> tuple[str, ...]:
         """Evict only entries whose previously selected inputs are stale or missing."""
 
@@ -317,7 +367,10 @@ class ContextCache:
                 continue
             if key is not None and entry.key.compatible_identity() != key.compatible_identity():
                 continue
-            if any(current.get(source_id) != value for source_id, value in entry.source_fingerprints.items()):
+            if (
+                context_revision
+                and entry.context_revision != context_revision
+            ) or any(current.get(source_id) != value for source_id, value in entry.source_fingerprints.items()):
                 path.unlink(missing_ok=True)
                 removed.append(path.stem)
         return tuple(sorted(removed))

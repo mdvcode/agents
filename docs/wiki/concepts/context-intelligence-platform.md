@@ -10,6 +10,8 @@ context = ContextEngine.build(task, repository, role, runtime)
 
 `Context` contains a prompt-ready package, selected and excluded source records, token usage, and a structured provenance event. Workflow integration writes the package under `.agent-runs/<run-id>/context-manifests/packages/` and the append-only log under `.agent-runs/<run-id>/context-manifests/logs/`.
 
+Every build records a `context_revision` over the complete discovered source inventory plus compiler, policy, and project-profile versions. Exact and compatible cache entries are reusable only when that revision still matches. The manifest also records an `effective_context_digest` computed from the exact package written for the runtime.
+
 The runtime adapter reads only the compiled package. Manifest references to skills, artifacts, or source paths are provenance metadata and are not a second context-loading path. In particular, an agent never opens an Obsidian vault directly.
 
 ## Layers
@@ -19,6 +21,12 @@ The runtime adapter reads only the compiled package. Manifest references to skil
 3. `ContextBuilder` applies source priority and token/category budgets, truncates bounded chunks, and renders one Context Package.
 4. Context logging records every selected/excluded source, score, rule, priority, original/included token estimate, truncation flag, and total budget usage.
 5. `MemoryManager` defines `remember`, `forget`, `promote`, `archive`, `summarize`, and `retrieve`. It has no storage or learning implementation in this milestone.
+
+## Inspector contract
+
+The context manifest keeps the legacy `selected_context` and `excluded_context` arrays and adds a normalized `context_inspector` view derived from those same compiler results. Each item carries a privacy class, trust status, runtime destination, and reason code. Repository documentation, wiki, Obsidian, and other reference material are `untrusted-reference`; policies, contracts, skills, project profiles, and authoritative run artifacts are trusted inputs. Trust does not bypass tool, path, privacy, or approval enforcement.
+
+The Inspector is currently a backend manifest contract. Project UI, attachment ingestion, page-level PDF provenance, privacy-destination filtering, and secret-never-model enforcement remain separate delivery slices.
 
 ## Knowledge taxonomy and priority
 

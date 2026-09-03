@@ -38,6 +38,8 @@ def harness_build_fingerprint(root: Path, *, package_root: Path | None = None) -
         (root / "scripts", "*.py"),
         (root / "schemas", "*.json"),
         (root / ".agents" / "prompts", "*.md"),
+        (root / ".agents" / "skills", "*"),
+        (root / "docs" / "templates", "*"),
     ):
         if directory.is_dir():
             candidates.extend(directory.rglob(pattern))

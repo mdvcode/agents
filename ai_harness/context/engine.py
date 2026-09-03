@@ -12,6 +12,7 @@ from .cache import (
     ContextCache,
     ContextCacheKey,
     document_fingerprints,
+    document_revision,
     fingerprint_text,
     repository_fingerprints,
     version_fingerprint,
@@ -68,7 +69,7 @@ class ContextEngine:
         cache: ContextCache | None = None,
         project_profile_version: str = "",
         policy_version: str = "",
-        compiler_version: str = "1",
+        compiler_version: str = "3",
         cache_query_salt: str = "",
     ) -> None:
         self.sources = tuple(sources)
@@ -134,7 +135,7 @@ class ContextEngine:
             cache=ContextCache(control_root.resolve() / ".agent-cache" / "context"),
             project_profile_version=project_profile_version,
             policy_version=policy_version,
-            compiler_version="2",
+            compiler_version="3",
             cache_query_salt=cache_query_salt,
         )
 
@@ -173,10 +174,6 @@ class ContextEngine:
                 policy_version=self.policy_version,
                 context_compiler_version=self.compiler_version,
             )
-            exact = self.cache.get(cache_key)
-            if exact is not None:
-                cached_context = exact.context(cache_status="hit")
-                return attach_log(cached_context, cached_context.log, self.logger)
         documents: dict[str, KnowledgeDocument] = {}
         source_counts: dict[str, int] = {}
         for source in self.sources:
@@ -186,11 +183,26 @@ class ContextEngine:
                 documents.setdefault(document.id, document)
         deduplicated, duplicates = deduplicate_documents(tuple(documents.values()))
         source_fingerprints = document_fingerprints(deduplicated)
+        context_revision = document_revision(
+            tuple(documents.values()),
+            project_profile_version=self.project_profile_version,
+            policy_version=self.policy_version,
+            compiler_version=self.compiler_version,
+        )
         if self.cache is not None and cache_key is not None:
-            self.cache.invalidate_changed_sources(source_fingerprints, key=cache_key)
+            exact = self.cache.get(cache_key, context_revision=context_revision)
+            if exact is not None:
+                cached_context = exact.context(cache_status="hit")
+                return attach_log(cached_context, cached_context.log, self.logger)
+            self.cache.invalidate_changed_sources(
+                source_fingerprints,
+                key=cache_key,
+                context_revision=context_revision,
+            )
             compatible = self.cache.get_compatible(
                 cache_key,
                 source_fingerprints=source_fingerprints,
+                context_revision=context_revision,
             )
             if compatible is not None:
                 cached_context = compatible.context(cache_status="compatible_hit")
@@ -198,6 +210,7 @@ class ContextEngine:
                     cache_key,
                     cached_context,
                     source_fingerprints=source_fingerprints,
+                    context_revision=context_revision,
                 )
                 return attach_log(cached_context, cached_context.log, self.logger)
         retrieval = self.retriever.retrieve(request, deduplicated)
@@ -232,6 +245,8 @@ class ContextEngine:
                 "status": "miss" if cache_key is not None else "disabled",
                 "key": cache_key.digest if cache_key is not None else "",
             },
+            "context_revision": context_revision,
+            "effective_context_digest": fingerprint_text(context.package),
             "selected": [
                 {
                     "id": item.document.id,
@@ -245,6 +260,10 @@ class ContextEngine:
                     "original_tokens": item.original_tokens,
                     "included_tokens": item.included_tokens,
                     "truncated": item.truncated,
+                    "privacy": item.document.privacy.value,
+                    "trust": item.document.trust.value,
+                    "runtime_destination": request.runtime,
+                    "reason_code": "included",
                     "metadata": dict(item.document.metadata),
                 }
                 for item in context.selected
@@ -259,9 +278,37 @@ class ContextEngine:
                     "priority": item.document.priority,
                     "score": round(item.score, 6),
                     "reason": item.reason,
+                    "reason_code": (
+                        "irrelevant"
+                        if item.reason == "no_rule_match"
+                        else "budget"
+                        if "budget" in item.reason
+                        else item.reason
+                    ),
+                    "privacy": item.document.privacy.value,
+                    "trust": item.document.trust.value,
+                    "runtime_destination": request.runtime,
                     "metadata": dict(item.document.metadata),
                 }
                 for item in context.excluded
+            ]
+            + [
+                {
+                    "id": item.id,
+                    "source": item.source,
+                    "path": item.path,
+                    "knowledge_type": item.knowledge_type.value,
+                    "document_type": item.document_type.value,
+                    "priority": item.priority,
+                    "score": 0.0,
+                    "reason": "duplicate",
+                    "reason_code": "duplicate",
+                    "privacy": item.privacy.value,
+                    "trust": item.trust.value,
+                    "runtime_destination": request.runtime,
+                    "metadata": dict(item.metadata),
+                }
+                for item in duplicates
             ],
         }
         attached = attach_log(context, event, self.logger)
@@ -270,5 +317,6 @@ class ContextEngine:
                 cache_key,
                 attached,
                 source_fingerprints=source_fingerprints,
+                context_revision=context_revision,
             )
         return attached
