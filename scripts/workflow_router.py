@@ -15,6 +15,7 @@ import yaml
 
 from ai_harness.economics import BudgetAction, BudgetController, BudgetUsage
 from security_approval import scope_accepts_security, security_finding_ids
+from verifier_environment import verifier_artifact_unavailable
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +40,13 @@ LOOP_DEFAULTS = {
 }
 UI_AREAS = {"ui", "routing", "public_rendering", "dashboard_ui", "user_visible_behavior"}
 SECURITY_SEVERITY_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+VERIFIER_ARTIFACTS = {
+    "architecture-consistency-agent": "architecture_consistency.json",
+    "semantic-conflict-agent": "semantic_conflict.json",
+    "reviewer": "review.json",
+}
+MODEL_ESCALATION_SUMMARY = "Bounded model escalation is exhausted."
+MODEL_ESCALATION_ACTION = "allow_one_model_escalation"
 CODE_EXTENSIONS = {
     ".c",
     ".cpp",
@@ -721,12 +729,7 @@ def verifier_unavailability_accepted(
     artifacts_dir: Path,
     role: str,
 ) -> bool:
-    artifact_names = {
-        "architecture-consistency-agent": "architecture_consistency.json",
-        "semantic-conflict-agent": "semantic_conflict.json",
-        "reviewer": "review.json",
-    }
-    artifact_name = artifact_names.get(role)
+    artifact_name = VERIFIER_ARTIFACTS.get(role)
     if not artifact_name or not verifier_environment_unavailable(artifacts_dir, artifact_name):
         return False
     fingerprint = verifier_artifact_fingerprint(artifacts_dir, artifact_name)
@@ -822,6 +825,158 @@ def failure_fingerprint(
     }
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def review_repair_extension_scope_valid(
+    *,
+    state: dict[str, Any],
+    role_result: dict[str, Any],
+    artifacts_dir: Path,
+    current_role: str,
+    scope: dict[str, Any],
+) -> bool:
+    """Validate a one-time review repair grant against the live checkpoint."""
+
+    artifact_name = VERIFIER_ARTIFACTS.get(current_role)
+    if not artifact_name or scope.get("gate") != current_role:
+        return False
+    if set(_list_values(scope.get("actions"))) != {
+        "extend_review_repair_once",
+        "resume_workflow",
+    }:
+        return False
+    if (
+        isinstance(scope.get("additional_attempts"), bool)
+        or scope.get("additional_attempts") != 1
+    ):
+        return False
+
+    last_route = state.get("last_route", {})
+    loop = last_route.get("loop", {}) if isinstance(last_route, dict) else {}
+    if not isinstance(loop, dict):
+        return False
+    iteration = int(loop.get("iteration", 0) or 0)
+    maximum = int(loop.get("max_iterations", 0) or 0)
+    if (
+        loop.get("name") != "review_repair"
+        or last_route.get("next_role") != "approval-gate"
+        or last_route.get("stop") is not True
+        or scope.get("loop_name") != "review_repair"
+        or not maximum
+        or iteration != maximum
+        or isinstance(scope.get("at_iteration"), bool)
+        or scope.get("at_iteration") != iteration
+        or isinstance(scope.get("max_iterations"), bool)
+        or scope.get("max_iterations") != maximum
+        or not isinstance(loop.get("progress_detected"), bool)
+    ):
+        return False
+
+    loops = state.get("loops", {})
+    stored = loops.get("review_repair", {}) if isinstance(loops, dict) else {}
+    if (
+        not isinstance(stored, dict)
+        or int(stored.get("iterations", 0) or 0) != iteration
+        or int(stored.get("max_iterations", 0) or 0) != maximum
+        or stored.get("last_failure_fingerprint") != loop.get("failure_fingerprint")
+        or stored.get("last_diff_fingerprint") != loop.get("diff_fingerprint")
+        or stored.get("progress_detected") != loop.get("progress_detected")
+        or int(stored.get("extensions_used", 0) or 0) >= 1
+    ):
+        return False
+
+    artifact = _artifact(artifacts_dir, artifact_name)
+    if (
+        not isinstance(artifact, dict)
+        or str(artifact.get("verdict", "")).lower() != "broken"
+        or verifier_artifact_unavailable(artifact)
+    ):
+        return False
+    verifier_fingerprint = str(scope.get("verifier_fingerprint", ""))
+    failure_scope = str(scope.get("failure_fingerprint", ""))
+    diff_scope = str(scope.get("diff_fingerprint", ""))
+    if not all(
+        re.fullmatch(r"[0-9a-f]{64}", value)
+        for value in (verifier_fingerprint, failure_scope, diff_scope)
+    ):
+        return False
+    if verifier_fingerprint != verifier_artifact_fingerprint(artifacts_dir, artifact_name):
+        return False
+
+    expected_failure = failure_fingerprint(
+        role_result=role_result,
+        state=state,
+        artifacts_dir=artifacts_dir,
+    )
+    expected_diff = diff_hash(state, artifacts_dir)
+    return (
+        failure_scope
+        == loop.get("failure_fingerprint")
+        == expected_failure
+        and diff_scope
+        == loop.get("diff_fingerprint")
+        == expected_diff
+    )
+
+
+def model_escalation_scope_valid(
+    *,
+    state: dict[str, Any],
+    current_role: str,
+    scope: dict[str, Any],
+    approval_id: str,
+) -> bool:
+    """Validate an already-started one-role model grant before routing onward."""
+
+    if current_role not in {"implementation-agent", "ci-repair-agent"}:
+        return False
+    if scope.get("gate") != current_role or scope.get("model_escalation_role") != current_role:
+        return False
+    if set(_list_values(scope.get("actions"))) != {
+        MODEL_ESCALATION_ACTION,
+        "resume_workflow",
+    }:
+        return False
+    for key in ("additional_attempts", "model_escalation_uses"):
+        value = scope.get(key)
+        if isinstance(value, bool) or value != 1:
+            return False
+    if not re.fullmatch(r"[0-9a-f]{64}", str(scope.get("model_escalation_fingerprint", ""))):
+        return False
+    grants = state.get("approval_grants", [])
+    if not isinstance(grants, list) or not approval_id:
+        return False
+    matches = [
+        grant
+        for grant in grants
+        if isinstance(grant, dict)
+        and grant.get("approval_id") == approval_id
+        and grant.get("gate") == current_role
+        and grant.get("scope") == scope
+        and grant.get("reason") == MODEL_ESCALATION_SUMMARY
+    ]
+    if len(matches) != 1:
+        return False
+    grant = matches[0]
+    started_at = grant.get("model_escalation_started_at")
+    uses = state.get("approval_action_uses", [])
+    if not isinstance(uses, list):
+        return False
+    matching_uses = [
+        item
+        for item in uses
+        if isinstance(item, dict)
+        and item.get("approval_id") == approval_id
+        and item.get("action") == MODEL_ESCALATION_ACTION
+        and item.get("role") == current_role
+        and item.get("started_at") == started_at
+    ]
+    return bool(
+        grant.get("model_escalation_role") == current_role
+        and isinstance(started_at, str)
+        and started_at
+        and len(matching_uses) == 1
+    )
 
 
 def _loop_config(name: str, routing: dict[str, Any]) -> dict[str, Any]:
@@ -1081,6 +1236,9 @@ def _repair_route(
     artifacts_dir: Path,
     routing: dict[str, Any],
     approval_consumed: bool = False,
+    repair_budget_extended: bool = False,
+    extension_approval_id: str = "",
+    source_role: str = "",
 ) -> dict[str, Any]:
     config = _loop_config(name, routing)
     loops = state.get("loops")
@@ -1088,6 +1246,11 @@ def _repair_route(
         loops = {}
         state["loops"] = loops
     previous = loops.get(name, {}) if isinstance(loops.get(name), dict) else {}
+    extensions_used = int(previous.get("extensions_used", 0) or 0)
+    recorded_extension_approval_id = str(previous.get("extension_approval_id", ""))
+    verification_role = str(previous.get("verification_role", ""))
+    if name == "review_repair" and source_role in VERIFIER_ARTIFACTS:
+        verification_role = source_role
     iteration = min(
         int(previous.get("iterations", 0)) + 1,
         config["max_iterations"],
@@ -1113,7 +1276,12 @@ def _repair_route(
         "progress_detected": progress,
         "tokens_used": loop_tokens,
         "elapsed_seconds": loop_elapsed,
+        "extensions_used": extensions_used,
     }
+    if verification_role:
+        loop["verification_role"] = verification_role
+    if recorded_extension_approval_id:
+        loop["extension_approval_id"] = recorded_extension_approval_id
     loops[name] = {
         "iterations": iteration,
         "max_iterations": config["max_iterations"],
@@ -1124,7 +1292,12 @@ def _repair_route(
         "elapsed_at_start": elapsed_at_start,
         "tokens_used": loop_tokens,
         "elapsed_seconds": loop_elapsed,
+        "extensions_used": extensions_used,
     }
+    if verification_role:
+        loops[name]["verification_role"] = verification_role
+    if recorded_extension_approval_id:
+        loops[name]["extension_approval_id"] = recorded_extension_approval_id
     token_pressure = loop_tokens >= config["max_tokens"]
     exhausted = (
         iteration >= config["max_iterations"]
@@ -1154,6 +1327,23 @@ def _repair_route(
         ]
         if token_warning:
             loop_warnings.append(token_warning)
+        if approval_consumed and repair_budget_extended and extensions_used < 1:
+            loops[name]["extensions_used"] = extensions_used + 1
+            loop["extensions_used"] = extensions_used + 1
+            if extension_approval_id:
+                loops[name]["extension_approval_id"] = extension_approval_id
+                loop["extension_approval_id"] = extension_approval_id
+            return _route(
+                config["to"],
+                f"{config['name']} received a one-time approved repair extension.",
+                loop=loop,
+                warnings=[token_warning] if token_warning else None,
+            )
+        if extensions_used >= 1:
+            return _blocked(
+                f"{reason} The one-time review repair extension was already used; no second extension is allowed.",
+                loop_warnings,
+            ) | {"loop": loop}
         if approval_consumed:
             return _blocked(
                 f"{reason} The scoped approval was consumed, but the same checkpoint is still unresolved; repair it before retrying.",
@@ -1190,24 +1380,63 @@ def decide_next_role(
     advisory = result.get("next_action")
     approval_override = state.get("approval_override")
     override_scope = approval_override.get("scope", {}) if isinstance(approval_override, dict) else {}
-    bypass_approval = (
+    approval_consumed = (
         isinstance(approval_override, dict)
         and approval_override.get("gate") == current_role
         and isinstance(override_scope, dict)
         and "resume_workflow" in override_scope.get("actions", [])
     )
-    if bypass_approval:
-        state.pop("approval_override", None)
-        warnings.append("Consumed one scoped approval override for this checkpoint.")
+    approval_id = (
+        str(approval_override.get("approval_id", ""))
+        if isinstance(approval_override, dict)
+        else ""
+    )
     grants = state.get("approval_grants", [])
     valid_grants = [item for item in grants if isinstance(item, dict)] if isinstance(grants, list) else []
-    active_verifier_acceptance = False
-    verifier_artifacts = {
-        "architecture-consistency-agent": "architecture_consistency.json",
-        "semantic-conflict-agent": "semantic_conflict.json",
-        "reviewer": "review.json",
+    restricted_actions = {
+        action
+        for action in _list_values(override_scope.get("actions"))
+        if action.startswith(("allow_", "extend_"))
     }
-    verifier_artifact = verifier_artifacts.get(current_role)
+    extension_requested = (
+        approval_consumed
+        and isinstance(override_scope, dict)
+        and "extend_review_repair_once" in override_scope.get("actions", [])
+    )
+    repair_budget_extended = bool(
+        extension_requested
+        and review_repair_extension_scope_valid(
+            state=state,
+            role_result=result,
+            artifacts_dir=artifacts_dir,
+            current_role=current_role,
+            scope=override_scope,
+        )
+    )
+    model_escalation_requested = bool(
+        approval_consumed and MODEL_ESCALATION_ACTION in restricted_actions
+    )
+    model_escalation_valid = bool(
+        model_escalation_requested
+        and model_escalation_scope_valid(
+            state=state,
+            current_role=current_role,
+            scope=override_scope,
+            approval_id=approval_id,
+        )
+    )
+    unknown_restricted_actions = restricted_actions - {
+        "extend_review_repair_once",
+        MODEL_ESCALATION_ACTION,
+    }
+    restricted_approval_requested = approval_consumed and bool(restricted_actions)
+    bypass_approval = approval_consumed and not restricted_approval_requested
+    extension_approval_id = approval_id
+    if approval_consumed:
+        state.pop("approval_override", None)
+        warnings.append("Consumed one scoped approval override for this checkpoint.")
+    active_verifier_acceptance = False
+    verifier_artifact = VERIFIER_ARTIFACTS.get(current_role)
     if (
         bypass_approval
         and verifier_artifact
@@ -1249,6 +1478,10 @@ def decide_next_role(
     budget_approved = any(
         isinstance(item.get("scope"), dict)
         and "resume_workflow" in item["scope"].get("actions", [])
+        and not any(
+            action.startswith(("allow_", "extend_"))
+            for action in _list_values(item["scope"].get("actions"))
+        )
         and "budget exceeded" in str(item.get("reason", "")).lower()
         for item in valid_grants
     )
@@ -1260,6 +1493,22 @@ def decide_next_role(
     severity = security_severity(state, artifacts_dir)
     if security and severity == "critical":
         return _blocked("A CRITICAL security finding blocks the workflow.", warnings + security)
+
+    if unknown_restricted_actions:
+        return _blocked(
+            "The scoped approval contains an unknown restricted action.",
+            warnings + sorted(unknown_restricted_actions),
+        )
+    if extension_requested and not repair_budget_extended:
+        return _blocked(
+            "The one-time review repair approval no longer matches the live verifier, diff, or exhausted loop checkpoint.",
+            warnings + ["Retry from a fresh checkpoint; this scoped approval cannot be reused or broadened."],
+        )
+    if model_escalation_requested and not model_escalation_valid:
+        return _blocked(
+            "The one-time model escalation approval is invalid, unstarted, or already consumed.",
+            warnings + ["Retry from a fresh exhausted-model checkpoint; this approval cannot be replayed."],
+        )
 
     risk = _artifact(artifacts_dir, "risk.json")
     risk_class = risk.get("risk_class") if isinstance(risk, dict) else state.get("risk_class")
@@ -1291,7 +1540,10 @@ def decide_next_role(
             role_result=result,
             artifacts_dir=artifacts_dir,
             routing=routing,
-            approval_consumed=bypass_approval,
+            approval_consumed=approval_consumed,
+            repair_budget_extended=repair_budget_extended,
+            extension_approval_id=extension_approval_id,
+            source_role=current_role,
         )
 
     budget_blockers = _budget_blockers(state, workflows)
@@ -1338,7 +1590,10 @@ def decide_next_role(
                 role_result=result,
                 artifacts_dir=artifacts_dir,
                 routing=routing,
-                approval_consumed=bypass_approval,
+                approval_consumed=approval_consumed,
+                repair_budget_extended=repair_budget_extended,
+                extension_approval_id=extension_approval_id,
+                source_role=current_role,
             )
         else:
             route = _repair_route(
@@ -1347,7 +1602,10 @@ def decide_next_role(
                 role_result=result,
                 artifacts_dir=artifacts_dir,
                 routing=routing,
-                approval_consumed=bypass_approval,
+                approval_consumed=approval_consumed,
+                repair_budget_extended=repair_budget_extended,
+                extension_approval_id=extension_approval_id,
+                source_role=current_role,
             )
         if not route["stop"]:
             after_loop_budget = _budget_blockers(state, workflows)
@@ -1382,7 +1640,10 @@ def decide_next_role(
                 role_result=result,
                 artifacts_dir=artifacts_dir,
                 routing=routing,
-                approval_consumed=bypass_approval,
+                approval_consumed=approval_consumed,
+                repair_budget_extended=repair_budget_extended,
+                extension_approval_id=extension_approval_id,
+                source_role=current_role,
             )
             if not route["stop"]:
                 after_loop_budget = _budget_blockers(state, workflows)
@@ -1398,7 +1659,10 @@ def decide_next_role(
                 role_result=result,
                 artifacts_dir=artifacts_dir,
                 routing=routing,
-                approval_consumed=bypass_approval,
+                approval_consumed=approval_consumed,
+                repair_budget_extended=repair_budget_extended,
+                extension_approval_id=extension_approval_id,
+                source_role=current_role,
             )
             if not route["stop"]:
                 after_loop_budget = _budget_blockers(state, workflows)
@@ -1438,7 +1702,10 @@ def decide_next_role(
                     role_result=result,
                     artifacts_dir=artifacts_dir,
                     routing=routing,
-                    approval_consumed=bypass_approval,
+                    approval_consumed=approval_consumed,
+                    repair_budget_extended=repair_budget_extended,
+                    extension_approval_id=extension_approval_id,
+                    source_role=current_role,
                 )
         if verification == "unavailable":
             if not unavailability_accepted:

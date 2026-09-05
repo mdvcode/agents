@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from runtime_contracts import load_json as load_schema, validate_contract
+from run_state import continuation_attachment_payload, continuation_project_identity
 from task_queue import DEFAULT_DB, TaskQueue, TaskRecord
 from tool_governance import audit_tool_call, authorize_tool_call
 
@@ -153,6 +154,11 @@ def ingest_ci_failure(
     workflow = read_json(run_dir / "workflow.json")
     if workflow.get("execution_status") == "awaiting_approval":
         raise CIIngestionError("run is awaiting approval and cannot accept CI repair")
+    try:
+        attachment_payload = continuation_attachment_payload(workflow)
+        project_identity = continuation_project_identity(workflow)
+    except ValueError as exc:
+        raise CIIngestionError(str(exc)) from exc
     external_run_id = str(workflow_run.get("id", ""))
     if not external_run_id:
         raise CIIngestionError("GitHub Actions run id is missing")
@@ -191,12 +197,14 @@ def ingest_ci_failure(
             "task_id": str(workflow.get("task_id", "task")),
             "goal": "Repair failed GitHub Actions checks using run-scoped CI feedback.",
             "project": str(workflow.get("project", "agent_workspace")),
+            **project_identity,
             "repository": str(workflow.get("repository", "")),
             "branch": str(workflow.get("branch", "")),
             "base_branch": str(workflow.get("base_branch", "main")),
             "run_id": run_dir.name,
             "source": "ci",
             "event_id": external_run_id,
+            **attachment_payload,
         },
         priority=100,
         max_retries=2,

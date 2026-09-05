@@ -28,6 +28,7 @@ from ai_harness.context import (
 from ai_harness.context.cache import fingerprint_text, repository_fingerprints
 from ai_harness.context.sources import ObsidianSource, PolicySource
 from ai_harness.context.deduplication import deduplicate_documents
+from ai_harness.project import trust_key
 from scripts.context_compiler import create_context_manifest
 
 

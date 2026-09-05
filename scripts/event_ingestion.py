@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ai_harness.project import trust_key
 from runtime_contracts import load_json, validate_contract
 from task_queue import DEFAULT_DB, TaskQueue, TaskRecord
 
@@ -28,8 +29,18 @@ def text(value: Any, default: str = "") -> str:
     return str(value).strip() if isinstance(value, (str, int)) else default
 
 
-def event_identity(source: str, external_id: str, task_id: str) -> str:
-    return hashlib.sha256(f"{source}:{external_id}:{task_id}".encode("utf-8")).hexdigest()
+def event_identity(
+    source: str,
+    external_id: str,
+    task_id: str,
+    project_key: str = "",
+) -> str:
+    identity = (
+        f"{source}:{project_key}:{external_id}:{task_id}"
+        if project_key
+        else f"{source}:{external_id}:{task_id}"
+    )
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
 def normalize_event(
@@ -38,12 +49,36 @@ def normalize_event(
     payload: dict[str, Any],
     repository: Path,
     project: str = "agent_workspace",
+    project_id: str = "",
+    project_key: str = "",
 ) -> dict[str, Any]:
     if source not in SOURCES:
         raise EventError(f"unsupported event source: {source}")
     repository = repository.resolve()
     if not repository.is_dir():
         raise EventError("event repository must be an existing local directory")
+    project_id_value = text(project_id or payload.get("project_id"))
+    project_key_value = text(project_key or payload.get("project_key"))
+    if bool(project_id_value) != bool(project_key_value):
+        raise EventError("event project identity must include project_id and project_key together")
+    if project_id_value and (
+        len(project_id_value) > 64
+        or project_id_value.strip("-") != project_id_value
+        or any(
+            character not in "abcdefghijklmnopqrstuvwxyz0123456789-"
+            for character in project_id_value
+        )
+    ):
+        raise EventError("event project_id must be a lowercase slug")
+    if project_key_value and (
+        len(project_key_value) != 64
+        or any(character not in "0123456789abcdef" for character in project_key_value)
+    ):
+        raise EventError("event project_key must be a lowercase SHA-256 digest")
+    if project_key_value and project_key_value != trust_key(repository):
+        raise EventError(
+            "event project_key does not match the canonical repository"
+        )
     issue = payload.get("issue", {}) if isinstance(payload.get("issue"), dict) else {}
     workflow_run = payload.get("workflow_run", {}) if isinstance(payload.get("workflow_run"), dict) else {}
     external_id = text(
@@ -85,6 +120,7 @@ def normalize_event(
         )
         batch_index = int(payload.get("batch_index", 0) or 0)
         graph_depth = int(payload.get("graph_depth", 0) or 0)
+        attachment_count = int(payload.get("attachment_count", 0) or 0)
     except (TypeError, ValueError) as exc:
         raise EventError("event numeric scheduling fields must be integers") from exc
     if priority < -100 or priority > 100 or max_retries < 0 or max_retries > 10:
@@ -93,6 +129,24 @@ def normalize_event(
         raise EventError("event repository_max_parallel_tasks must be between 0 and 32")
     if batch_index < 0 or graph_depth < 0 or graph_depth > 2:
         raise EventError("event batch_index or graph_depth is outside allowed bounds")
+    if attachment_count < 0 or attachment_count > 5:
+        raise EventError("event attachment_count must be between 0 and 5")
+    attachment_runtime_consent = payload.get("attachment_runtime_consent", False)
+    if not isinstance(attachment_runtime_consent, bool):
+        raise EventError("event attachment_runtime_consent must be a boolean")
+    input_manifest = text(payload.get("input_manifest"))
+    input_manifest_sha256 = text(payload.get("input_manifest_sha256"))
+    if bool(input_manifest) != bool(input_manifest_sha256):
+        raise EventError("event attachment manifest metadata is incomplete")
+    if input_manifest_sha256 and (
+        len(input_manifest_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in input_manifest_sha256)
+    ):
+        raise EventError("event input_manifest_sha256 must be a lowercase SHA-256 digest")
+    if bool(attachment_count) != bool(input_manifest):
+        raise EventError("event attachment_count must match attachment manifest presence")
+    if attachment_count and not attachment_runtime_consent:
+        raise EventError("event attachments require explicit runtime context consent")
     relation = text(payload.get("relation"), "root")
     if relation not in {"root", "repair", "investigation", "test", "implementation"}:
         raise EventError("event relation is invalid")
@@ -112,15 +166,36 @@ def normalize_event(
         raise EventError("event allowed_child_repositories must be a list of strings")
     if not isinstance(child_budget, dict):
         raise EventError("event child_budget must be an object")
-    event_id = event_identity(source, external_id, task_id)
-    return {
+    event_id = event_identity(source, external_id, task_id, project_key_value)
+    default_task_key = (
+        f"{source}:{project_key_value}:{external_id}:{task_id}"
+        if project_key_value
+        else f"{source}:{external_id}:{task_id}"
+    )
+    requested_task_key = text(payload.get("task_key"))
+    if requested_task_key and project_key_value:
+        project_prefix = f"{source}:{project_key_value}:"
+        explicit_prefix = f"{source}:{project_key_value}:explicit:"
+        resolved_task_key = (
+            requested_task_key
+            if requested_task_key.startswith(project_prefix)
+            else f"{explicit_prefix}{requested_task_key}"
+        )
+    else:
+        resolved_task_key = requested_task_key or default_task_key
+    envelope = {
         "event_id": event_id,
         "source": source,
         "event_type": text(payload.get("event_type") or payload.get("action"), "task"),
-        "task_key": text(payload.get("task_key"), f"{source}:{external_id}:{task_id}"),
+        "task_key": resolved_task_key,
         "task_id": task_id,
         "goal": goal,
         "project": project,
+        **(
+            {"project_id": project_id_value, "project_key": project_key_value}
+            if project_id_value
+            else {}
+        ),
         "repository": str(repository),
         "branch": branch,
         "base_branch": base_branch,
@@ -158,6 +233,25 @@ def normalize_event(
             else "",
         },
     }
+    if project_key_value:
+        envelope["idempotency_aliases"] = list(
+            dict.fromkeys(
+                [
+                    *([requested_task_key] if requested_task_key else []),
+                    f"{source}:{external_id}:{task_id}",
+                ]
+            )
+        )
+    if input_manifest:
+        envelope.update(
+            {
+                "input_manifest": input_manifest,
+                "input_manifest_sha256": input_manifest_sha256,
+                "attachment_count": attachment_count,
+                "attachment_runtime_consent": attachment_runtime_consent,
+            }
+        )
+    return envelope
 
 
 def persist_event(envelope: dict[str, Any], directory: Path = EVENTS_DIR) -> Path:
@@ -183,12 +277,35 @@ def enqueue_envelope(queue: TaskQueue, envelope: dict[str, Any]) -> TaskRecord:
             "allowed_child_repositories", "graph_depth", "child_budget", "spawn_fingerprint"
         )
     }
+    for key in ("project_id", "project_key"):
+        if key in envelope:
+            payload[key] = envelope[key]
+    if "input_manifest" in envelope:
+        payload.update(
+            {
+                key: envelope[key]
+                for key in (
+                    "input_manifest",
+                    "input_manifest_sha256",
+                    "attachment_count",
+                    "attachment_runtime_consent",
+                )
+            }
+        )
+    raw_aliases = envelope.get("idempotency_aliases", [])
+    aliases = (
+        [str(value) for value in raw_aliases if isinstance(value, str) and value]
+        if isinstance(raw_aliases, list)
+        else []
+    )
     return queue.enqueue(
         task_key=str(envelope["task_key"]),
         payload=payload,
         priority=int(envelope["priority"]),
         max_retries=int(envelope["max_retries"]),
         run_id=str(envelope["run_id"]),
+        idempotency_aliases=aliases,
+        idempotency_repository=str(envelope["repository"]),
     )
 
 
@@ -198,6 +315,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--payload", required=True, help="JSON object or @path")
     parser.add_argument("--repository", type=Path, required=True)
     parser.add_argument("--project", default="agent_workspace")
+    parser.add_argument("--project-id", default="")
+    parser.add_argument("--project-key", default="")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     return parser.parse_args()
 
@@ -214,6 +333,8 @@ def main() -> int:
             payload=payload,
             repository=args.repository,
             project=args.project,
+            project_id=args.project_id,
+            project_key=args.project_key,
         )
         record = enqueue_envelope(TaskQueue(args.db), envelope)
     except EventError as exc:

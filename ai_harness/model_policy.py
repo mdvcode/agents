@@ -146,6 +146,8 @@ def select_execution_profile(
     budget_pressure: bool = False,
     repair_count: int | None = None,
     max_escalations: int = 2,
+    human_escalation_approved: bool = False,
+    bounded_escalation_exhausted: bool = False,
     profiles: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Select an auditable profile without changing provider or discovering models."""
@@ -200,7 +202,20 @@ def select_execution_profile(
     deterministic_failure = normalized_failure in DETERMINISTIC_FAILURES
     legacy_failure = prior_failure and not normalized_failure
     repeated_failure = effective_repairs >= 2
-    if capability_requires_complex or context_requires_complex or eval_requires_upgrade:
+    if (
+        bounded_escalation_exhausted
+        and role in {"implementation-agent", "ci-repair-agent"}
+    ):
+        profile_name = "complex"
+        escalation_level = min(max_escalations, 2)
+        if human_escalation_approved:
+            selected_effort = REASONING_LADDERS[profile_name][-1]
+            reason = "an explicit one-role approval authorizes the final bounded model attempt"
+        else:
+            selected_effort = configured[profile_name]["reasoning_effort"]
+            terminal_action = "human_or_dead_letter"
+            reason = "the bounded model ladder is exhausted and requires human review or dead-letter"
+    elif capability_requires_complex or context_requires_complex or eval_requires_upgrade:
         profile_name = "complex"
         reason = "required capability, context size, or eval history requires the complex profile"
     elif deterministic_failure:
@@ -228,10 +243,14 @@ def select_execution_profile(
             reason = f"{normalized_failure or 'prior model failure'} upgraded the bounded model ladder"
         else:
             profile_name = "complex"
-            selected_effort = configured[profile_name]["reasoning_effort"]
             escalation_level = min(max_escalations, 2)
-            terminal_action = "human_or_dead_letter"
-            reason = "the bounded model ladder is exhausted and requires human review or dead-letter"
+            if human_escalation_approved:
+                selected_effort = REASONING_LADDERS[profile_name][-1]
+                reason = "an explicit one-role approval authorizes the final bounded model attempt"
+            else:
+                selected_effort = configured[profile_name]["reasoning_effort"]
+                terminal_action = "human_or_dead_letter"
+                reason = "the bounded model ladder is exhausted and requires human review or dead-letter"
     elif budget_pressure and profile_name == "balanced" and not complex_scope:
         profile_name = "economy"
         reason = "task budget pressure selected the cheapest sufficient profile"

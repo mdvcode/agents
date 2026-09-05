@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 
 from ai_harness.context import ContextEngine
 from ai_harness.context.sources import ROLE_SKILLS
+from ai_harness.attachments.runtime import compile_attachment_context
 
 
 MEMORY_CONTROL_ROOT = ROOT
@@ -27,6 +28,36 @@ ROLE_CAPABILITIES = ROOT / ".agent-role-capabilities.yaml"
 ROLE_CONTRACTS = ROOT / ".agent-role-contracts.yaml"
 DEFAULT_MAX_TOTAL_CONTEXT_BYTES = 120000
 DEFAULT_MAX_FILE_CONTEXT_BYTES = 24000
+
+
+def run_attachment_context(run_id: str, context_dir: Path) -> dict[str, Any] | None:
+    """Compile optional worker-pinned run inputs without accepting any alternate path."""
+
+    manifest_path = os.environ.get("AGENT_INPUT_MANIFEST", "").strip()
+    manifest_sha256 = os.environ.get("AGENT_INPUT_MANIFEST_SHA256", "").strip()
+    raw_count = os.environ.get("AGENT_ATTACHMENT_COUNT", "").strip()
+    raw_consent = os.environ.get("AGENT_ATTACHMENT_RUNTIME_CONSENT", "").strip()
+    if not any((manifest_path, manifest_sha256, raw_count, raw_consent)):
+        return None
+    if not all((manifest_path, manifest_sha256, raw_count, raw_consent)):
+        raise ValueError("attachment runtime context metadata is incomplete")
+    if raw_consent != "1":
+        raise ValueError("attachment runtime context consent is missing")
+    try:
+        expected_count = int(raw_count)
+    except ValueError as exc:
+        raise ValueError("attachment runtime context count is invalid") from exc
+    absolute_context_dir = Path(os.path.abspath(os.fspath(context_dir)))
+    if absolute_context_dir.name != "context-manifests":
+        raise ValueError("attachment context directory is not authoritative")
+    return compile_attachment_context(
+        run_root=absolute_context_dir.parent,
+        manifest_path=manifest_path,
+        manifest_sha256=manifest_sha256,
+        runtime_consent=True,
+        expected_count=expected_count,
+        expected_run_id=run_id,
+    )
 
 
 def load_yaml_mapping(path: Path) -> dict[str, Any]:
@@ -191,6 +222,7 @@ def create_context_manifest(
     output_contract: str = "",
     expected_artifacts: Sequence[str] = (),
     runtime: str = "codex-cli",
+    project_key: str = "",
 ) -> Path:
     capability = role_capability(role)
     contract = role_contract(role)
@@ -219,6 +251,7 @@ def create_context_manifest(
         control_root=MEMORY_CONTROL_ROOT,
         project=project,
         project_profile=project_profile,
+        project_key=project_key,
         artifacts_dir=artifacts_dir,
         context_log_path=context_log_path,
         repository=repository,
@@ -266,6 +299,7 @@ def create_context_manifest(
             or (item.get("source") == "run_artifacts" and item.get("path") in changed_artifacts)
         ],
     }
+    attachment_context = run_attachment_context(run_id, context_dir)
     manifest = {
         "run_id": run_id,
         "role": role,
@@ -273,6 +307,7 @@ def create_context_manifest(
         "repository": str(repository.resolve()),
         "artifacts_dir": str(artifacts_dir.resolve()),
         "project": project,
+        **({"project_key": project_key} if project_key else {}),
         "project_profile": project_profile,
         "token_budget": token_budget,
         "allowed_tools": tools,
@@ -339,6 +374,8 @@ def create_context_manifest(
         ],
         "raw_outputs_dir": str((context_dir.parent / "raw-events").resolve()),
     }
+    if attachment_context is not None:
+        manifest["attachment_context"] = attachment_context
     path = context_dir / f"{role}.json"
     write_json(path, manifest)
     return path
@@ -355,6 +392,7 @@ def main() -> int:
     parser.add_argument("--artifacts-dir", type=Path, required=True)
     parser.add_argument("--context-dir", type=Path, required=True)
     parser.add_argument("--project", default="")
+    parser.add_argument("--project-key", default="")
     parser.add_argument("--project-profile", default="")
     parser.add_argument("--token-budget", type=int, default=12000)
     args = parser.parse_args()
@@ -366,6 +404,7 @@ def main() -> int:
         artifacts_dir=args.artifacts_dir,
         context_dir=args.context_dir,
         project=args.project,
+        project_key=args.project_key,
         project_profile=args.project_profile,
         token_budget=args.token_budget,
         allowed_tools=["filesystem_read", "repository_search"],

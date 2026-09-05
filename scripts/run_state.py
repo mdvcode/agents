@@ -11,9 +11,81 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from ai_harness.execution_accounting import (
+    accounted_checkpoints,
+    accounted_tokens_used,
+    role_entry_invoked_model,
+    safe_int,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNS_DIR = ROOT / ".agent-runs"
+
+
+def continuation_project_identity(workflow: dict[str, Any]) -> dict[str, str]:
+    """Return validated optional project identity for a queued continuation.
+
+    Runs created before first-class Projects do not contain either field and
+    remain resumable.  New runs persist both fields as one identity pair so a
+    continuation cannot silently detach from its registered project.
+    """
+
+    has_project_id = "project_id" in workflow
+    has_project_key = "project_key" in workflow
+    if not has_project_id and not has_project_key:
+        return {}
+    if has_project_id != has_project_key:
+        raise ValueError("workflow project identity is incomplete")
+    project_id = workflow.get("project_id")
+    project_key = workflow.get("project_key")
+    if not isinstance(project_id, str) or not isinstance(project_key, str):
+        raise ValueError("workflow project identity must contain strings")
+    project_id = project_id.strip()
+    project_key = project_key.strip()
+    if not project_id or not project_key:
+        raise ValueError("workflow project identity is incomplete")
+    if (
+        len(project_id) > 64
+        or project_id.strip("-") != project_id
+        or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in project_id)
+    ):
+        raise ValueError("workflow project id is invalid")
+    if (
+        len(project_key) != 64
+        or any(character not in "0123456789abcdef" for character in project_key)
+    ):
+        raise ValueError("workflow project key is invalid")
+    return {"project_id": project_id, "project_key": project_key}
+
+
+def continuation_attachment_payload(workflow: dict[str, Any]) -> dict[str, Any]:
+    """Return validated attachment metadata for a continuation queue record."""
+
+    manifest = workflow.get("input_manifest", "")
+    digest = workflow.get("input_manifest_sha256", "")
+    count = workflow.get("attachment_count", 0)
+    consent = workflow.get("attachment_runtime_consent", False)
+    if not any((manifest, digest, count, consent)):
+        return {}
+    if not isinstance(manifest, str) or not manifest.strip():
+        raise ValueError("workflow attachment manifest path is missing")
+    if (
+        not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+    ):
+        raise ValueError("workflow attachment manifest digest is invalid")
+    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 5:
+        raise ValueError("workflow attachment count is invalid")
+    if consent is not True:
+        raise ValueError("workflow attachment runtime consent is missing")
+    return {
+        "input_manifest": manifest.strip(),
+        "input_manifest_sha256": digest,
+        "attachment_count": count,
+        "attachment_runtime_consent": True,
+    }
 
 
 @dataclass(frozen=True)
@@ -175,9 +247,8 @@ def record_failure(
 
 def write_metrics(layout: RunLayout, state: dict[str, Any]) -> None:
     roles: list[dict[str, Any]] = []
-    for checkpoint in state.get("roles", []):
-        if not isinstance(checkpoint, dict):
-            continue
+    checkpoints = accounted_checkpoints(state.get("roles", []))
+    for checkpoint in checkpoints:
         result = checkpoint.get("result", {})
         if not isinstance(result, dict):
             result = {}
@@ -188,12 +259,12 @@ def write_metrics(layout: RunLayout, state: dict[str, Any]) -> None:
             {
                 "role": str(checkpoint.get("role", "")),
                 "status": str(result.get("status", "")),
-                "duration_ms": int(result.get("duration_ms", 0) or 0),
-                "tokens_used": int(result.get("tokens_used", 0) or 0),
-                "input_tokens": int(result.get("input_tokens", 0) or 0),
-                "cached_input_tokens": int(result.get("cached_input_tokens", 0) or 0),
-                "output_tokens": int(result.get("output_tokens", 0) or 0),
-                "reasoning_output_tokens": int(result.get("reasoning_output_tokens", 0) or 0),
+                "duration_ms": safe_int(result.get("duration_ms", 0)),
+                "tokens_used": safe_int(result.get("tokens_used", 0)),
+                "input_tokens": safe_int(result.get("input_tokens", 0)),
+                "cached_input_tokens": safe_int(result.get("cached_input_tokens", 0)),
+                "output_tokens": safe_int(result.get("output_tokens", 0)),
+                "reasoning_output_tokens": safe_int(result.get("reasoning_output_tokens", 0)),
                 "execution_profile": str(
                     result.get("execution_profile", profile.get("execution_profile", ""))
                 ),
@@ -210,9 +281,8 @@ def write_metrics(layout: RunLayout, state: dict[str, Any]) -> None:
     cached_input_tokens = sum(role["cached_input_tokens"] for role in roles)
     output_tokens = sum(role["output_tokens"] for role in roles)
     model_calls = sum(
-        checkpoint.get("llm_invoked") is True
-        for checkpoint in state.get("roles", [])
-        if isinstance(checkpoint, dict)
+        role_entry_invoked_model(checkpoint)
+        for checkpoint in checkpoints
     )
     plan: dict[str, Any] = {}
     plan_path = state.get("execution_plan_path")
@@ -294,7 +364,7 @@ def write_metrics(layout: RunLayout, state: dict[str, Any]) -> None:
             "run_id": layout.run_id,
             "execution_status": str(state.get("execution_status", "")),
             "role_count": len(roles),
-            "tokens_used": sum(role["tokens_used"] for role in roles),
+            "tokens_used": accounted_tokens_used(state.get("roles", [])),
             "duration_ms": sum(role["duration_ms"] for role in roles),
             "model_calls_per_task": model_calls,
             "model_calls_per_successful_task": model_calls if completed else 0,
@@ -332,6 +402,7 @@ def task_fingerprint(
     base_branch: str,
     workspace_mode: str = "worktree",
     workflow_mode: str = "auto",
+    input_manifest_sha256: str = "",
 ) -> str:
     payload = {
         "task_id": task_id,
@@ -342,6 +413,8 @@ def task_fingerprint(
         "workspace_mode": workspace_mode,
         "workflow_mode": workflow_mode,
     }
+    if input_manifest_sha256:
+        payload["input_manifest_sha256"] = input_manifest_sha256
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     ).hexdigest()

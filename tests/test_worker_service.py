@@ -30,14 +30,33 @@ def test_build_fingerprint_is_layout_independent(tmp_path: Path) -> None:
     installed.mkdir()
     (installed / "scripts").mkdir()
     installed_package.mkdir(parents=True)
+    source_assets = source / "ai_harness" / "observability" / "assets"
+    installed_assets = installed_package / "observability" / "assets"
+    source_assets.mkdir(parents=True)
+    installed_assets.mkdir(parents=True)
     (source / "ai_harness" / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
     (installed_package / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (source_assets / "tweebit-wordmark.svg").write_text("<svg/>\n", encoding="utf-8")
+    (installed_assets / "tweebit-wordmark.svg").write_text("<svg/>\n", encoding="utf-8")
     (source / "scripts" / "worker.py").write_text("RUN = True\n", encoding="utf-8")
     (installed / "scripts" / "worker.py").write_text("RUN = True\n", encoding="utf-8")
 
     assert harness_build_fingerprint(source) == harness_build_fingerprint(
         installed, package_root=installed_package
     )
+
+
+def test_build_fingerprint_covers_audited_observability_assets(tmp_path: Path) -> None:
+    root = tmp_path / "harness"
+    assets = root / "ai_harness" / "observability" / "assets"
+    assets.mkdir(parents=True)
+    wordmark = assets / "tweebit-wordmark.svg"
+    wordmark.write_text("<svg><path d='M0 0'/></svg>\n", encoding="utf-8")
+    initial = harness_build_fingerprint(root)
+
+    wordmark.write_text("<svg><path d='M1 1'/></svg>\n", encoding="utf-8")
+
+    assert harness_build_fingerprint(root) != initial
 
 
 def test_build_fingerprint_covers_execution_policy_and_make_targets(tmp_path: Path) -> None:

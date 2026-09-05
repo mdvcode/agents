@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from ai_harness.project import trust_key
+
 from .builder import ContextBudget, ContextBuilder
 from .cache import (
     ContextCache,
@@ -63,6 +65,7 @@ class ContextEngine:
         sources: Sequence[KnowledgeSource],
         project: str,
         project_profile: str,
+        project_key: str = "",
         retriever: Retriever | None = None,
         builder: ContextBuilder | None = None,
         logger: ContextLogger | None = None,
@@ -75,6 +78,7 @@ class ContextEngine:
         self.sources = tuple(sources)
         self.project = project
         self.project_profile = project_profile
+        self.project_key = project_key
         self.retriever = retriever or RuleBasedRetriever()
         self.builder = builder or ContextBuilder()
         self.logger = logger
@@ -91,6 +95,7 @@ class ContextEngine:
         control_root: Path,
         project: str,
         project_profile: str,
+        project_key: str = "",
         artifacts_dir: Path | None = None,
         context_log_path: Path | None = None,
         obsidian_vaults: Sequence[Path] = (),
@@ -129,6 +134,7 @@ class ContextEngine:
             sources=sources,
             project=project,
             project_profile=project_profile,
+            project_key=project_key,
             retriever=RuleBasedRetriever(),
             builder=ContextBuilder(ContextBudget(total_tokens=token_budget)),
             logger=logger,
@@ -142,13 +148,19 @@ class ContextEngine:
     def build(self, task: object, repository: Path, role: str, runtime: object) -> Context:
         """Build the only context package that a role should receive."""
 
+        resolved_repository = repository.resolve()
+        if self.project_key and self.project_key != trust_key(resolved_repository):
+            raise ValueError(
+                "context project_key does not match the canonical repository"
+            )
         request = KnowledgeRequest(
             task=_task_text(task),
-            repository=repository.resolve(),
+            repository=resolved_repository,
             role=role,
             runtime=_runtime_text(runtime),
             project=self.project,
             project_profile=self.project_profile,
+            project_key=self.project_key,
         )
         cache_key: ContextCacheKey | None = None
         if self.cache is not None:
@@ -163,7 +175,11 @@ class ContextEngine:
                             "task": request.task,
                             "role": request.role,
                             "project": request.project,
+                            "project_key": request.project_key,
                             "profile": request.project_profile,
+                            "repository_identity": fingerprint_text(
+                                str(request.repository)
+                            ),
                             "runtime_delta": self.cache_query_salt,
                         },
                         sort_keys=True,
@@ -221,6 +237,7 @@ class ContextEngine:
             "task": request.task,
             "repository": str(request.repository),
             "project": request.project,
+            "project_key": request.project_key,
             "project_profile": request.project_profile,
             "role": request.role,
             "runtime": request.runtime,

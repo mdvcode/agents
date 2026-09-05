@@ -20,6 +20,7 @@ class CodexCliRuntime(SubprocessRuntime):
                 production=True,
                 command=command,
                 api_required=False,
+                capabilities=("text",),
             ),
             timeout_seconds=timeout_seconds,
             raw_output_dir=raw_output_dir,

@@ -45,6 +45,7 @@ from ai_harness.model_policy import (  # noqa: E402
     load_execution_profiles,
     validate_request_profile,
 )
+from ai_harness.attachments.runtime import attachment_image_paths  # noqa: E402
 
 
 ROOT = SCRIPT_DIR.parents[1]
@@ -282,7 +283,7 @@ def validate_candidate(request: dict[str, Any], candidate: dict[str, Any]) -> li
 
 def run_turn_streaming(
     thread: Any,
-    prompt: str,
+    prompt: Any,
     *,
     settings: dict[str, str],
     schema: dict[str, Any],
@@ -331,6 +332,20 @@ def run_turn_streaming(
     finally:
         stream.close()
     return _collect_turn_result(iter(events), turn_id=handle.id)
+
+
+def sdk_run_input(prompt: str, manifest: dict[str, Any]) -> Any:
+    """Build one SDK turn input from revalidated local attachment references."""
+
+    image_paths = attachment_image_paths(manifest)
+    if not image_paths:
+        return prompt
+    from openai_codex import LocalImageInput, TextInput
+
+    return [
+        TextInput(text=prompt),
+        *(LocalImageInput(path=path) for path in image_paths),
+    ]
 
 
 def run_sdk(
@@ -405,7 +420,7 @@ def run_sdk(
                     env=environment,
                     config_overrides=tuple(config_overrides),
                     client_name="ai_harness",
-                    client_title="AI Harness",
+                    client_title="Tweebit AI Harness by Daryna",
                 )
             )
         account = codex.account().account
@@ -441,7 +456,7 @@ def run_sdk(
                 ephemeral=False,
                 model=settings["model"],
                 sandbox=sdk_sandbox(filesystem_access),
-                service_name="ai-harness",
+                service_name="tweebit-ai-harness",
                 service_tier=settings["service_tier"],
             )
         thread_id = sdk_thread.id
@@ -451,7 +466,7 @@ def run_sdk(
             progress_sink(thread_snapshot)
         turn_result = run_turn_streaming(
             sdk_thread,
-            prompt,
+            sdk_run_input(prompt, manifest),
             settings=settings,
             schema=schema,
             sandbox=sdk_sandbox(filesystem_access),

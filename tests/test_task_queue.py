@@ -48,6 +48,30 @@ def test_enqueue_is_idempotent_and_claims_are_unique(tmp_path: Path) -> None:
     assert len(set(ids)) == 3
 
 
+def test_enqueue_rejects_exact_idempotency_key_from_another_repository(
+    tmp_path: Path,
+) -> None:
+    queue = TaskQueue(tmp_path / "queue.db")
+    first_repository = tmp_path / "first"
+    second_repository = tmp_path / "second"
+    first_repository.mkdir()
+    second_repository.mkdir()
+    queue.enqueue(
+        task_key="client:same",
+        payload={"task_id": "first", "repository": str(first_repository)},
+        idempotency_repository=str(first_repository),
+    )
+
+    with pytest.raises(ValueError, match="another repository"):
+        queue.enqueue(
+            task_key="client:same",
+            payload={"task_id": "second", "repository": str(second_repository)},
+            idempotency_repository=str(second_repository),
+        )
+
+    assert len(queue.list()) == 1
+
+
 def test_claim_serializes_current_branch_tasks_for_one_checkout(tmp_path: Path) -> None:
     queue = TaskQueue(tmp_path / "queue.db")
     repository = str((tmp_path / "shared").resolve())
