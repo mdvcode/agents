@@ -344,12 +344,22 @@ def supersede_paused_checkout_task(root: Path, queue: Any, conflict: Any, new_ta
     )
 
 
+def guard_model_input(value: str, label: str) -> None:
+    from ai_harness.context.content_guard import ContextGuardError, require_safe
+
+    try:
+        require_safe(value, label)
+    except ContextGuardError as exc:
+        raise CLIError(str(exc)) from exc
+
+
 def handle_task(args: argparse.Namespace) -> int:
     repository = repository_from_arg(args.repo, require_initialized=True)
     config = load_project_config(repository)
     if not project_is_trusted(config):
         raise CLIError("project configuration is not locally trusted; run `agent init` again")
     goal = " ".join(args.goal).strip()
+    guard_model_input(goal, "Task")
     if not goal:
         raise CLIError("task goal is required")
     if len(goal) > 20_000:
@@ -1490,6 +1500,7 @@ def handle_answer(args: argparse.Namespace) -> int:
     if not project_is_trusted(config):
         raise CLIError("project configuration is not locally trusted; run `agent init` again")
     response = " ".join(args.response).strip()
+    guard_model_input(response, "User answer")
     if not response:
         raise CLIError("an answer is required")
     if len(response) > 10_000:

@@ -31,6 +31,8 @@ if str(ROOT) not in sys.path:
 
 from ai_harness.observability.dashboard import DASHBOARD_HTML
 from ai_harness.task_batch import BatchManifestError, parse_batch_manifest
+from ai_harness.context.content_guard import ContextGuardError, require_safe  # noqa: E402
+from context_inspector import get_input, list_inputs, preview_sources  # noqa: E402
 
 RUNS_DIR = ROOT / ".agent-runs"
 MAX_BODY_BYTES = 1_048_576
@@ -87,6 +89,16 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             return
         if self.headers.get("Authorization", "") != f"Bearer {self.auth_token}":
             raise APIError(HTTPStatus.UNAUTHORIZED, "invalid control-plane token")
+
+    def authorize_context_read(self) -> None:
+        """Private context is served only to this loopback origin."""
+        host = self.headers.get("Host", "")
+        parsed = urlparse("http://" + host)
+        if parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+            raise APIError(HTTPStatus.FORBIDDEN, "context requires a loopback host")
+        origin = self.headers.get("Origin", "")
+        if origin and origin != "http://" + host:
+            raise APIError(HTTPStatus.FORBIDDEN, "cross-origin context access is not allowed")
 
     def body(self) -> tuple[bytes, dict[str, Any]]:
         try:
@@ -217,6 +229,13 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 self.send_html(HTTPStatus.OK, DASHBOARD_HTML)
                 return
             self.authorize()
+            parts = path.strip("/").split("/")
+            if len(parts) in {3, 4} and parts[0] == "runs" and parts[2] == "context":
+                self.authorize_context_read()
+                run_dir = run_path(self.runs_dir, parts[1])
+                value = list_inputs(run_dir) if len(parts) == 3 else get_input(run_dir, parts[3])
+                self.send_json(HTTPStatus.OK, value)
+                return
             metrics = collect_metrics(runs_dir=self.runs_dir, db_path=self.queue.path)
             if path == "/health":
                 self.send_json(HTTPStatus.OK, {"status": "ok", "service": metrics["service"]})
@@ -248,12 +267,26 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
         except APIError as exc:
             self.send_json(exc.status, {"status": "error", "error": str(exc)})
 
+        except (ContextGuardError, OSError, json.JSONDecodeError):
+            self.send_json(HTTPStatus.BAD_REQUEST, {"status": "error", "error": "Context evidence is unavailable or failed integrity validation."})
+
     def do_POST(self) -> None:
         try:
             path = urlparse(self.path).path
             if path != "/webhooks/github/actions":
                 self.authorize()
             raw, payload = self.body()
+            if path == "/ui/context/preview":
+                self.authorize_context_read()
+                if self.headers.get_content_type() != "application/json":
+                    raise APIError(HTTPStatus.BAD_REQUEST, "context preview requires JSON")
+                repository = self.request_repository(payload)
+                value = preview_sources(
+                    repository=repository, goal=str(payload.get("goal", "")),
+                    role=str(payload.get("role", "planner")), control_root=ROOT,
+                )
+                self.send_json(HTTPStatus.OK, value)
+                return
             if path in {"/ui/tasks/batch", "/tasks/batch"}:
                 result = self.submit_batch(payload)
                 status = HTTPStatus.ACCEPTED if result["accepted"] else HTTPStatus.BAD_REQUEST
@@ -262,6 +295,7 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             if path == "/ui/tasks":
                 repository = self.request_repository(payload)
                 goal = str(payload.get("goal", "")).strip()
+                require_safe(goal, "Task")
                 if not goal:
                     raise APIError(HTTPStatus.BAD_REQUEST, "describe the task before starting it")
                 workspace_mode = (

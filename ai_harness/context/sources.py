@@ -12,6 +12,8 @@ from typing import Iterable, Protocol, Sequence
 
 import yaml
 
+from .content_guard import source_privacy
+
 from .models import (
     DocumentType,
     KnowledgeDocument,
@@ -155,6 +157,7 @@ def _file_document(
         document_type=document_type,
         priority=priority,
         metadata=metadata or {},
+        privacy=source_privacy(content),
         trust=(
             TrustStatus.TRUSTED
             if knowledge_type

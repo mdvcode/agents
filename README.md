@@ -1,61 +1,52 @@
-# AI Harness
+# Tweebit AI Harness
 
-AI Harness runs software tasks in local Git repositories through one command-line interface: `agent`. Users describe the required result; the Harness prepares the Git workspace, selects a safe execution path, runs implementation and verification, repairs recoverable failures, and returns a reviewable branch or pull request.
+Tweebit AI Harness — локальная система для выполнения задач в Git-проектах. Вы описываете нужный результат, а система подготавливает рабочую ветку, запускает Codex, проверяет изменения и показывает, если требуется ваш ответ.
 
-It supports single tasks, parallel work in isolated Git worktrees, batches across several repositories, background recovery, and explicit human approval when a decision cannot be made safely. Merge and deployment always remain human actions.
+Сейчас доступны:
 
-## How a task runs
+- запуск одной или нескольких задач;
+- безопасные Git-ветки и отдельные worktree для параллельной работы;
+- фоновое выполнение, проверки, повторные попытки и восстановление;
+- вопросы и подтверждения для решений, которые нельзя принять автоматически;
+- локальный дашборд и полный набор команд `agent`.
 
-```mermaid
-flowchart LR
-    A["Task or batch"] --> B["Queue and Git workspace"]
-    B --> C["Execution mode"]
-    C -->|"adaptive"| D["Task Analyzer and Workflow Compiler"]
-    C -->|"auto, fast, full, or goal"| E["Existing workflow policy"]
-    D --> F["Minimum safe execution DAG"]
-    E --> F
-    F --> G["Implementation and required verification"]
-    G -->|"recoverable failure"| F
-    G -->|"passed"| H["Reviewable branch or PR"]
-    G -->|"decision required"| I["Human attention"]
-```
+Слияние веток и развёртывание всегда остаются действиями человека.
 
-One run keeps the same task identity, Git workspace, checkpoint, and Codex thread across implementation, repair, user answers, and verification. A blocking compiler or test failure stays in that run. Only genuinely independent work may become a bounded child run. Adaptive mode reduces unnecessary roles, context, and model calls without changing recovery, approvals, security gates, worktree isolation, or publication safety.
+## Установка
 
-## Requirements
+Нужны macOS или Linux, Git, Python 3.11+ и аккаунт ChatGPT с доступом к Codex.
 
-- macOS or Linux
-- Git
-- Python 3.11 or newer
-- A ChatGPT account with Codex access and local subscription authentication
-
-The installer creates an isolated application environment, installs the official Python Codex SDK and CLI compatibility runtime, and does not require `sudo`.
-
-## Install
-
-Download and unpack the repository, open a terminal in that directory, and run:
+Из распакованной папки:
 
 ```sh
 cd ~/Downloads/agents-main
 ./install.sh
 ```
 
-You can also install directly from the official repository:
+Или из официального репозитория:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mdvcode/agents/main/install.sh | sh
 ```
 
-If the shell does not immediately find `agent`, open a new terminal or refresh its command cache:
+Если терминал ещё не видит команду `agent`:
 
 ```sh
 hash -r
 agent --version
 ```
 
-## Quick start
+После обновления исходников обновите установленную версию:
 
-Initialize a target project and verify the complete runtime:
+```sh
+agent update --source /path/to/agents
+hash -r
+agent doctor --full
+```
+
+## Первый запуск
+
+Один раз подготовьте проект:
 
 ```sh
 cd /path/to/project
@@ -63,55 +54,82 @@ agent init
 agent doctor --full
 ```
 
-Start a task and follow its progress:
-
-```sh
-agent task "Fix startup and add a regression test"
-agent watch
-```
-
-The accepted production default remains `auto`. To use the new adaptive planner explicitly:
-
-```sh
-agent task --mode adaptive --task-id fix-startup \
-  "Fix startup and add a regression test"
-agent watch --task-id fix-startup
-```
-
-If an existing installation rejects `adaptive` as an unknown mode, update it from this checkout
-before launching the task:
-
-```sh
-agent update --source /path/to/agents
-hash -r
-agent task --help
-```
-
-Adaptive mode analyzes the task deterministically where possible, persists an auditable
-`.agent-runs/<run-id>/execution-plan.json`, and runs the minimum safe role DAG. It prefers
-deterministic format, lint, type, test, secret, and dependency checks before optional model-backed
-review. Low-confidence or sensitive work expands to a safer workflow; hard security, approval,
-recovery, and publication gates remain mandatory.
-
-Or use the local browser dashboard:
+Затем откройте дашборд:
 
 ```sh
 agent dashboard
 ```
 
-The dashboard does not require YAML: use **Launch several tasks** to add ordinary
-project-and-task rows. YAML remains available only under the advanced import section.
+На стартовом экране:
 
-The dashboard's **Adaptive / Efficiency** section reads the backend acceptance report and
-compares Full with Adaptive. `NOT ENOUGH DATA` means that the representative paired A/B acceptance
-run has not been completed; it is not a failure of the current task and does not prevent explicit
-`--mode adaptive` runs. Until that acceptance passes, `auto` does not select Adaptive by default.
+1. Укажите папку проекта.
+2. Опишите результат и критерии готовности.
+3. Нажмите **Запустить задачу**.
 
-`agent task` refuses a stale source/install combination, starts or repairs the background worker when needed, and waits for worker readiness before reporting a healthy launch. If the task was already queued when worker startup failed, the error preserves its run id and prints the exact restart/watch commands instead of discarding the work. The project checkout must be clean before a task can create or switch branches.
+Остальные настройки можно не менять. Режим выполнения, способ подготовки ветки и номер задачи находятся под **Дополнительно**.
 
-`agent init` creates `.agent/project.yaml` and, when absent, `AGENTS.md`. If Git already ignores either file, keep it local and do not force-add it. Otherwise, commit the new file or add a repository-approved ignore rule before starting work.
+Основные разделы дашборда:
 
-## Everyday usage
+- **Новая задача** — форма запуска и краткое состояние активных задач, проектов и runtime.
+- **Проекты** — локальные проекты из текущей истории задач. Это пока не полноценный менеджер Project Blueprint.
+- **Задачи** — очередь, вопросы, подтверждения, история и пакетный запуск.
+- **Статистика** — подробные показатели и экспериментальное сравнение Full/Adaptive.
+- **Настройки** — локальный токен подключения и краткая памятка.
+
+Дашборд работает только на локальном компьютере. `Ctrl+C` останавливает веб-страницу, но не фоновый worker.
+
+## Запуск из терминала
+
+Вместо дашборда можно использовать команды:
+
+```sh
+agent task "Исправь ошибку запуска и добавь регрессионный тест"
+agent watch
+```
+
+По умолчанию используется режим `auto`. Он выбирает обычный или полный безопасный сценарий по содержанию задачи. Экспериментальный Adaptive включается только явно:
+
+```sh
+agent task --mode adaptive "Исправь небольшую ошибку и добавь тест"
+```
+
+Если проект уже занят другой задачей, создайте отдельный worktree:
+
+```sh
+agent task --worktree "Добавь следующую задачу параллельно"
+```
+
+Перед запуском обычной задачи checkout должен быть чистым. `agent init` создаёт `.agent/project.yaml` и, если его ещё нет, `AGENTS.md`. Если Git уже игнорирует эти файлы, их не нужно принудительно добавлять.
+
+## Что пока не входит в текущую версию
+
+- полноценный визуальный Project AI Harness Builder;
+- загрузка до пяти вложений и PDF-конвейер через интерфейс;
+- отдельный визуальный Context Inspector;
+- Claude Code и OpenCode runtime adapters;
+- Auto Router и Adaptive как режим по умолчанию.
+
+Текущая версия уже является рабочим локальным исполнителем задач, но не выдаёт будущие функции Builder за готовые.
+
+## Как выполняется задача
+
+```mermaid
+flowchart LR
+    A["Задача или пакет"] --> B["Очередь и рабочая Git-папка"]
+    B --> C["Режим выполнения"]
+    C -->|"adaptive"| D["Анализ задачи и сборка плана"]
+    C -->|"auto, fast, full или goal"| E["Обычная политика выполнения"]
+    D --> F["Минимальный безопасный план"]
+    E --> F
+    F --> G["Реализация и обязательные проверки"]
+    G -->|"ошибку можно исправить"| F
+    G -->|"готово"| H["Ветка или PR для проверки"]
+    G -->|"нужно решение"| I["Ответ пользователя"]
+```
+
+Один запуск сохраняет одну и ту же задачу, рабочую папку, контрольные точки и Codex-сессию во время реализации, исправлений и проверок. Ошибка теста остаётся внутри исходного запуска, а отдельная дочерняя задача создаётся только для действительно независимой работы.
+
+## Подробный технический справочник (English)
 
 ### One task in one repository
 
@@ -130,7 +148,7 @@ agent task --worktree --task-id report-filters \
   "Add report filters without blocking the export task"
 ```
 
-The worktree has its own branch and checkout but reuses shared pip, uv, npm, Bun, and repository build caches. CLI users opt in explicitly with `--worktree`; the dashboard's **Parallel task** option selects it automatically.
+The worktree has its own branch and checkout but reuses shared pip, uv, npm, Bun, and repository build caches. CLI users opt in explicitly with `--worktree`; the dashboard's **Выполнять параллельно** option selects it automatically.
 
 ### Several tasks in one batch
 
@@ -344,7 +362,7 @@ agent worker stop [--json]
 agent dashboard [--repo PATH] [--port PORT] [--no-open]
 ```
 
-The dashboard binds to loopback, opens in the default browser, and provides single-task launch plus a visual multi-task builder that does not require YAML. YAML import remains available as an advanced option. The dashboard also provides execution-mode (`auto`, `adaptive`, `fast`, `full`, or explicit `goal`) and Git-workspace selection, lifecycle/repository/branch/worker filters, probable-conflict hints, status, structured answer choices with a custom-answer fallback, approval, retry, and abort controls. Its Adaptive section compares evaluator-produced Full/Adaptive metrics, exposes filterable paired-run evidence, and shows each run's persisted execution plan, executed/skipped/deterministic roles, model profiles, cache and token use, repair loops, and escalation counters. The browser never calculates or overrides the authoritative acceptance, security, or approval verdict. `NOT ENOUGH DATA` is the expected status until authoritative paired acceptance evidence exists. Answered questions are fingerprinted so the same question cannot silently reopen in a loop. `--no-open` starts the dashboard server without opening a browser. `Ctrl+C` stops the dashboard server but does not stop the worker service.
+The dashboard binds to loopback and opens in the default browser. The initial **Новая задача** view keeps the project and task description visible, while execution and Git workspace choices stay under **Дополнительно**. Active work, recent repositories, and runtime health are the only secondary blocks on that view. Batch launch, attention, recovery controls, and history live under **Задачи**; detailed Full/Adaptive evidence lives under **Статистика**. Existing answer, approval, retry, abort, filtering, and conflict controls remain unchanged. The browser never calculates or overrides acceptance, security, or approval policy. `NOT ENOUGH DATA` is expected until authoritative paired Adaptive evidence exists. `--no-open` starts the server without opening a browser, and `Ctrl+C` stops only the dashboard server, not the worker service.
 
 ### Status and monitoring
 

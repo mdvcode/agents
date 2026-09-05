@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Mapping
+
+from .content_guard import ContextPrivacyPolicy, require_safe
 
 from .models import (
     Context,
@@ -132,8 +134,9 @@ def _truncate_to_tokens(text: str, max_tokens: int) -> str:
 class ContextBuilder:
     """Build one prompt-ready package; it never discovers or retrieves sources."""
 
-    def __init__(self, budget: ContextBudget | None = None) -> None:
+    def __init__(self, budget: ContextBudget | None = None, *, privacy_policy: ContextPrivacyPolicy | None = None) -> None:
         self.budget = budget or ContextBudget()
+        self.privacy_policy = privacy_policy or ContextPrivacyPolicy()
 
     @staticmethod
     def _base(request: KnowledgeRequest) -> str:
@@ -167,6 +170,18 @@ class ContextBuilder:
         )
 
     def build(self, request: KnowledgeRequest, retrieval: RetrievalResult) -> Context:
+        require_safe(request.task, "Task")
+        allowed: list[RetrievedDocument] = []
+        withheld: list[RetrievedDocument] = []
+        for item in retrieval.selected + retrieval.excluded:
+            reason = self.privacy_policy.exclusion_reason(item.document, request.runtime)
+            if reason:
+                withheld.append(RetrievedDocument(replace(item.document, content="", metadata={}), item.score, reason))
+            elif item in retrieval.selected:
+                allowed.append(item)
+            else:
+                withheld.append(item)
+        retrieval = replace(retrieval, selected=tuple(allowed), excluded=tuple(withheld))
         base = self._base(request)
         remaining_total = self.budget.total_tokens - estimate_tokens(base)
         if remaining_total <= 0:

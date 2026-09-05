@@ -116,7 +116,7 @@ def test_policy_source_keeps_control_plane_and_target_agents_distinct(tmp_path: 
         "Update target code",
         repository,
         "implementation-agent",
-        "runtime",
+        "codex-sdk",
         "target",
         "agent_workspace",
     )
@@ -137,7 +137,7 @@ def test_context_builder_enforces_total_and_category_budgets() -> None:
         task="Explain OAuth architecture",
         repository=Path("/tmp/example"),
         role="planner",
-        runtime="test-runtime",
+        runtime="codex-sdk",
         project="example",
         project_profile="django",
     )
@@ -220,7 +220,7 @@ def test_context_engine_accepts_alternate_retriever_without_api_change(tmp_path:
         builder=ContextBuilder(ContextBudget(total_tokens=2000)),
     )
 
-    context = engine.build("Future retrieval", tmp_path, "planner", "runtime")
+    context = engine.build("Future retrieval", tmp_path, "planner", "codex-sdk")
 
     assert "alternate backend result" in context.package
     assert context.log["retriever"] == "future_semantic_backend"
@@ -245,12 +245,12 @@ def test_context_cache_hits_and_invalidates_only_when_selected_sources_change(tm
         token_budget=2000,
     )
 
-    first = engine.build("Update project overview", repository, "planner", "runtime")
-    second = engine.build("Update project overview", repository, "planner", "runtime")
+    first = engine.build("Update project overview", repository, "planner", "codex-sdk")
+    second = engine.build("Update project overview", repository, "planner", "codex-sdk")
     write(repository / "module.py", "VALUE = 2\n")
-    compatible = engine.build("Update project overview", repository, "planner", "runtime")
+    compatible = engine.build("Update project overview", repository, "planner", "codex-sdk")
     write(repository / "README.md", "# Project\nChanged authoritative overview.\n")
-    rebuilt = engine.build("Update project overview", repository, "planner", "runtime")
+    rebuilt = engine.build("Update project overview", repository, "planner", "codex-sdk")
 
     assert first.log["cache"]["status"] == "miss"  # type: ignore[index]
     assert second.log["cache"]["status"] == "hit"  # type: ignore[index]
@@ -272,12 +272,12 @@ def test_context_cache_rebuilds_when_new_relevant_source_is_discovered(tmp_path:
         token_budget=3000,
     )
 
-    first = engine.build("Update OAuth architecture", repository, "planner", "runtime")
+    first = engine.build("Update OAuth architecture", repository, "planner", "codex-sdk")
     write(
         repository / "docs/adr/0001-oauth.md",
         "# OAuth architecture\nUse the newly approved OIDC flow.\n",
     )
-    rebuilt = engine.build("Update OAuth architecture", repository, "planner", "runtime")
+    rebuilt = engine.build("Update OAuth architecture", repository, "planner", "codex-sdk")
 
     assert first.log["cache"]["status"] == "miss"  # type: ignore[index]
     assert rebuilt.log["cache"]["status"] == "miss"  # type: ignore[index]
@@ -319,9 +319,9 @@ def test_context_cache_rebuilds_when_external_source_changes(tmp_path: Path) -> 
         policy_version="policy",
     )
 
-    first = engine.build("Use project architecture", repository, "planner", "runtime")
+    first = engine.build("Use project architecture", repository, "planner", "codex-sdk")
     write(external, "Updated external project architecture.\n")
-    rebuilt = engine.build("Use project architecture", repository, "planner", "runtime")
+    rebuilt = engine.build("Use project architecture", repository, "planner", "codex-sdk")
 
     assert first.log["cache"]["status"] == "miss"  # type: ignore[index]
     assert rebuilt.log["cache"]["status"] == "miss"  # type: ignore[index]
@@ -395,7 +395,7 @@ def test_context_engine_deduplicates_near_identical_sources(tmp_path: Path) -> N
         builder=ContextBuilder(ContextBudget(total_tokens=2000)),
     )
 
-    context = engine.build("deterministic verification", tmp_path, "reviewer", "runtime")
+    context = engine.build("deterministic verification", tmp_path, "reviewer", "codex-sdk")
 
     assert context.package.count("Policy requires bounded") == 1
     assert context.log["deduplication"]["removed_count"] == 1  # type: ignore[index]

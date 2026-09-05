@@ -1,5 +1,11 @@
 version: 1
 
+# Only the established Codex destinations may receive project-private context.
+# Project overrides live here in the private control plane, never in references.
+context_privacy:
+  project_private_destinations: [codex-sdk, codex-cli]
+  projects: {}
+
 default:
   auto_merge: false
   deploy_staging: false

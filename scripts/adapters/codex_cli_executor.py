@@ -41,6 +41,10 @@ from ai_harness.model_policy import (  # noqa: E402
     validate_request_profile,
 )
 from ai_harness.recovery.policy import load_recovery_policy  # noqa: E402
+from ai_harness.context.cache import fingerprint_text  # noqa: E402
+from ai_harness.context.content_guard import ContextGuardError, findings, redact_text, require_safe, require_safe_value, source_privacy  # noqa: E402
+from ai_harness.context.models import PrivacyClass  # noqa: E402
+from ai_harness.context.payload import record_payload, write_private_json, confined_path  # noqa: E402
 
 
 MAX_OUTPUT_REPAIR_ATTEMPTS = 2
@@ -73,6 +77,21 @@ def run_codex_process(
     role = str(request["role"]).replace("/", "-")
     raw_dir = raw_outputs_dir(request, manifest)
     effective_timeout = min(timeout_seconds, limits.role_timeout_seconds)
+    schema = load_json(Path(command[command.index("--output-schema") + 1]))
+    reasoning = next((item.split("=", 1)[1] for item in command if item.startswith("model_reasoning_effort=")), "medium")
+    snapshot = record_payload(
+        request=request, manifest=manifest, prompt=input_text, output_schema=schema,
+        runtime="codex-cli", settings={"model": command[command.index("--model") + 1], "reasoning_effort": reasoning, "service_tier": "fast"},
+        sandbox=command[command.index("--sandbox") + 1], phase=suffix or "role", control_root=ROOT,
+    )
+    input_text = snapshot["payload"]["prompt"]
+    schema_path = confined_path(
+        Path(str(request["artifacts_dir"])).absolute().parent,
+        "context-manifests", "effective", snapshot["effective_context_digest"].removeprefix("sha256:") + ".schema.json",
+    )
+    write_private_json(schema_path, snapshot["payload"]["output_schema"], immutable=True)
+    command = list(command)
+    command[command.index("--output-schema") + 1] = str(schema_path)
     return run_managed_process(
         command,
         cwd=repository,
@@ -394,14 +413,18 @@ def context_reference_contents(manifest: dict[str, Any]) -> str:
     package_path = manifest.get("context_package_path")
     if isinstance(package_path, str) and package_path:
         path = Path(package_path)
+        confined_path(path.parent, path.name)
         try:
             content = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
-            return f"### context_package: {path}\n[unavailable: {exc}]"
+            raise ContextGuardError("Compiled context is unavailable; rebuild it") from exc
+        expected = manifest.get("context_package_digest", manifest.get("effective_context_digest", ""))
+        if expected and fingerprint_text(content) != expected:
+            raise ContextGuardError("Compiled context changed after inspection; rebuild it")
+        require_safe(content, "Compiled context")
         encoded = content.encode("utf-8")
         if len(encoded) > max_total_bytes:
-            content = encoded[:max_total_bytes].decode("utf-8", errors="ignore").rstrip()
-            content += "\n[truncated: context byte safety limit]"
+            raise ContextGuardError("Compiled context exceeds the runtime byte limit; rebuild with a smaller context budget")
         return f"### context_package: {path}\n{content}"
     references: list[tuple[str, str]] = []
     for item in manifest.get("context_files", []):
@@ -423,12 +446,16 @@ def context_reference_contents(manifest: dict[str, Any]) -> str:
         if key in seen or key in excluded or not path.is_file():
             continue
         seen.add(key)
+        if any(item.is_symlink() for item in (path, *path.parents)):
+            continue
         try:
             content = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
         except OSError as exc:
             chunks.append(f"### {kind}: {path}\n[unavailable: {exc}]")
+            continue
+        if source_privacy(content) in {PrivacyClass.LOCAL_ONLY, PrivacyClass.SECRET_NEVER_MODEL} or findings(content):
             continue
         encoded = content.encode("utf-8")
         if len(encoded) > max_bytes_per_file:
@@ -478,13 +505,20 @@ def role_prompt_payload(
     manifest: dict[str, Any],
     output_contract: dict[str, Any],
 ) -> str:
+    require_safe_value(request, "Role request")
+    require_safe(prompt_text, "Role instructions")
+    # Withheld source identities and Inspector-only metadata stay local.
+    runtime_manifest = {
+        key: value for key, value in manifest.items()
+        if key not in {"excluded_context", "context_inspector", "source_file_candidates", "effective_context_digest", "effective_context_scope", "context_cache", "artifact_references", "skill_references"}
+    }
     return "\n\n".join(
         [
             prompt_text,
             "Role execution request:",
             json.dumps(request, indent=2, ensure_ascii=False),
             "Context manifest:",
-            json.dumps(manifest, indent=2, ensure_ascii=False),
+            json.dumps(runtime_manifest, indent=2, ensure_ascii=False),
             "Context file contents available to this sandboxed run:",
             context_reference_contents(manifest),
             "User answers recorded for this run:",
@@ -592,7 +626,7 @@ def write_raw_stream(
     role = str(request["role"]).replace("/", "-")
     path = raw_outputs_dir(request, manifest) / f"{role}{suffix}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(raw_stdout, encoding="utf-8")
+    path.write_text(redact_text(raw_stdout), encoding="utf-8")
     return path
 
 
@@ -768,6 +802,8 @@ def run_codex(
             timeout_seconds=timeout_seconds,
             env=env,
         )
+    except ContextGuardError as exc:
+        return failure_result("Context privacy check blocked execution.", [str(exc)], kind="policy_block", error_type="ContextGuardError")
     except FileNotFoundError as exc:
         return failure_result("Codex CLI command is missing.", [str(exc)], kind="tool_failure", error_type="FileNotFoundError")
     except PermissionError as exc:
@@ -856,6 +892,8 @@ def run_codex(
                     env=env,
                     suffix=f"-repair-{repair_attempt}",
                 )
+            except ContextGuardError as exc:
+                return failure_result("Context privacy check blocked output repair.", [str(exc)], kind="policy_block", error_type="ContextGuardError")
             except OSError as exc:
                 validation_errors = [f"output repair runtime failed: {type(exc).__name__}"]
                 continue
@@ -942,7 +980,10 @@ def execute_role() -> dict[str, Any]:
 
 
 def main() -> int:
-    result = execute_role()
+    try:
+        result = execute_role()
+    except ContextGuardError as exc:
+        result = failure_result("Context validation blocked execution.", [str(exc)], kind="policy_block", error_type="ContextGuardError")
     result.setdefault("warnings", [])
     result.setdefault("blockers", [])
     result.setdefault("artifacts_created", [])

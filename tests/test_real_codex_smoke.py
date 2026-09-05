@@ -14,6 +14,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from runtimes import create_runtime
+from ai_harness.context.payload import read_snapshot
 
 
 @pytest.mark.skipif(
@@ -105,5 +106,11 @@ def test_real_codex_runtime_smoke(tmp_path: Path) -> None:
     assert isinstance(result["output_tokens"], int)
     assert isinstance(result["duration_ms"], int)
     assert (raw_dir / "planner.jsonl").exists()
+    snapshots = list((tmp_path / "context-manifests/effective").glob("*.json"))
+    assert snapshots, "real SDK turn must retain its exact input snapshot"
+    effective = read_snapshot(snapshots[0])
+    assert effective["payload"]["runtime"] == "codex-sdk"
+    assert effective["payload"]["thread_id"] == result["thread_id"]
+    assert "Human-interaction policy:" in effective["payload"]["prompt"]
     status = subprocess.run(["git", "status", "--porcelain"], cwd=repo, text=True, capture_output=True, check=False)
     assert status.stdout == ""

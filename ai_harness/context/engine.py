@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
 
 from .builder import ContextBudget, ContextBuilder
+from .content_guard import ContextPrivacyPolicy, GUARD_VERSION, redact_value, require_safe
 from .cache import (
     ContextCache,
     ContextCacheKey,
@@ -19,7 +21,7 @@ from .cache import (
 )
 from .deduplication import deduplicate_documents
 from .logging import ContextLogger, JsonlContextLogger, attach_log
-from .models import Context, KnowledgeDocument, KnowledgeRequest
+from .models import Context, KnowledgeDocument, KnowledgeRequest, RetrievedDocument
 from .retrieval import Retriever, RuleBasedRetriever
 from .sources import (
     ArtifactSource,
@@ -69,7 +71,7 @@ class ContextEngine:
         cache: ContextCache | None = None,
         project_profile_version: str = "",
         policy_version: str = "",
-        compiler_version: str = "3",
+        compiler_version: str = "4",
         cache_query_salt: str = "",
     ) -> None:
         self.sources = tuple(sources)
@@ -130,12 +132,15 @@ class ContextEngine:
             project=project,
             project_profile=project_profile,
             retriever=RuleBasedRetriever(),
-            builder=ContextBuilder(ContextBudget(total_tokens=token_budget)),
+            builder=ContextBuilder(
+                ContextBudget(total_tokens=token_budget),
+                privacy_policy=ContextPrivacyPolicy.load(control_root, project),
+            ),
             logger=logger,
             cache=ContextCache(control_root.resolve() / ".agent-cache" / "context"),
             project_profile_version=project_profile_version,
             policy_version=policy_version,
-            compiler_version="3",
+            compiler_version="4",
             cache_query_salt=cache_query_salt,
         )
 
@@ -150,6 +155,7 @@ class ContextEngine:
             project=self.project,
             project_profile=self.project_profile,
         )
+        require_safe(request.task, "Task")
         cache_key: ContextCacheKey | None = None
         if self.cache is not None:
             head_sha, dirty_fingerprint = repository_fingerprints(request.repository)
@@ -165,6 +171,9 @@ class ContextEngine:
                             "project": request.project,
                             "profile": request.project_profile,
                             "runtime_delta": self.cache_query_salt,
+                            "runtime": request.runtime,
+                            "privacy_destinations": self.builder.privacy_policy.private_destinations,
+                            "guard_version": GUARD_VERSION,
                         },
                         sort_keys=True,
                         ensure_ascii=False,
@@ -181,18 +190,27 @@ class ContextEngine:
             source_counts[source.name] = len(collected)
             for document in collected:
                 documents.setdefault(document.id, document)
-        deduplicated, duplicates = deduplicate_documents(tuple(documents.values()))
-        source_fingerprints = document_fingerprints(deduplicated)
         context_revision = document_revision(
             tuple(documents.values()),
             project_profile_version=self.project_profile_version,
             policy_version=self.policy_version,
             compiler_version=self.compiler_version,
         )
+        allowed_documents: list[KnowledgeDocument] = []
+        withheld: list[RetrievedDocument] = []
+        for document in documents.values():
+            reason = self.builder.privacy_policy.exclusion_reason(document, request.runtime)
+            if reason:
+                withheld.append(RetrievedDocument(replace(document, content="", metadata={}), 0.0, reason))
+            else:
+                allowed_documents.append(document)
+        deduplicated, duplicates = deduplicate_documents(tuple(allowed_documents))
+        source_fingerprints = document_fingerprints(deduplicated)
         if self.cache is not None and cache_key is not None:
             exact = self.cache.get(cache_key, context_revision=context_revision)
             if exact is not None:
                 cached_context = exact.context(cache_status="hit")
+                require_safe(cached_context.package, "Cached context")
                 return attach_log(cached_context, cached_context.log, self.logger)
             self.cache.invalidate_changed_sources(
                 source_fingerprints,
@@ -206,6 +224,7 @@ class ContextEngine:
             )
             if compatible is not None:
                 cached_context = compatible.context(cache_status="compatible_hit")
+                require_safe(cached_context.package, "Cached context")
                 self.cache.put(
                     cache_key,
                     cached_context,
@@ -214,11 +233,13 @@ class ContextEngine:
                 )
                 return attach_log(cached_context, cached_context.log, self.logger)
         retrieval = self.retriever.retrieve(request, deduplicated)
+        retrieval = replace(retrieval, excluded=retrieval.excluded + tuple(withheld))
         context = self.builder.build(request, retrieval)
+        require_safe(context.package, "Compiled context")
         event: dict[str, object] = {
             "version": 1,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "task": request.task,
+            "task_fingerprint": fingerprint_text(request.task),
             "repository": str(request.repository),
             "project": request.project,
             "project_profile": request.project_profile,
@@ -311,7 +332,7 @@ class ContextEngine:
                 for item in duplicates
             ],
         }
-        attached = attach_log(context, event, self.logger)
+        attached = attach_log(context, redact_value(event), self.logger)
         if self.cache is not None and cache_key is not None:
             self.cache.put(
                 cache_key,

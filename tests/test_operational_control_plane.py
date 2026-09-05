@@ -415,8 +415,21 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         with urlopen(f"{base}/dashboard", timeout=5) as response:
             dashboard = response.read().decode("utf-8")
             assert response.headers["Content-Security-Policy"]
-        assert "Agent Control" in dashboard
+        assert "Новая задача · Tweebit" in dashboard
         assert "Новая задача" in dashboard
+        assert 'data-view="new-task"' in dashboard
+        assert 'data-view="projects"' in dashboard
+        assert 'data-view="tasks"' in dashboard
+        assert 'data-view="statistics"' in dashboard
+        assert 'data-view="settings"' in dashboard
+        assert dashboard.index('id="newTaskPanel"') < dashboard.index('id="activeTasksPanel"')
+        assert dashboard.index('id="activeTasksPanel"') < dashboard.index('id="adaptivePanel"')
+        assert 'id="view-statistics" data-page="statistics" hidden' in dashboard
+        assert 'id="recentProjectList"' in dashboard
+        assert 'id="runtimePanel"' in dashboard
+        assert "Дополнительно" in dashboard
+        assert "@media(prefers-color-scheme:dark)" in dashboard
+        assert "button:focus-visible" in dashboard
         assert 'id="executionMode"' in dashboard
         assert '<option value="fast">' in dashboard
         assert '<option value="full">' in dashboard
@@ -450,7 +463,7 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         assert "historyCanHide(task){return ['completed','cancelled'].includes(task.status)}" in dashboard
         assert "Активные задачи, ошибки, журналы и файлы сохранятся" in dashboard
         assert "localStorage.setItem(historyStorageKey" in dashboard
-        assert "Быстрый старт" in dashboard
+        assert "Как начать" in dashboard
         assert "Другой ответ" in dashboard
         assert "question.options" in dashboard
         assert "item.requires_input" in dashboard

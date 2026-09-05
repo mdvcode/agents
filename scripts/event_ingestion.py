@@ -12,6 +12,7 @@ from typing import Any
 
 from runtime_contracts import load_json, validate_contract
 from task_queue import DEFAULT_DB, TaskQueue, TaskRecord
+from ai_harness.context.content_guard import ContextGuardError, require_safe
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,6 +61,10 @@ def normalize_event(
     title = text(payload.get("goal") or issue.get("title") or payload.get("title"), task_id)
     body = text(issue.get("body") or payload.get("body"))
     goal = title if not body else f"{title}\n\n{body}"
+    try:
+        require_safe(goal, "Task")
+    except ContextGuardError as exc:
+        raise EventError(str(exc)) from exc
     branch = text(payload.get("branch") or workflow_run.get("head_branch"), f"issue/{task_id}")
     base_branch = text(payload.get("base_branch"), "main")
     workspace_mode = text(payload.get("workspace_mode"), "worktree")

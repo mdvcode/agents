@@ -2318,6 +2318,7 @@ def run_adaptive_read_only_verifier(
         prompt_path=str(contract.get("prompt_path", "")),
         output_contract=str(contract.get("output_contract", "")),
         expected_artifacts=list(contract.get("expected_artifacts", [])),
+        runtime=runtime.descriptor.provider,
     )
     errors = validate_manifest(manifest_path, role)
     if errors:
@@ -3073,6 +3074,7 @@ def run_roles(
                     prompt_path=str(contract.get("prompt_path", "")),
                     output_contract=str(contract.get("output_contract", "")),
                     expected_artifacts=list(contract.get("expected_artifacts", [])),
+                    runtime=runtime.descriptor.provider,
                 )
                 manifest_errors = validate_manifest(manifest_path, role)
                 if manifest_errors:

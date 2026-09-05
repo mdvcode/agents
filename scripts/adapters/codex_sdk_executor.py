@@ -40,6 +40,8 @@ from codex_cli_executor import (  # noqa: E402
     write_raw_stream,
 )
 from runtime_contracts import blocked_result  # noqa: E402
+from ai_harness.context.content_guard import ContextGuardError  # noqa: E402
+from ai_harness.context.payload import record_payload  # noqa: E402
 from ai_harness.model_policy import (  # noqa: E402
     ModelPolicyError,
     load_execution_profiles,
@@ -290,9 +292,20 @@ def run_turn_streaming(
     progress: ProgressWriter,
     progress_sink: Callable[[dict[str, Any]], None] | None = None,
     turn_started: Callable[[Any], None] | None = None,
+    manifest: dict[str, Any] | None = None,
+    phase: str = "role",
 ) -> Any:
     """Run a turn while making every SDK notification observable."""
 
+    snapshot = record_payload(
+        request=progress.request, manifest=manifest or {}, prompt=prompt,
+        output_schema=schema, runtime="codex-sdk", settings=settings,
+        sandbox=str(getattr(sandbox, "value", sandbox)), thread_id=str(getattr(thread, "id", "")),
+        phase=phase, control_root=ROOT,
+    )
+    prompt = snapshot["payload"]["prompt"]
+    schema = snapshot["payload"]["output_schema"]
+    settings = snapshot["payload"]["settings"]
     if not hasattr(thread, "turn"):
         return thread.run(
             prompt,
@@ -458,6 +471,7 @@ def run_sdk(
             progress=progress,
             progress_sink=progress_sink,
             turn_started=turn_started,
+            manifest=manifest,
         )
         response = turn_result.final_response or ""
         usage = usage_fields(turn_result)
@@ -519,6 +533,8 @@ def run_sdk(
                 progress=progress,
                 progress_sink=progress_sink,
                 turn_started=turn_started,
+                manifest=manifest,
+                phase=f"output_repair_{repair_attempt}",
             )
             repaired_output = repaired_turn.final_response or ""
             write_raw_stream(
@@ -562,6 +578,9 @@ def run_sdk(
                 error_type="InvalidStructuredOutput",
             )
             result["_failure"]["repair_attempts"] = MAX_OUTPUT_REPAIR_ATTEMPTS
+    except ContextGuardError as exc:
+        progress.update(phase="stopped", stop_reason="context_privacy_block")
+        return failure_result("Context privacy check blocked execution.", [str(exc)], kind="policy_block", error_type="ContextGuardError")
     except Exception as exc:
         progress.update(phase="stopped", stop_reason=f"{type(exc).__name__}: {exc}")
         return failure_result(
@@ -745,7 +764,10 @@ def execute_role() -> dict[str, Any]:
 
 
 def main() -> int:
-    result = execute_role()
+    try:
+        result = execute_role()
+    except ContextGuardError as exc:
+        result = failure_result("Context validation blocked execution.", [str(exc)], kind="policy_block", error_type="ContextGuardError")
     result.setdefault("warnings", [])
     result.setdefault("blockers", [])
     result.setdefault("artifacts_created", [])

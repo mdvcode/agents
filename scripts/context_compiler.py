@@ -19,6 +19,8 @@ if str(ROOT) not in sys.path:
 
 from ai_harness.context import ContextEngine
 from ai_harness.context.sources import ROLE_SKILLS
+from ai_harness.context.content_guard import redact_value  # noqa: E402
+from ai_harness.context.payload import write_private_json, write_private_text  # noqa: E402
 
 
 MEMORY_CONTROL_ROOT = ROOT
@@ -63,8 +65,7 @@ def role_contract(role: str) -> dict[str, Any]:
 
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_private_json(path, redact_value(data))
 
 
 def safe_relative(path: Path, base: Path) -> str:
@@ -190,7 +191,7 @@ def create_context_manifest(
     prompt_path: str = "",
     output_contract: str = "",
     expected_artifacts: Sequence[str] = (),
-    runtime: str = "codex-cli",
+    runtime: str = "codex-sdk",
 ) -> Path:
     capability = role_capability(role)
     contract = role_contract(role)
@@ -228,8 +229,7 @@ def create_context_manifest(
     )
     context = engine.build(goal, repository, role, runtime)
     package_path = context_dir / "packages" / f"{role}.md"
-    package_path.parent.mkdir(parents=True, exist_ok=True)
-    package_path.write_text(context.package, encoding="utf-8")
+    write_private_text(package_path, context.package)
     selected_context = list(context.log.get("selected", []))
     excluded_context = list(context.log.get("excluded", []))
     context_revision = str(context.log.get("context_revision", ""))
@@ -303,6 +303,8 @@ def create_context_manifest(
         "context_engine_version": 2,
         "context_revision": context_revision,
         "effective_context_digest": effective_context_digest,
+        "context_package_digest": effective_context_digest,
+        "effective_context_scope": "context_package",
         "context_inspector": {
             "context_revision": context_revision,
             "effective_context_digest": effective_context_digest,

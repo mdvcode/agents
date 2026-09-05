@@ -3,6 +3,7 @@
 This repository is the local operating base for agents working across supported project profiles.
 
 ## Start Here
+- `docs/context-inspector.md`: draft source previews, exact frozen stage inputs, context privacy controls and integrity checks.
 - `docs/onboarding.md`: how a new agent should enter the workspace.
 - `docs/agent-system.md`: current agent analysis and improvement plan.
 - `docs/evaluation-framework.md`: versioned run scoring, 30-case production corpus, frozen comparisons, CI regression gate, coverage, and leaderboard workflow.
