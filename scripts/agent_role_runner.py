@@ -751,6 +751,18 @@ def completed_role_result(state: dict[str, Any], role: str) -> dict[str, Any] | 
     return None
 
 
+def executed_role_count(state: dict[str, Any]) -> int:
+    """Count actual role executions, excluding approval gates and cached replays."""
+
+    return sum(
+        1
+        for checkpoint in state.get("roles", [])
+        if isinstance(checkpoint, dict)
+        and checkpoint.get("role") != "approval-gate"
+        and checkpoint.get("checkpoint_replayed") is not True
+    )
+
+
 def set_attention(
     state: dict[str, Any],
     *,
@@ -988,12 +1000,12 @@ def question_was_answered(state: dict[str, Any], fingerprints: set[str]) -> bool
 
 
 def role_attention_action(result: dict[str, Any]) -> str:
-    """Route deliberate structured questions to informational input."""
+    """Separate deliberate questions from authority and technical gates."""
 
-    if result.get("status") == "awaiting_approval" or normalize_question(
-        result.get("question")
-    ):
+    if normalize_question(result.get("question")):
         return "answer"
+    if result.get("status") == "awaiting_approval":
+        return "approve"
     return "fix_then_retry"
 
 
@@ -2549,7 +2561,7 @@ def run_adaptive_read_only_verifier(
     budget_pressure = workflow_token_pressure_action(state) is not None
     if isinstance(plan, dict):
         budget_decision = BudgetController.from_plan(plan).assess(
-            BudgetUsage.from_state(state),
+            BudgetUsage.for_enforcement(state),
             mandatory_role=bool(adaptive_node(state, role).get("mandatory", False)),
         )
         if budget_decision.action == BudgetAction.REQUIRE_APPROVAL:
@@ -3258,16 +3270,15 @@ def run_roles(
                     and state["budget_action"].get("action") == BudgetAction.REQUIRE_APPROVAL.value
                 )
                 if budget_override:
-                    state.pop("approval_override", None)
                     state["budget_action"] = {
                         "action": BudgetAction.CONTINUE.value,
-                        "reason": "A scoped one-role budget override was consumed.",
+                        "reason": "A scoped hard-budget extension is active.",
                         "pressure": 1.0,
                         "exhausted_dimensions": [],
                     }
                 else:
                     budget_decision = BudgetController.from_plan(execution_plan).assess(
-                        BudgetUsage.from_state(state),
+                        BudgetUsage.for_enforcement(state),
                         mandatory_role=bool(adaptive_node(state, role).get("mandatory", False)),
                     )
                     state["budget_action"] = budget_decision.as_dict()
@@ -3750,6 +3761,8 @@ def run_roles(
         }
         if execution_settings:
             checkpoint["execution_profile"] = execution_settings
+        if used_cached_result:
+            checkpoint["checkpoint_replayed"] = True
         state["roles"].append(checkpoint)
         if result.get("status") == "completed":
             completed_roles.append(role)
@@ -3827,8 +3840,12 @@ def run_roles(
                 role=role,
                 result=result,
             )
-            state["role_count"] = accounted_role_count(state["roles"])
-            state["tokens_used"] = accounted_tokens_used(state["roles"])
+            state["role_count"] = executed_role_count(state)
+            state["tokens_used"] = sum(
+                role_budget_tokens(item.get("result", {}))
+                for item in state["roles"]
+                if isinstance(item, dict) and isinstance(item.get("result"), dict)
+            )
             state["elapsed_seconds"] = elapsed_before_resume + int(time.monotonic() - workflow_started)
             write_json(layout.workflow, state)
             write_metrics(layout, state)
@@ -3907,8 +3924,12 @@ def run_roles(
             if pending_path.exists():
                 pending_path.unlink()
 
-        state["role_count"] = accounted_role_count(state["roles"])
-        state["tokens_used"] = accounted_tokens_used(state["roles"])
+        state["role_count"] = executed_role_count(state)
+        state["tokens_used"] = sum(
+            role_budget_tokens(item.get("result", {}))
+            for item in state["roles"]
+            if isinstance(item.get("result"), dict)
+        )
         state["elapsed_seconds"] = elapsed_before_resume + int(time.monotonic() - workflow_started)
         route = decide_next_role(
             current_role=role,
@@ -4099,7 +4120,7 @@ def run_roles(
                         "result": approval,
                     }
                     state["roles"].append(approval_checkpoint)
-                    state["role_count"] = accounted_role_count(state["roles"])
+                    state["role_count"] = executed_role_count(state)
                     write_json(layout.role_results / "approval-gate-1.json", approval_checkpoint)
                     write_json(layout.workflow, state)
                     try:

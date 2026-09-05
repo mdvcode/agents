@@ -195,3 +195,57 @@
   Example bad pattern: route `tokens_used >= max_tokens` directly to `approval-gate`.
   Example good pattern: persist an `economy` budget action, continue the next mandatory role, and report the soft ceiling as a warning rather than a blocker.
   Scope: task economics, deterministic routing, adaptive execution, repair loops, and operator UX
+
+- Date: 2026-08-31
+  Agent: Codex
+  Failure: After an adaptive elapsed-time approval, a completed blocking reviewer was reset and rerun against the unchanged diff; each rerun immediately reopened the same hard-bound approval instead of entering repair.
+  Root cause: Approval resume treated every checkpoint as unfinished, while the runner consumed a one-role budget override before the deterministic router could use the completed result; a second workflow-level budget check also compared raw cumulative time instead of the approved effective window, so the same elapsed bound remained exhausted at later mandatory gates.
+  Prevention rule: Preserve completed checkpoint output on approval resume, route it deterministically without another model invocation, represent hard-bound approval as a fresh bounded baseline only for the exhausted dimensions, and make every budget enforcer use that same effective usage while retaining all independent authority gates.
+  Example bad pattern: reset `role_completed` to `role_pending`, rerun the verifier, and re-request the same elapsed-time approval before repair routing.
+  Example good pattern: replay the completed result into the router, record the approved elapsed/repair/escalation baseline, apply it in both adaptive and workflow-level checks, run the bounded repair window, and request new approval only after that window or a genuinely distinct gate is reached.
+  Scope: adaptive budgets, approval lifecycle, checkpoint resume, deterministic repair routing, and operator UX
+
+- Date: 2026-08-31
+  Agent: Codex
+  Failure: A review with structured code blockers was treated as environmentally unavailable because fallback text mentioned a `read-only API`; accepting the unrelated verifier scope then let a blocked orchestrator verdict reach publication routing.
+  Root cause: Blocker normalization ignored object-shaped findings, environmental classification fell back to broad substring markers, and the router had no explicit fail-closed branch for an orchestrator verdict with failed checks or blockers.
+  Prevention rule: Normalize structured blocker ids/messages before classification, let concrete blockers outrank environmental keyword heuristics, and stop publication whenever the authoritative verdict is blocked, failed, awaiting approval, or has failed checks.
+  Example bad pattern: ignore blocker objects, match `read-only` inside a product description, and infer that all review failures were accepted as unavailable verification.
+  Example good pattern: classify the structured `F001` message as a code blocker, route it to bounded repair, and independently reject publication from a blocked verdict.
+  Scope: verifier classification, structured findings, deterministic review repair, verdict routing, and publication safety
+
+- Date: 2026-08-31
+  Agent: Codex
+  Failure: After fail-open routing falsely marked a blocked run completed, the governed retry command refused to reopen it, leaving the repaired worker unable to continue the original checkpoint.
+  Root cause: Terminal queue protection correctly rejected every completed task but had no evidence-bound reconciliation path for a workflow whose authoritative verdict still proved failed checks and review blockers.
+  Prevention rule: Keep ordinary completed runs immutable; permit reconciliation only when a blocked verdict, a completed blocking verifier checkpoint, and absence of publication side effects are all proven and fingerprinted, then invalidate only downstream false-success history.
+  Example bad pattern: edit queue/workflow state by hand or make every completed run retryable after discovering a false completion.
+  Example good pattern: atomically prepare the same run at its completed reviewer checkpoint, audit the evidence fingerprint, preserve all earlier history, remove stale orchestrator/publication completions, and let deterministic repair routing continue.
+  Scope: terminal recovery, queue/workflow reconciliation, checkpoint history, and publication idempotency
+
+- Date: 2026-08-31
+  Agent: Codex
+  Failure: The first in-policy repair at the aggregate repair limit was stopped before implementation and surfaced as another exhausted-bound question.
+  Root cause: Count allowances used the same `usage >= limit` exhaustion rule as elapsed time even though repair iterations are incremented when dispatched; equality therefore represented the last allowed attempt, not an excess attempt.
+  Prevention rule: Treat duration ceilings as exhausted at equality, but treat bounded count allowances such as repairs and model escalations as exhausted only above the allowed count; keep their own dispatch/escalation guards authoritative.
+  Example bad pattern: configure two repairs, increment the second repair when routing it, then reject implementation because `2 >= 2`.
+  Example good pattern: allow the configured second repair and its verification gates, then stop a requested third repair because `3 > 2`.
+  Scope: adaptive hard budgets, bounded repairs, model escalation, and approval UX
+
+- Date: 2026-08-31
+  Agent: Codex
+  Failure: A deterministic hard-budget gate was classified as an informational question, so duplicate-question suppression converted a recoverable boundary defect into a misleading “previously answered” blocker.
+  Root cause: Every `awaiting_approval` role result was assigned the `answer` action even when it contained no structured question, and manual retry retained the stale active attention in workflow blockers.
+  Prevention rule: Only a valid structured question may use `answer`; deterministic authority gates use `approve`, technical stops use `fix_then_retry`, and manual recovery archives only the active technical attention while preserving unrelated blockers.
+  Example bad pattern: apply semantic question deduplication to a policy gate and carry its old attention blockers into the repaired retry.
+  Example good pattern: keep question, approval, and technical recovery lifecycles distinct; archive the resolved technical stop before rerunning its checkpoint.
+  Scope: attention classification, approval UX, duplicate-question suppression, and manual recovery
+
+- Date: 2026-08-31
+  Agent: Codex
+  Failure: A successful repair implementation was followed directly by orchestration, which reused review and quality evidence produced before the repair and opened an unresolvable approval gate from the stale verdict.
+  Root cause: Adaptive completion was a timeless set of role names, so a historical verifier remained “completed” after its dependency ran again; rejection also updated workflow state without synchronizing the queue.
+  Prevention rule: A DAG node is complete only when its latest successful visit is at least as new as every dependency; blocked verification verdicts are technical stops, and approval rejection must atomically mirror into recoverable queue state.
+  Example bad pattern: mark `reviewer` complete forever, patch code afterward, and let old review authorize or block orchestration.
+  Example good pattern: after implementation repair, invalidate stale dependent gates by visit order, rerun quality/security/review, block rather than request authority for failed checks, and make a rejected stale approval retryable in both workflow and queue.
+  Scope: adaptive DAG freshness, post-repair verification, verdict routing, and approval rejection recovery

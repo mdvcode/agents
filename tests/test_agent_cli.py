@@ -2616,237 +2616,190 @@ def test_retry_checkpoint_reruns_current_role_instead_of_cached_blocker(tmp_path
     assert checkpoint["artifacts"] == []
 
 
-def test_retry_archives_repaired_attention_and_removes_its_blockers() -> None:
+def test_manual_recovery_archives_active_technical_attention() -> None:
     workflow = {
         "attention": {
             "required": True,
-            "summary": "The repaired check needs a retry.",
-            "details": ["Retry after fixing the local dependency."],
-            "role": "implementation-agent",
+            "summary": "Repair the local database.",
+            "details": ["Database is unavailable."],
             "action": "fix_then_retry",
         },
         "blockers": [
-            "The repaired check needs a retry.",
-            "Retry after fixing the local dependency.",
-            "An unrelated blocker remains active.",
+            "Database is unavailable.",
+            "approval rejected: obsolete technical gate",
+            "Independent security blocker.",
         ],
+        "attention_history": [],
     }
 
-    rerun_required = cli.resolve_retry_attention(workflow)
+    cli.archive_recovery_attention(workflow)
 
-    assert rerun_required is True
     assert "attention" not in workflow
-    assert workflow["blockers"] == ["An unrelated blocker remains active."]
-    assert workflow["attention_history"][-1]["resolution"] == "retry_requested"
-    assert workflow["attention_history"][-1]["required"] is False
+    assert workflow["blockers"] == ["Independent security blocker."]
+    assert workflow["attention_history"][0]["resolution"] == "manual_recovery"
 
 
-def test_retry_routes_completed_role_output_without_rerunning_it() -> None:
-    workflow = {
-        "current_role": "implementation-agent",
-        "roles": [
-            {
-                "role": "implementation-agent",
-                "result": {"status": "completed", "summary": "repair finished"},
-            }
-        ],
-        "attention": {
-            "required": True,
-            "summary": "Workflow blockers are present; execution is awaiting approval.",
-            "details": ["approval expired"],
-            "role": "implementation-agent",
-            "action": "fix_then_retry",
-        },
-        "blockers": ["approval expired"],
-    }
-
-    rerun_required = cli.resolve_retry_attention(workflow)
-
-    assert rerun_required is False
-    assert "attention" not in workflow
-    assert workflow["blockers"] == []
-    assert workflow["resume_role"] == "implementation-agent"
-    assert workflow["attention_history"][-1]["resolution"] == "retry_requested"
-
-
-def test_retry_replays_preserved_completed_checkpoint_without_runtime_or_double_accounting(
+def test_retry_reconciles_false_completion_from_blocked_review(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
 ) -> None:
-    runs = tmp_path / ".agent-runs"
-    monkeypatch.setattr(agent_role_runner, "RUNS", runs)
-    adapter = tmp_path / "planner_adapter.py"
-    adapter.write_text(
-        """
-from pathlib import Path
-import json
-import sys
-
-request = json.loads(sys.stdin.read())
-assert request["role"] == "planner"
-artifacts = Path(request["artifacts_dir"])
-(artifacts / "plan.md").write_text("# Plan\\n", encoding="utf-8")
-print(json.dumps({
-    "status": "completed",
-    "next_action": "risk-classifier",
-    "summary": "planner completed once",
-    "artifacts_created": ["plan.md"],
-    "blockers": [],
-    "warnings": [],
-    "tokens_used": 13
-}))
-""".lstrip(),
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    run_id = "run-false-completion"
+    run_dir = state_root / ".agent-runs" / run_id
+    artifacts = run_dir / "artifacts"
+    checkpoints = run_dir / "checkpoints"
+    artifacts.mkdir(parents=True)
+    checkpoints.mkdir()
+    workflow = {
+        "run_id": run_id,
+        "task_id": "false-completion",
+        "repository": str(repository),
+        "worktree": str(repository),
+        "checkout_path": str(repository),
+        "execution_status": "completed",
+        "current_role": "publication",
+        "resume_role": "publication",
+        "last_route": {"next_role": "", "stop": True, "publication_allowed": True},
+        "blockers": [],
+        "attention": None,
+        "recovery": {},
+        "budget_skipped_roles": ["publication"],
+        "completed_roles": ["reviewer", "orchestrator", "publication"],
+        "roles": [
+            {
+                "role": "reviewer",
+                "result": {
+                    "status": "completed",
+                    "next_action": "repair",
+                    "summary": "Review found a concrete blocker.",
+                    "artifacts_created": ["review.json"],
+                    "blockers": [],
+                    "warnings": [],
+                },
+            },
+            {"role": "orchestrator", "result": {"status": "completed"}},
+            {"role": "publication", "result": {"status": "completed"}},
+        ],
+    }
+    (run_dir / "workflow.json").write_text(json.dumps(workflow), encoding="utf-8")
+    (artifacts / "verdict.json").write_text(
+        json.dumps(
+            {
+                "decision": "await_approval",
+                "execution_status": "blocked",
+                "checks_passed": False,
+                "blockers": ["F001: review blocker"],
+            }
+        ),
         encoding="utf-8",
     )
-    original_router = agent_role_runner.decide_next_role
-    original_execute = agent_role_runner.execute_runtime_observed
-    runtime_roles: list[str] = []
-
-    def count_runtime(runtime: object, **kwargs: object) -> dict[str, object]:
-        runtime_roles.append(str(kwargs.get("role", "")))
-        return original_execute(runtime, **kwargs)
-
-    def pause_after_planner(**kwargs: object) -> dict[str, object]:
-        if kwargs.get("current_role") == "planner":
-            return {
-                "next_role": "approval-gate",
-                "reason": "Temporary completed-role gate.",
-                "stop": True,
-                "publication_allowed": False,
-                "loop": None,
-                "warnings": [],
+    (artifacts / "review.json").write_text(
+        json.dumps(
+            {
+                "verdict": "broken",
+                "status": "block",
+                "repair_required": True,
+                "blockers": [
+                    {"id": "F001", "severity": "high", "message": "review blocker"}
+                ],
             }
-        return original_router(**kwargs)
-
-    monkeypatch.setattr(agent_role_runner, "execute_runtime_observed", count_runtime)
-    monkeypatch.setattr(agent_role_runner, "decide_next_role", pause_after_planner)
-    monkeypatch.setattr(agent_role_runner, "request_approval", lambda *_args, **_kwargs: {})
-    initial = agent_role_runner.run_roles(
-        run_id="completed-role-replay",
-        repository=tmp_path,
-        adapter_command=f"{sys.executable} {adapter}",
-        dry_run=True,
-        mode="full",
+        ),
+        encoding="utf-8",
     )
-    run_dir = runs / "completed-role-replay"
-    checkpoint = agent_role_runner.read_checkpoint(run_dir, "planner")
-
-    assert checkpoint is not None and checkpoint.state == "role_completed"
-    assert runtime_roles == ["planner"]
-    accounted_roles = agent_role_runner.accounted_role_count(initial["roles"])
-    accounted_tokens = agent_role_runner.accounted_tokens_used(initial["roles"])
-
-    assert cli.resolve_retry_attention(initial) is False
-    assert initial["resume_role"] == "planner"
-    checkpoint = agent_role_runner.read_checkpoint(run_dir, "planner")
-    assert checkpoint is not None and checkpoint.state == "role_completed"
-    initial["execution_status"] = "resuming"
-    agent_role_runner.write_json(run_dir / "workflow.json", initial)
-
-    def reject_runtime(*_args: object, **_kwargs: object) -> dict[str, object]:
-        raise AssertionError("completed checkpoint replay invoked the runtime")
-
-    monkeypatch.setattr(agent_role_runner, "execute_runtime_observed", reject_runtime)
-    monkeypatch.setattr(
-        agent_role_runner,
-        "decide_next_role",
-        lambda **_kwargs: {
-            "next_role": "",
-            "reason": "Cached completed output routed forward.",
-            "stop": True,
-            "publication_allowed": False,
-            "loop": None,
-            "warnings": [],
-        },
+    for role, role_artifacts in (("reviewer", ["review.json"]), ("publication", [])):
+        (checkpoints / f"{role}.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "role": role,
+                    "state": "role_completed",
+                    "attempt": 1,
+                    "worktree": str(repository),
+                    "artifacts": role_artifacts,
+                    "side_effects": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+    task_queue = cli.load_harness_module(state_root, "task_queue")
+    queue = task_queue.TaskQueue(state_root / ".agent-queue" / "tasks.db")
+    queued = queue.enqueue(
+        task_key="false-completion",
+        payload={"task_id": "false-completion", "repository": str(repository)},
+        run_id=run_id,
+    )
+    claimed = queue.claim(worker_id="worker-1")
+    assert claimed is not None
+    assert queue.mark_running(queued.id, "worker-1")
+    queue.finish(
+        task_id=queued.id,
+        worker_id="worker-1",
+        status="completed",
+        run_id=run_id,
     )
 
-    resumed = agent_role_runner.run_roles(
-        run_id="completed-role-replay",
-        resume=True,
-        dry_run=True,
+    assert cli.main(["retry", run_id, "--repo", str(repository), "--json"]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    reconciled = json.loads((run_dir / "workflow.json").read_text(encoding="utf-8"))
+    assert result["status"] == "resuming"
+    assert result["action"] == "reconcile_false_completion"
+    assert queue.get(queued.id).status == "resuming"
+    assert reconciled["execution_status"] == "resuming"
+    assert reconciled["current_role"] == "reviewer"
+    assert reconciled["resume_role"] == "reviewer"
+    assert reconciled["last_route"]["next_role"] == "approval-gate"
+    assert reconciled["recovery_action"] == "reconcile_false_completion"
+    assert reconciled["recovery"]["false_completion_reconciliation"]["resume_role"] == "reviewer"
+    assert [entry["role"] for entry in reconciled["roles"]] == ["reviewer"]
+    assert reconciled["completed_roles"] == ["reviewer"]
+    assert reconciled["budget_skipped_roles"] == []
+    reviewer_checkpoint = json.loads(
+        (checkpoints / "reviewer.json").read_text(encoding="utf-8")
     )
-    replay = resumed["roles"][-1]
-    checkpoint = agent_role_runner.read_checkpoint(run_dir, "planner")
-
-    assert resumed["execution_status"] == "completed"
-    assert replay["role"] == "planner"
-    assert replay["cached_result_replay"] is True
-    assert replay["cache_provenance"] == "completed_checkpoint_replay"
-    assert replay["llm_invoked"] is False
-    assert agent_role_runner.accounted_role_count(resumed["roles"]) == accounted_roles
-    assert agent_role_runner.accounted_tokens_used(resumed["roles"]) == accounted_tokens
-    assert checkpoint is not None and checkpoint.state == "role_completed"
+    assert reviewer_checkpoint["state"] == "role_completed"
 
 
-def test_retry_preserves_expired_model_attention_until_a_new_approval() -> None:
-    workflow = {
-        "attention": {
-            "required": True,
-            "summary": "Bounded model escalation is exhausted.",
-            "details": ["Human review is required before retrying."],
-            "role": "implementation-agent",
-            "action": "answer",
-            "fingerprint": "sha256:model-gate",
-            "requirement": {
-                "requirement_id": "bounded_escalation_exhausted_model",
-            },
-        },
-        "blockers": ["approval expired"],
-        "missing_requirement_requests": [
+def test_false_completion_reconciliation_rejects_publication_side_effects(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    artifacts = run_dir / "artifacts"
+    checkpoints = run_dir / "checkpoints"
+    artifacts.mkdir(parents=True)
+    checkpoints.mkdir()
+    (artifacts / "verdict.json").write_text(
+        json.dumps(
             {
-                "requirement_id": "bounded_escalation_exhausted_model",
-                "role": "implementation-agent",
-                "fingerprint": "sha256:model-gate",
-                "summary": "Bounded model escalation is exhausted.",
-            },
-            {
-                "requirement_id": "another_requirement",
-                "role": "implementation-agent",
-                "fingerprint": "sha256:other",
-            },
-        ],
-    }
-
-    rerun_required = cli.resolve_retry_attention(workflow)
-
-    assert rerun_required is True
-    assert workflow["attention"]["summary"] == "Bounded model escalation is exhausted."
-    assert workflow["blockers"] == []
-    assert workflow["missing_requirement_requests"] == [
-        {
-            "requirement_id": "another_requirement",
-            "role": "implementation-agent",
-            "fingerprint": "sha256:other",
-        }
-    ]
-    assert workflow["expired_requirement_requests"][0]["resolution"] == "approval_expired"
-
-
-def test_retry_does_not_retire_an_unbound_model_requirement_request() -> None:
-    workflow = {
-        "attention": {
-            "required": True,
-            "summary": "Bounded model escalation is exhausted.",
-            "role": "implementation-agent",
-            "action": "answer",
-            "fingerprint": "sha256:current-model-gate",
-            "requirement": {
-                "requirement_id": "bounded_escalation_exhausted_model",
-            },
-        },
-        "blockers": ["approval expired"],
-        "missing_requirement_requests": [
-            {
-                "requirement_id": "bounded_escalation_exhausted_model",
-                "role": "implementation-agent",
-                "fingerprint": "sha256:different-model-gate",
+                "decision": "await_approval",
+                "execution_status": "blocked",
+                "checks_passed": False,
+                "blockers": ["F001"],
             }
-        ],
-    }
+        ),
+        encoding="utf-8",
+    )
+    (artifacts / "review.json").write_text(
+        json.dumps(
+            {
+                "verdict": "broken",
+                "repair_required": True,
+                "blockers": [{"id": "F001", "message": "review blocker"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifacts / "publication.json").write_text(
+        json.dumps({"commit_created": True, "commit_sha": "abc123"}),
+        encoding="utf-8",
+    )
 
-    assert cli.resolve_retry_attention(workflow) is True
-    assert len(workflow["missing_requirement_requests"]) == 1
-    assert "expired_requirement_requests" not in workflow
+    with pytest.raises(cli.CLIError, match="publication side effects"):
+        cli.false_completion_recovery_evidence(run_dir)
 
 
 @pytest.mark.parametrize("worker_command", ["status", "start", "restart", "stop"])

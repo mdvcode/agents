@@ -242,6 +242,105 @@ def test_approval_scope_is_exact_and_consumed_once(tmp_path: Path) -> None:
     assert len(replay["workflow"]["approval_grants"]) == 1
 
 
+def test_adaptive_budget_approval_preserves_completed_checkpoint_and_extends_bound(
+    tmp_path: Path,
+) -> None:
+    run = awaiting_run(tmp_path)
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    workflow_path = run / "workflow.json"
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    workflow.update(
+        {
+            "effective_mode": "adaptive",
+            "elapsed_seconds": 1_656,
+            "loops": {"review_repair": {"iterations": 0}},
+            "budget_action": {
+                "action": "require_approval",
+                "reason": "A hard execution bound is exhausted.",
+                "pressure": 1.38,
+                "exhausted_dimensions": ["elapsed_seconds"],
+            },
+            "roles": [
+                {"role": "reviewer", "result": {"status": "completed"}},
+                {"role": "approval-gate", "result": {"status": "awaiting_approval"}},
+            ],
+        }
+    )
+    write_json(workflow_path, workflow)
+    write_json(
+        run / "checkpoints" / "reviewer.json",
+        {
+            "run_id": "run-approval",
+            "role": "reviewer",
+            "state": "role_completed",
+            "attempt": 1,
+            "worktree": str(worktree),
+            "input_fingerprint": "task-fingerprint",
+            "output_fingerprint": "sha256:review-result",
+            "artifacts": ["review.json"],
+            "side_effects": [],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+    requested = request_approval(
+        run,
+        reason="Adaptive hard execution bound exhausted; execution is awaiting approval.",
+    )
+    approve_run(run, actor="reviewer")
+    resumed = prepare_resume(run)
+
+    assert requested["requested_scope"]["actions"] == [
+        "extend_execution_budget",
+        "resume_workflow",
+    ]
+    checkpoint = json.loads(
+        (run / "checkpoints" / "reviewer.json").read_text(encoding="utf-8")
+    )
+    assert checkpoint["state"] == "role_completed"
+    extension = resumed["workflow"]["adaptive_budget_extensions"][-1]
+    assert extension["approval_id"] == requested["approval_id"]
+    assert extension["dimensions"] == ["elapsed_seconds"]
+    assert extension["baselines"] == {"elapsed_seconds": 1_656}
+
+
+def test_legacy_adaptive_budget_approval_scope_still_records_extension(
+    tmp_path: Path,
+) -> None:
+    run = awaiting_run(tmp_path)
+    workflow_path = run / "workflow.json"
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    workflow.update(
+        {
+            "elapsed_seconds": 2_000,
+            "budget_action": {
+                "action": "require_approval",
+                "reason": "A hard execution bound is exhausted.",
+                "pressure": 1.67,
+                "exhausted_dimensions": ["elapsed_seconds"],
+            },
+        }
+    )
+    write_json(workflow_path, workflow)
+    requested = request_approval(
+        run,
+        reason="Adaptive hard execution bound exhausted; execution is awaiting approval.",
+        scope={
+            "actions": ["resume_workflow"],
+            "gate": "risk-classifier",
+        },
+    )
+    approve_run(run, actor="reviewer")
+
+    resumed = prepare_resume(run)
+
+    assert requested["requested_scope"]["actions"] == ["resume_workflow"]
+    extension = resumed["workflow"]["adaptive_budget_extensions"][-1]
+    assert extension["approval_id"] == requested["approval_id"]
+    assert extension["baselines"] == {"elapsed_seconds": 2_000}
+
+
 def test_approval_wait_does_not_exhaust_recovery_budget(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -276,6 +375,22 @@ def test_approval_wait_does_not_exhaust_recovery_budget(
 
 def test_rejection_blocks_workflow(tmp_path: Path) -> None:
     run = awaiting_run(tmp_path)
+    queue = TaskQueue(tmp_path / ".agent-queue" / "tasks.db")
+    queued = queue.enqueue(
+        task_key="approval-rejection",
+        payload={"task_id": "approval-rejection", "repository": str(tmp_path)},
+        run_id="run-approval",
+    )
+    claimed = queue.claim(worker_id="worker-1")
+    assert claimed is not None
+    assert queue.mark_running(queued.id, "worker-1")
+    queue.finish(
+        task_id=queued.id,
+        worker_id="worker-1",
+        status="awaiting_approval",
+        run_id="run-approval",
+        requires_human=True,
+    )
     request_approval(run, reason="review required")
 
     rejected = reject_run(run, actor="reviewer", reason="scope is unsafe")
@@ -284,6 +399,10 @@ def test_rejection_blocks_workflow(tmp_path: Path) -> None:
     assert rejected["status"] == "rejected"
     assert workflow["execution_status"] == "blocked"
     assert workflow["blockers"] == ["approval rejected: scope is unsafe"]
+    rejected_task = queue.get(queued.id)
+    assert rejected_task is not None
+    assert rejected_task.status == "blocked"
+    assert rejected_task.exception_reason == "approval rejected: scope is unsafe"
 
 
 def test_expired_approval_cannot_resume(tmp_path: Path) -> None:

@@ -13,6 +13,14 @@ from ai_harness.execution_accounting import (
 )
 
 
+HARD_BUDGET_DIMENSIONS = frozenset(
+    {"elapsed_seconds", "repair_attempts", "model_escalations"}
+)
+INCLUSIVE_ALLOWANCE_DIMENSIONS = frozenset(
+    {"repair_attempts", "model_escalations"}
+)
+
+
 class BudgetAction(StrEnum):
     CONTINUE = "continue"
     ECONOMY = "economy"
@@ -79,6 +87,43 @@ class BudgetUsage:
             input_tokens=input_tokens,
         )
 
+    @classmethod
+    def for_enforcement(cls, state: Mapping[str, Any]) -> "BudgetUsage":
+        """Return usage within the latest explicitly approved hard-budget windows."""
+
+        usage = cls.from_state(state)
+        values = usage.as_dict()
+        extensions = state.get("adaptive_budget_extensions", [])
+        if not isinstance(extensions, list):
+            return usage
+        baselines: dict[str, int] = {}
+        for extension in extensions:
+            if not isinstance(extension, dict):
+                continue
+            dimensions = extension.get("dimensions", [])
+            extension_baselines = extension.get("baselines", {})
+            if not isinstance(dimensions, list) or not isinstance(extension_baselines, dict):
+                continue
+            for dimension in dimensions:
+                if not isinstance(dimension, str) or dimension not in HARD_BUDGET_DIMENSIONS:
+                    continue
+                baseline = extension_baselines.get(dimension)
+                current = values[dimension]
+                if (
+                    not isinstance(baseline, (int, float))
+                    or isinstance(baseline, bool)
+                    or baseline < 0
+                    or baseline > current
+                ):
+                    continue
+                baselines[dimension] = max(
+                    baselines.get(dimension, 0),
+                    int(baseline),
+                )
+        for dimension, baseline in baselines.items():
+            values[dimension] = max(0, values[dimension] - baseline)
+        return cls(**values)
+
 
 @dataclass(frozen=True)
 class BudgetDecision:
@@ -134,7 +179,17 @@ class BudgetController:
             for field, limit in self.limits.items()
         }
         pressure = max(ratios.values(), default=0.0)
-        exhausted = tuple(sorted(field for field, ratio in ratios.items() if ratio >= 1.0))
+        exhausted = tuple(
+            sorted(
+                field
+                for field, ratio in ratios.items()
+                if (
+                    ratio > 1.0
+                    if field in INCLUSIVE_ALLOWANCE_DIMENSIONS
+                    else ratio >= 1.0
+                )
+            )
+        )
         hard_exhausted = tuple(
             field for field in exhausted if field not in self.SOFT_FIELDS
         )

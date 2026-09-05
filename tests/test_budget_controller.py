@@ -50,6 +50,34 @@ def test_hard_budget_exhaustion_still_requires_approval() -> None:
     assert decision.exhausted_dimensions == ("elapsed_seconds",)
 
 
+def test_hard_count_budgets_allow_the_configured_number_before_stopping() -> None:
+    controller = BudgetController(LIMITS)
+
+    last_allowed_repair = controller.assess(
+        BudgetUsage(repair_attempts=LIMITS["max_repair_attempts"]),
+        mandatory_role=True,
+    )
+    excess_repair = controller.assess(
+        BudgetUsage(repair_attempts=LIMITS["max_repair_attempts"] + 1),
+        mandatory_role=True,
+    )
+    last_allowed_escalation = controller.assess(
+        BudgetUsage(model_escalations=LIMITS["max_model_escalations"]),
+        mandatory_role=True,
+    )
+    excess_escalation = controller.assess(
+        BudgetUsage(model_escalations=LIMITS["max_model_escalations"] + 1),
+        mandatory_role=True,
+    )
+
+    assert last_allowed_repair.action != BudgetAction.REQUIRE_APPROVAL
+    assert last_allowed_escalation.action != BudgetAction.REQUIRE_APPROVAL
+    assert excess_repair.action == BudgetAction.REQUIRE_APPROVAL
+    assert excess_repair.exhausted_dimensions == ("repair_attempts",)
+    assert excess_escalation.action == BudgetAction.REQUIRE_APPROVAL
+    assert excess_escalation.exhausted_dimensions == ("model_escalations",)
+
+
 def test_usage_counts_uncached_tokens_model_calls_repairs_and_escalations() -> None:
     state = {
         "elapsed_seconds": 42,
@@ -77,46 +105,47 @@ def test_usage_counts_uncached_tokens_model_calls_repairs_and_escalations() -> N
     assert usage.model_escalations == 1
 
 
-def test_usage_ignores_terminal_selection_and_completed_checkpoint_replay() -> None:
-    actual_result = {
-        "input_tokens": 100,
-        "cached_input_tokens": 20,
-        "output_tokens": 10,
-    }
+def test_enforcement_usage_applies_only_approved_hard_budget_extensions() -> None:
     state = {
+        "elapsed_seconds": 2_100,
+        "loops": {"review_repair": {"iterations": 3}},
         "roles": [
             {
-                "role": "implementation-agent",
                 "llm_invoked": True,
-                "execution_profile": {"escalation_level": 1},
-                "result": actual_result,
-            },
+                "result": {"input_tokens": 1000, "cached_input_tokens": 250},
+            }
+        ],
+        "adaptive_budget_extensions": [
             {
-                "role": "implementation-agent",
-                "llm_invoked": True,
-                "execution_profile": {
-                    "escalation_level": 2,
-                    "terminal_action": "human_or_dead_letter",
-                },
-                "result": {"status": "awaiting_approval", "tokens_used": 0},
-            },
-            {
-                "role": "implementation-agent",
-                "llm_invoked": False,
-                "cache_provenance": "completed_checkpoint_replay",
-                "result": actual_result,
-            },
-            {
-                "role": "approval-gate",
-                "llm_invoked": False,
-                "result": {"status": "awaiting_approval"},
-            },
-        ]
+                "approval_id": "duration-extension",
+                "dimensions": ["elapsed_seconds", "repair_attempts"],
+                "baselines": {"elapsed_seconds": 1_800, "repair_attempts": 2},
+            }
+        ],
     }
 
-    usage = BudgetUsage.from_state(state)
+    usage = BudgetUsage.for_enforcement(state)
 
+    assert usage.elapsed_seconds == 300
+    assert usage.repair_attempts == 1
     assert usage.model_calls == 1
-    assert usage.uncached_input_tokens == 80
-    assert usage.output_tokens == 10
-    assert usage.model_escalations == 1
+    assert usage.uncached_input_tokens == 750
+
+
+def test_enforcement_usage_does_not_extend_an_unapproved_dimension() -> None:
+    state = {
+        "elapsed_seconds": 2_100,
+        "loops": {"review_repair": {"iterations": 3}},
+        "adaptive_budget_extensions": [
+            {
+                "approval_id": "duration-only",
+                "dimensions": ["elapsed_seconds"],
+                "baselines": {"elapsed_seconds": 1_800, "repair_attempts": 2},
+            }
+        ],
+    }
+
+    usage = BudgetUsage.for_enforcement(state)
+
+    assert usage.elapsed_seconds == 300
+    assert usage.repair_attempts == 3

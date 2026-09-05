@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -48,6 +49,22 @@ def test_context_manifest_references_role_scoped_skills(tmp_path: Path) -> None:
     assert manifest["repo_intelligence"]["context_engine"]["algorithm"] == "rule_based_keyword_v1"
     assert Path(manifest["context_package_path"]).is_file()
     assert Path(manifest["context_log_path"]).is_file()
+    package = Path(manifest["context_package_path"]).read_text(encoding="utf-8")
+    assert manifest["context_engine_version"] == 2
+    assert manifest["context_revision"].startswith("sha256:")
+    assert manifest["effective_context_digest"] == (
+        "sha256:" + hashlib.sha256(package.encode("utf-8")).hexdigest()
+    )
+    inspector = manifest["context_inspector"]
+    assert inspector["included"] == manifest["selected_context"]
+    assert inspector["excluded"] == manifest["excluded_context"]
+    assert inspector["summary"]["included_count"] == len(manifest["selected_context"])
+    assert inspector["summary"]["excluded_count"] == len(manifest["excluded_context"])
+    assert all(
+        item["privacy"] in {"public", "project-private", "local-only", "secret-never-model"}
+        and item["trust"] in {"trusted", "untrusted-reference"}
+        for item in manifest["selected_context"] + manifest["excluded_context"]
+    )
 
 
 def test_context_manifest_records_role_capabilities_and_contract(tmp_path: Path) -> None:

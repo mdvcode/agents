@@ -15,6 +15,7 @@
 - Milestone PR1 production runtime: every locally verifiable requirement, all 20 chaos scenarios, runtime preflight, and real Codex smoke are complete; only the user-excluded real 30-task multi-hour soak remains the production-readiness gate.
 
 ## Done
+- Tweebit v0.4.1 context foundation: complete-source cache revision, exact Effective Context digest, normalized Inspector evidence with privacy/trust labels, reference-only authority marking, packaged skills/templates, and verified wheel contents.
 - Dashboard history controls: browser-local clear/restore now hides only completed/cancelled task rows while retaining active work, actionable failures, queue state, run artifacts, and audit evidence.
 - Token-budget continuity: cumulative token/model-call ceilings now select automatic economy execution or optional-role shedding without blocking mandatory work; hard safety, duration, retry, escalation, and no-progress bounds remain enforced.
 - Full execution reliability audit: managed SDK startup, cross-scope context, technical blocker routing, pre-workflow recovery, local-only completion, truthful recovery/token status, file lifecycle, 504 repository tests, real SDK smoke, and two installed end-to-end completions.

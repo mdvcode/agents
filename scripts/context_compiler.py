@@ -3,10 +3,10 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
-import os
+import json
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -196,6 +196,14 @@ def skill_references(role: str, project_profile: str) -> list[dict[str, str]]:
     return refs
 
 
+def inspection_counts(items: Sequence[dict[str, Any]], field: str) -> dict[str, int]:
+    return dict(
+        sorted(
+            Counter(str(item.get(field, "unknown")) for item in items).items()
+        )
+    )
+
+
 def create_context_manifest(
     *,
     run_id: str,
@@ -257,6 +265,8 @@ def create_context_manifest(
     package_path.write_text(context.package, encoding="utf-8")
     selected_context = list(context.log.get("selected", []))
     excluded_context = list(context.log.get("excluded", []))
+    context_revision = str(context.log.get("context_revision", ""))
+    effective_context_digest = str(context.log.get("effective_context_digest", ""))
     candidate_paths = sorted(
         {
             f"{item.get('source', '')}:{item.get('path', '')}"
@@ -325,7 +335,25 @@ def create_context_manifest(
                 "excluded_count": len(excluded_context),
             }
         },
-        "context_engine_version": 1,
+        "context_engine_version": 2,
+        "context_revision": context_revision,
+        "effective_context_digest": effective_context_digest,
+        "context_inspector": {
+            "context_revision": context_revision,
+            "effective_context_digest": effective_context_digest,
+            "runtime_destination": runtime,
+            "included": selected_context,
+            "excluded": excluded_context,
+            "summary": {
+                "included_count": len(selected_context),
+                "excluded_count": len(excluded_context),
+                "used_tokens": context.tokens_used,
+                "token_budget": context.token_budget,
+                "privacy": inspection_counts(selected_context + excluded_context, "privacy"),
+                "trust": inspection_counts(selected_context + excluded_context, "trust"),
+                "exclusion_reasons": inspection_counts(excluded_context, "reason_code"),
+            },
+        },
         "context_cache": dict(context.log.get("cache", {})),
         "context_layers": context_layers,
         "artifact_snapshot": current_artifact_snapshot,

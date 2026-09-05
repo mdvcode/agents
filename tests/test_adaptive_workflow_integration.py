@@ -16,7 +16,12 @@ def write_json(path: Path, value: dict[str, object]) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
-def plan(path: Path, *, max_model_calls: int = 5) -> None:
+def plan(
+    path: Path,
+    *,
+    max_model_calls: int = 5,
+    max_duration_seconds: int = 1_800,
+) -> None:
     write_json(
         path,
         {
@@ -44,7 +49,7 @@ def plan(path: Path, *, max_model_calls: int = 5) -> None:
                 "max_model_calls": max_model_calls,
                 "max_uncached_input_tokens": 80000,
                 "max_output_tokens": 25000,
-                "max_duration_seconds": 1800,
+                "max_duration_seconds": max_duration_seconds,
                 "max_repair_attempts": 3,
                 "max_model_escalations": 2
             }
@@ -161,9 +166,101 @@ def test_adaptive_router_ignores_historical_repair_counters(tmp_path: Path) -> N
     assert route["next_role"] == "security-agent"
 
 
-def test_adaptive_review_repair_reruns_originating_architecture_verifier(
+def test_approved_hard_bound_window_runs_one_complete_review_repair_iteration(
     tmp_path: Path,
 ) -> None:
+    plan_path = tmp_path / "execution-plan.json"
+    plan(plan_path, max_duration_seconds=1_200)
+    artifacts = tmp_path / "artifacts"
+    write_json(
+        artifacts / "risk.json",
+        {
+            "risk_class": "low",
+            "changed_areas": [],
+            "high_risk_triggers": [],
+            "protected_paths_touched": [],
+            "protected_actions_required": [],
+            "reasons": [],
+            "autonomy_allowed": {},
+        },
+    )
+    write_json(
+        artifacts / "review.json",
+        {
+            "verdict": "broken",
+            "status": "block",
+            "blockers": ["F001: version endpoint returns 200 for a missing version"],
+            "repair_required": True,
+        },
+    )
+    workflow = state(
+        plan_path,
+        [
+            "issue-intake",
+            "context-compiler",
+            "implementation-agent",
+            "quality-runner",
+            "security-agent",
+            "reviewer",
+        ],
+    )
+    workflow.update(
+        {
+            "elapsed_seconds": 1_656,
+            "adaptive_budget_extensions": [
+                {
+                    "approval_id": "duration-extension",
+                    "dimensions": ["elapsed_seconds"],
+                    "baselines": {"elapsed_seconds": 1_656},
+                }
+            ],
+            "approval_override": {
+                "approval_id": "duration-extension",
+                "gate": "reviewer",
+                "scope": {
+                    "actions": ["extend_execution_budget", "resume_workflow"],
+                    "gate": "reviewer",
+                },
+            },
+        }
+    )
+
+    repair = decide_next_role(
+        current_role="reviewer",
+        role_result={"status": "completed", "next_action": "repair"},
+        run_dir=tmp_path,
+        artifacts_dir=artifacts,
+        workflow_state=workflow,
+    )
+
+    assert repair["next_role"] == "implementation-agent"
+    assert repair["stop"] is False
+    assert "approval_override" not in workflow
+
+    workflow["roles"].append(
+        {
+            "role": "implementation-agent",
+            "llm_invoked": True,
+            "result": {"status": "completed", "tokens_used": 1},
+        }
+    )
+    workflow["role_count"] = len(workflow["roles"])
+    workflow["elapsed_seconds"] = 1_700
+    workflow["last_route"] = repair
+
+    verify_repair = decide_next_role(
+        current_role="implementation-agent",
+        role_result={"status": "completed", "next_action": "continue"},
+        run_dir=tmp_path,
+        artifacts_dir=artifacts,
+        workflow_state=workflow,
+    )
+
+    assert verify_repair["next_role"] == "quality-runner"
+    assert verify_repair["stop"] is False
+
+
+def test_adaptive_blocked_verdict_reruns_stale_gates_after_repair(tmp_path: Path) -> None:
     plan_path = tmp_path / "execution-plan.json"
     plan(plan_path)
     artifacts = tmp_path / "artifacts"
@@ -179,25 +276,47 @@ def test_adaptive_review_repair_reruns_originating_architecture_verifier(
             "autonomy_allowed": {},
         },
     )
+    write_json(
+        artifacts / "review.json",
+        {
+            "verdict": "broken",
+            "status": "block",
+            "blockers": ["F001: stale review"],
+            "repair_required": True,
+        },
+    )
+    write_json(
+        artifacts / "verdict.json",
+        {
+            "decision": "await_approval",
+            "execution_status": "blocked",
+            "checks_passed": False,
+            "blockers": ["F001: stale review"],
+        },
+    )
     workflow = state(
         plan_path,
-        ["issue-intake", "context-compiler", "implementation-agent"],
+        [
+            "issue-intake",
+            "context-compiler",
+            "implementation-agent",
+            "quality-runner",
+            "security-agent",
+            "reviewer",
+            "orchestrator",
+            "implementation-agent",
+            "orchestrator",
+        ],
     )
-    workflow["last_route"] = {
-        "next_role": "implementation-agent",
-        "loop": {
-            "name": "review_repair",
-            "verification_role": "architecture-consistency-agent",
-        },
-    }
+    workflow["loops"]["review_repair"] = {"iterations": 1}  # type: ignore[index]
 
-    route = decide_next_role(
-        current_role="implementation-agent",
+    reroute = decide_next_role(
+        current_role="orchestrator",
         role_result={"status": "completed"},
         run_dir=tmp_path,
         artifacts_dir=artifacts,
         workflow_state=workflow,
     )
 
-    assert route["next_role"] == "architecture-consistency-agent"
-    assert route["publication_allowed"] is False
+    assert reroute["next_role"] == "quality-runner"
+    assert reroute["stop"] is False

@@ -27,7 +27,7 @@ Independent subtask proposal -> deterministic role/scope/depth/budget validation
 
 A blocking compiler/test failure remains in the parent run's bounded sequential repair loop. Child work is reserved for independent progress. Automatic child writers are same-repository and path-scoped; cross-repository work is expressed explicitly through batch intake. Fan-out is at most three children and depth is at most two.
 
-Approval required -> run-scoped request and checkpoint fingerprint -> exact-scope human decision -> consume once -> queue existing run id -> resume same worktree/checkpoint -> continue deterministic gates.
+Approval required -> run-scoped request and checkpoint fingerprint -> exact-scope human decision -> consume once -> queue existing run id -> resume same worktree/checkpoint -> preserve completed role output for deterministic routing -> when a hard budget was extended, enforce a fresh window only for its exhausted dimensions -> continue every independent risk/security/verification/publication gate.
 
 Missing information -> role returns `awaiting_approval` with a concrete question and optional 2-3 structured choices -> workflow and queue preserve `ATTENTION REQUIRED` details -> dashboard/status/watch show the choices plus a custom-answer path -> `agent answer <run-id> ...` records sanitized private input -> consumes only the matching scoped continuation gate -> same run/checkpoint resumes with the answer in its role prompt -> a repeated fingerprint after an answer stops as a visible technical blocker instead of opening another question gate.
 

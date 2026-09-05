@@ -1546,65 +1546,17 @@ def reset_role_checkpoint_for_rerun(run_dir: Path, workflow: dict[str, Any]) -> 
     workflow["resume_role"] = role
 
 
-def resolve_retry_attention(workflow: dict[str, Any]) -> bool:
-    """Clear repaired retry state and return whether the current role must rerun."""
+def archive_recovery_attention(workflow: dict[str, Any]) -> None:
+    """Resolve the active technical stop while retaining its audit history."""
 
-    attention = workflow.get("attention")
-    if not isinstance(attention, dict) or attention.get("action") != "fix_then_retry":
-        blockers = workflow.get("blockers", [])
-        approval_expired = isinstance(blockers, list) and any(
-            str(item).strip() == "approval expired" for item in blockers
-        )
-        requirement = attention.get("requirement", {}) if isinstance(attention, dict) else {}
-        if (
-            approval_expired
-            and isinstance(requirement, dict)
-            and requirement.get("requirement_id") == "bounded_escalation_exhausted_model"
-            and attention.get("summary") == "Bounded model escalation is exhausted."
-            and attention.get("role") in {"implementation-agent", "ci-repair-agent"}
-        ):
-            requests = workflow.get("missing_requirement_requests", [])
-            if isinstance(requests, list):
-                retained: list[Any] = []
-                expired: list[Any] = []
-                attention_fingerprint = str(attention.get("fingerprint", ""))
-                for request in requests:
-                    matches = bool(
-                        isinstance(request, dict)
-                        and request.get("requirement_id")
-                        == "bounded_escalation_exhausted_model"
-                        and request.get("role") == attention.get("role")
-                        and bool(attention_fingerprint)
-                        and request.get("fingerprint") == attention_fingerprint
-                    )
-                    (expired if matches else retained).append(request)
-                workflow["missing_requirement_requests"] = retained
-                if expired:
-                    history = workflow.get("expired_requirement_requests", [])
-                    if not isinstance(history, list):
-                        history = []
-                    expired_at = datetime.now(timezone.utc).isoformat()
-                    history.extend(
-                        {
-                            **request,
-                            "expired_at": expired_at,
-                            "resolution": "approval_expired",
-                        }
-                        for request in expired
-                        if isinstance(request, dict)
-                    )
-                    workflow["expired_requirement_requests"] = history[-50:]
-        if isinstance(blockers, list):
-            workflow["blockers"] = [
-                item for item in blockers if str(item).strip() != "approval expired"
-            ]
-        return True
-    details = attention.get("details", [])
+    attention = workflow.pop("attention", None)
+    if not isinstance(attention, dict):
+        return
     active_values = {str(attention.get("summary", "")).strip()}
+    details = attention.get("details", [])
     if isinstance(details, list):
         active_values.update(str(item).strip() for item in details)
     active_values.discard("")
-    workflow.pop("attention", None)
     history = workflow.get("attention_history", [])
     if not isinstance(history, list):
         history = []
@@ -1613,27 +1565,250 @@ def resolve_retry_attention(workflow: dict[str, Any]) -> bool:
             **attention,
             "required": False,
             "resolved_at": datetime.now(timezone.utc).isoformat(),
-            "resolution": "retry_requested",
+            "resolution": "manual_recovery",
         }
     )
     workflow["attention_history"] = history[-50:]
     blockers = workflow.get("blockers", [])
     if isinstance(blockers, list):
         workflow["blockers"] = [
-            item for item in blockers if str(item).strip() not in active_values
+            item
+            for item in blockers
+            if str(item).strip() not in active_values
+            and not str(item).strip().startswith("approval rejected:")
         ]
-    role = str(attention.get("role", workflow.get("current_role", "")))
-    roles = workflow.get("roles", [])
-    if isinstance(roles, list):
-        for checkpoint in reversed(roles):
-            if not isinstance(checkpoint, dict) or checkpoint.get("role") != role:
-                continue
-            result = checkpoint.get("result", {})
-            completed = isinstance(result, dict) and result.get("status") == "completed"
-            if completed:
-                workflow["resume_role"] = role
-            return not completed
-    return True
+
+
+def _artifact_blockers(value: Any) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    raw = value.get("blockers") or value.get("blocker_ids", [])
+    if isinstance(raw, (str, int)):
+        return [str(raw)]
+    if not isinstance(raw, list):
+        return []
+    blockers: list[str] = []
+    for item in raw:
+        if isinstance(item, (str, int)):
+            blockers.append(str(item))
+        elif isinstance(item, dict):
+            finding_id = str(item.get("id", "")).strip()
+            message = str(item.get("message", item.get("description", ""))).strip()
+            if finding_id or message:
+                blockers.append(
+                    ": ".join(value for value in (finding_id, message) if value)
+                )
+    return blockers
+
+
+def _read_recovery_artifact(path: Path, *, required: bool) -> dict[str, Any]:
+    if path.is_symlink():
+        raise CLIError(f"refusing to trust recovery evidence through {path.name} symlink")
+    if not path.exists():
+        if required:
+            raise CLIError(f"cannot reconcile false completion without {path.name}")
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CLIError(f"cannot trust invalid recovery evidence in {path.name}") from exc
+    if not isinstance(value, dict) or not value:
+        raise CLIError(f"cannot trust invalid recovery evidence in {path.name}")
+    return value
+
+
+def _publication_side_effects(publication: dict[str, Any]) -> list[str]:
+    effects = [
+        field
+        for field in (
+            "commit_created",
+            "branch_pushed",
+            "push_completed",
+            "pr_created_or_updated",
+        )
+        if publication.get(field) is True
+    ]
+    effects.extend(
+        field
+        for field in ("commit_sha", "pr_url")
+        if str(publication.get(field, "")).strip()
+    )
+    if publication.get("execution_status") in {
+        "committed",
+        "pushed",
+        "pr_published",
+        "completed",
+    }:
+        effects.append(f"execution_status={publication['execution_status']}")
+    return effects
+
+
+def false_completion_recovery_evidence(run_dir: Path) -> dict[str, str]:
+    """Prove that a completed run is actually blocked and safe to resume at review."""
+
+    verdict = _read_recovery_artifact(
+        run_dir / "artifacts" / "verdict.json", required=True
+    )
+    verdict_blocked = (
+        verdict.get("decision") in {"await_approval", "blocked", "reject"}
+        or verdict.get("execution_status") in {"awaiting_approval", "blocked", "failed"}
+        or verdict.get("checks_passed") is False
+        or bool(_artifact_blockers(verdict))
+    )
+    if not verdict or not verdict_blocked:
+        raise CLIError(
+            "cannot recover a terminal completed task: its verdict does not prove a false completion"
+        )
+    publication = _read_recovery_artifact(
+        run_dir / "artifacts" / "publication.json", required=False
+    )
+    publication_effects = _publication_side_effects(publication)
+    if publication_effects:
+        raise CLIError(
+            "cannot reconcile false completion after publication side effects: "
+            + ", ".join(publication_effects)
+        )
+    if (run_dir / "checkpoints" / "publication.json").is_symlink():
+        raise CLIError("refusing to trust a publication checkpoint symlink")
+    try:
+        publication_checkpoint = read_checkpoint(run_dir, "publication")
+    except (OSError, ValueError) as exc:
+        raise CLIError(f"cannot reconcile false completion: {exc}") from exc
+    if publication_checkpoint is None or publication_checkpoint.state != "role_completed":
+        raise CLIError(
+            "cannot reconcile false completion without a completed publication checkpoint"
+        )
+    if publication_checkpoint.side_effects:
+        raise CLIError(
+            "cannot reconcile false completion after publication side effects: "
+            + ", ".join(publication_checkpoint.side_effects)
+        )
+    review = _read_recovery_artifact(
+        run_dir / "artifacts" / "review.json", required=True
+    )
+    review_blocked = (
+        review.get("repair_required") is True
+        or review.get("verdict") == "broken"
+        or review.get("status") in {"block", "blocked", "fail", "failed"}
+    ) and bool(_artifact_blockers(review))
+    if (run_dir / "checkpoints" / "reviewer.json").is_symlink():
+        raise CLIError("refusing to trust a reviewer checkpoint symlink")
+    try:
+        reviewer_checkpoint = read_checkpoint(run_dir, "reviewer")
+    except (OSError, ValueError) as exc:
+        raise CLIError(f"cannot reconcile false completion: {exc}") from exc
+    if (
+        not review_blocked
+        or reviewer_checkpoint is None
+        or reviewer_checkpoint.state != "role_completed"
+    ):
+        raise CLIError(
+            "cannot reconcile false completion without a completed blocked reviewer checkpoint"
+        )
+    evidence_payload = {
+        "verdict": verdict,
+        "review": review,
+        "publication_checkpoint": publication_checkpoint.as_json(),
+        "reviewer_checkpoint": reviewer_checkpoint.as_json(),
+    }
+    fingerprint = "sha256:" + hashlib.sha256(
+        json.dumps(evidence_payload, sort_keys=True, ensure_ascii=True).encode("utf-8")
+    ).hexdigest()
+    return {"resume_role": "reviewer", "evidence_fingerprint": fingerprint}
+
+
+def _write_workflow_atomic(path: Path, workflow: dict[str, Any]) -> None:
+    temporary = path.with_suffix(".json.tmp")
+    if path.is_symlink() or temporary.is_symlink():
+        raise CLIError("refusing to update workflow state through a symbolic link")
+    with temporary.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps(workflow, indent=2, ensure_ascii=False) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(path)
+
+
+def prepare_false_completion_recovery(
+    workflow: dict[str, Any],
+    *,
+    evidence: dict[str, str],
+) -> dict[str, Any]:
+    """Invalidate downstream false-success history and resume cached review routing."""
+
+    reconciled = json.loads(json.dumps(workflow))
+    resume_role = evidence["resume_role"]
+    roles = reconciled.get("roles", [])
+    if not isinstance(roles, list):
+        raise CLIError("cannot reconcile false completion with invalid role history")
+    reviewer_indexes = [
+        index
+        for index, entry in enumerate(roles)
+        if isinstance(entry, dict)
+        and entry.get("role") == resume_role
+        and isinstance(entry.get("result"), dict)
+        and entry["result"].get("status") == "completed"
+    ]
+    if not reviewer_indexes:
+        raise CLIError("cannot reconcile false completion without cached reviewer output")
+    reconciled["roles"] = roles[: reviewer_indexes[-1] + 1]
+    reconciled["role_count"] = sum(
+        1
+        for entry in reconciled["roles"]
+        if isinstance(entry, dict)
+        and entry.get("role") != "approval-gate"
+        and entry.get("checkpoint_replayed") is not True
+    )
+    skipped = reconciled.get("budget_skipped_roles", [])
+    if isinstance(skipped, list):
+        reconciled["budget_skipped_roles"] = [
+            role
+            for role in skipped
+            if role not in {"orchestrator", "publication-prepare", "publication"}
+        ]
+    completed = reconciled.get("completed_roles", [])
+    if isinstance(completed, list):
+        reconciled["completed_roles"] = [
+            role
+            for role in completed
+            if role not in {"orchestrator", "publication-prepare", "publication"}
+        ]
+    reconciled["execution_status"] = "resuming"
+    reconciled["current_role"] = resume_role
+    reconciled["resume_role"] = resume_role
+    reconciled["recovery_action"] = "reconcile_false_completion"
+    reconciled["blockers"] = []
+    reconciled.pop("attention", None)
+    reconciled["last_route"] = {
+        "next_role": "approval-gate",
+        "reason": "Re-evaluate the completed reviewer checkpoint after false completion reconciliation.",
+        "stop": True,
+        "publication_allowed": False,
+        "loop": None,
+        "warnings": [],
+    }
+    recovery = reconciled.get("recovery", {})
+    if not isinstance(recovery, dict):
+        recovery = {}
+    recovery.update(
+        {
+            "attempts": 0,
+            "consecutive_failures": 0,
+            "resume_attempts": 0,
+            "elapsed_seconds": 0,
+            "started_at": datetime.now(timezone.utc).timestamp(),
+            "attempts_by_kind": {},
+            "false_completion_reconciliation": {
+                "reconciled_at": datetime.now(timezone.utc).isoformat(),
+                "resume_role": resume_role,
+                "evidence_fingerprint": evidence["evidence_fingerprint"],
+            },
+        }
+    )
+    reconciled["recovery"] = recovery
+    reconciled["manual_recovery_count"] = int(
+        reconciled.get("manual_recovery_count", 0) or 0
+    ) + 1
+    return reconciled
 
 
 def resolve_answer_attention(run_dir: Path) -> None:
@@ -2381,6 +2556,40 @@ def handle_recovery_command(args: argparse.Namespace) -> int:
         raise CLIError("an awaiting_approval run must be continued with `agent approve`")
     task_queue = load_harness_module(root, "task_queue")
     queue = task_queue.TaskQueue(root / ".agent-queue" / "tasks.db")
+    if (
+        args.command in {"retry", "resume"}
+        and workflow_exists
+        and workflow.get("execution_status") == "completed"
+    ):
+        evidence = false_completion_recovery_evidence(run_dir)
+        reconciled = prepare_false_completion_recovery(workflow, evidence=evidence)
+        original_workflow = workflow_path.read_text(encoding="utf-8")
+        _write_workflow_atomic(workflow_path, reconciled)
+        try:
+            record = queue.reconcile_false_completion(
+                args.run_id,
+                resume_role=evidence["resume_role"],
+                evidence_fingerprint=evidence["evidence_fingerprint"],
+            )
+        except (ValueError, RuntimeError) as exc:
+            _write_workflow_atomic(workflow_path, json.loads(original_workflow))
+            raise CLIError(str(exc)) from exc
+        emit(
+            {
+                "status": record.status,
+                "run_id": args.run_id,
+                "queue_task_id": record.id,
+                "action": "reconcile_false_completion",
+                "resume_role": evidence["resume_role"],
+            },
+            as_json=args.json,
+            lines=(
+                f"Run {args.run_id}: {record.status}",
+                "  action: reconcile_false_completion",
+                f"  resume role: {evidence['resume_role']}",
+            ),
+        )
+        return 0
     try:
         write_workflow = workflow_exists
         if args.command == "abort":
@@ -2395,6 +2604,7 @@ def handle_recovery_command(args: argparse.Namespace) -> int:
             if workflow_exists:
                 workflow["execution_status"] = "retry_wait" if args.command == "retry" else "resuming"
                 workflow["recovery_action"] = args.command
+                archive_recovery_attention(workflow)
                 if args.command == "retry":
                     if resolve_retry_attention(workflow):
                         reset_role_checkpoint_for_rerun(run_dir, workflow)

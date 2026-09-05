@@ -110,32 +110,9 @@ def adaptive_next_role(
     nodes = plan.get("nodes", [])
     if not isinstance(nodes, list) or not nodes:
         return None
-    if current_role == "implementation-agent":
-        # Only the route that immediately dispatched this implementation run may
-        # request a verifier re-run. Historical loop counters remain non-zero for
-        # audit purposes and must not keep pulling the DAG back into an old loop.
-        last_route = state.get("last_route", {})
-        active_loop = last_route.get("loop", {}) if isinstance(last_route, dict) else {}
-        loop_name = str(active_loop.get("name", "")) if isinstance(active_loop, dict) else ""
-        repair_targets = {
-            "security_repair": "security-agent",
-            "quality_repair": "quality-runner",
-            "review_repair": "reviewer",
-            "frontend_verification_repair": "frontend-qa-agent",
-        }
-        target = repair_targets.get(loop_name)
-        if loop_name == "review_repair":
-            verification_role = str(active_loop.get("verification_role", ""))
-            if verification_role in VERIFIER_ARTIFACTS:
-                target = verification_role
-        if target:
-            return target, f"Adaptive {loop_name} requires re-running {target}."
-    completed = completed_roles(state)
-    skipped = state.get("budget_skipped_roles", [])
-    if isinstance(skipped, list):
-        completed.update(str(role) for role in skipped if isinstance(role, str))
+    completed = adaptive_completed_roles(state, nodes)
     controller = BudgetController.from_plan(plan)
-    usage = BudgetUsage.from_state(state)
+    usage = BudgetUsage.for_enforcement(state)
     for raw in nodes:
         if not isinstance(raw, dict):
             continue
@@ -253,6 +230,46 @@ def completed_roles(state: dict[str, Any]) -> set[str]:
         if isinstance(result, dict) and result.get("status") == "completed":
             completed.add(str(entry["role"]))
     return completed
+
+
+def adaptive_completed_roles(state: dict[str, Any], nodes: list[Any]) -> set[str]:
+    """Return DAG nodes whose latest success is newer than every dependency."""
+
+    latest_positions: dict[str, int] = {}
+    for index, entry in enumerate(_role_entries(state)):
+        result = entry.get("result", {})
+        if isinstance(result, dict) and result.get("status") == "completed":
+            latest_positions[str(entry["role"])] = index
+    skipped = state.get("budget_skipped_roles", [])
+    skipped_roles = (
+        {str(role) for role in skipped if isinstance(role, str)}
+        if isinstance(skipped, list)
+        else set()
+    )
+    fresh: set[str] = set()
+    for raw in nodes:
+        if not isinstance(raw, dict):
+            continue
+        role = str(raw.get("role", raw.get("id", "")))
+        dependencies = {
+            str(value)
+            for value in raw.get("dependencies", [])
+            if isinstance(value, str)
+        }
+        if not role or not dependencies <= fresh:
+            continue
+        if role in skipped_roles:
+            fresh.add(role)
+            continue
+        position = latest_positions.get(role, -1)
+        if position < 0:
+            continue
+        if all(
+            position >= latest_positions.get(dependency, -1)
+            for dependency in dependencies
+        ):
+            fresh.add(role)
+    return fresh
 
 
 def _role_result(state: dict[str, Any], role: str) -> dict[str, Any]:
@@ -417,7 +434,25 @@ def _blocker_values(value: Any) -> list[str]:
     if isinstance(value, dict):
         for key in ("blocker_ids", "security_blocker_ids", "review_blocker_ids", "blockers", "errors"):
             if key in value:
-                return _list_values(value[key])
+                raw = value[key]
+                if not isinstance(raw, list):
+                    return _list_values(raw)
+                normalized: list[str] = []
+                for item in raw:
+                    if isinstance(item, (str, int)):
+                        normalized.append(str(item))
+                        continue
+                    if not isinstance(item, dict):
+                        continue
+                    finding_id = str(item.get("id", "")).strip()
+                    message = str(
+                        item.get("message", item.get("description", ""))
+                    ).strip()
+                    if finding_id and message:
+                        normalized.append(f"{finding_id}: {message}")
+                    elif message or finding_id:
+                        normalized.append(message or finding_id)
+                return normalized
     return _list_values(value)
 
 
@@ -656,7 +691,28 @@ def verifier_environment_unavailable(artifacts_dir: Path, artifact_name: str) ->
     artifact = _artifact(artifacts_dir, artifact_name)
     if not isinstance(artifact, dict):
         return False
-    return verifier_artifact_unavailable(artifact)
+    markers = (
+        "unavailable",
+        "missing dependenc",
+        "command not found",
+        "browser",
+        "playwright",
+        "read-only",
+        "runtime capability",
+        "did not complete",
+    )
+    if str(artifact.get("verdict", "")).lower() == "unavailable":
+        return True
+    blockers = [item.lower() for item in _blocker_values(artifact)]
+    if blockers:
+        return all(any(marker in blocker for marker in markers) for blocker in blockers)
+    fallback = " ".join(
+        [
+            *[str(item) for item in artifact.get("warnings", []) if isinstance(item, (str, int))],
+            *[str(item) for item in artifact.get("observed", []) if isinstance(item, (str, int))],
+        ]
+    ).lower()
+    return any(marker in fallback for marker in markers)
 
 
 def verifier_artifact_fingerprint(artifacts_dir: Path, artifact_name: str) -> str:
@@ -1005,19 +1061,14 @@ def _token_budget_warning(state: dict[str, Any], workflows: dict[str, Any]) -> s
 def _budget_blockers(state: dict[str, Any], workflows: dict[str, Any]) -> list[str]:
     budgets = _budgets(state, workflows)
     role_count = state.get("role_count", len(_role_entries(state)))
-    loop_values = state.get("loops", {})
-    if not isinstance(loop_values, dict):
-        loop_values = {}
-    repair_iterations = sum(
-        int(value.get("iterations", 0))
-        for value in loop_values.values()
-        if isinstance(value, dict) and isinstance(value.get("iterations", 0), (int, float))
-    )
+    effective_usage = BudgetUsage.for_enforcement(state)
+    elapsed_seconds = effective_usage.elapsed_seconds
+    repair_iterations = effective_usage.repair_attempts
     blockers: list[str] = []
     if isinstance(role_count, (int, float)) and role_count >= budgets["max_roles"]:
         blockers.append(f"max_roles reached: {int(role_count)} >= {budgets['max_roles']}")
-    if _elapsed_seconds(state) >= budgets["max_duration_seconds"]:
-        blockers.append(f"max_duration_seconds reached: {int(_elapsed_seconds(state))} >= {budgets['max_duration_seconds']}")
+    if elapsed_seconds >= budgets["max_duration_seconds"]:
+        blockers.append(f"max_duration_seconds reached: {elapsed_seconds} >= {budgets['max_duration_seconds']}")
     if repair_iterations >= budgets["max_repair_iterations"]:
         blockers.append(f"max_repair_iterations reached: {repair_iterations} >= {budgets['max_repair_iterations']}")
     return blockers
@@ -1501,7 +1552,7 @@ def decide_next_role(
     if execution_mode(state) == "adaptive":
         plan = execution_plan(state)
         if plan:
-            usage = BudgetUsage.from_state(state)
+            usage = BudgetUsage.for_enforcement(state)
             decision = BudgetController.from_plan(plan).assess(usage, mandatory_role=True)
             state["budget_usage"] = usage.as_dict()
             state["budget_action"] = decision.as_dict()
@@ -1666,6 +1717,34 @@ def decide_next_role(
         return _route("quality-runner", "CI repair completed; quality must be re-run.", warnings=warnings)
 
     verdict = _artifact(artifacts_dir, "verdict.json")
+    if current_role == "orchestrator" and isinstance(verdict, dict):
+        verdict_blockers = _blocker_values(verdict)
+        verdict_blocked = (
+            verdict.get("decision") in {"await_approval", "blocked"}
+            or verdict.get("execution_status") in {"awaiting_approval", "blocked", "failed"}
+            or verdict.get("checks_passed") is False
+            or bool(verdict_blockers)
+        )
+        if verdict_blocked:
+            if execution_mode(state) == "adaptive":
+                planned = adaptive_next_role(state, current_role=current_role)
+                if planned is not None and planned[0] not in {
+                    "orchestrator",
+                    "publication-prepare",
+                    "publication",
+                }:
+                    return _route(
+                        planned[0],
+                        "A post-repair verification gate is stale; " + planned[1],
+                        warnings=warnings + verdict_blockers,
+                    )
+            return _blocked(
+                "Workflow verdict is blocked; publication is not allowed.",
+                warnings + (
+                    verdict_blockers
+                    or ["The orchestrator verdict did not satisfy completion gates."]
+                ),
+            )
     if (
         current_role == "orchestrator"
         and isinstance(verdict, dict)
