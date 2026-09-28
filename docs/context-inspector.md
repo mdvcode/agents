@@ -2,10 +2,10 @@
 
 The dashboard's **Посмотреть глазами AI** action has two views.
 
-- In the task composer it previews sources for the selected role on the current checkout. It does not create a task, start a worker, or send data to a model. Refresh after changing source files. This draft package does not yet include the future run's artifacts, answers, worktree identity or execution settings.
+- In the task composer it previews sources for the selected role on the current checkout. It does not create a task, start a worker, or send data to a model. Refresh after changing source files. This draft package does not yet include the future run's artifacts, answers, worktree identity, execution settings or selected attachments. Consented attachments enter the saved runtime input only when execution starts.
 - In a task it opens the frozen input of a particular runtime call. Choose a saved stage, inspect included/excluded sources, and expand the exact prompt and execution contract. Older runs without effective-input snapshots show an explicit unavailable state.
 
-The second view reads the same immutable snapshot used at the SDK/CLI submission boundary. It covers the Harness-supplied prompt, output schema, model settings, sandbox, repository and session identity. It does **not** claim to reproduce runtime-owned system instructions, earlier SDK session turns, provider caches or later tool reads. A prepared snapshot proves the input was frozen before the attempted call, not that a provider accepted or completed it.
+The second view reads the same immutable snapshot used at the SDK/CLI submission boundary. It covers the Harness-supplied prompt, output schema, model settings, sandbox, repository and session identity. Submitted images are represented by revalidated attachment metadata and content digests; raw image bytes and provider image processing are outside the snapshot. The text credential guard does not scan image content. Structured-output repair turns record only their new input, without repeating images from earlier turns. It does **not** claim to reproduce runtime-owned system instructions, earlier SDK session turns, provider caches or later tool reads. A prepared snapshot proves the input was frozen before the attempted call, not that a provider accepted or completed it.
 
 ## Privacy controls
 
@@ -43,7 +43,7 @@ Credential-like source content is excluded with reason `secret`. Credential-like
 - `effective_context_digest` hashes canonical JSON of the final payload; `prompt_digest` hashes its exact UTF-8 prompt; `snapshot_digest` also covers local provenance. Snapshots are content-addressed and never silently overwritten.
 - `context_package_digest` names the earlier package hash. For existing manifest consumers, `effective_context_digest` in the **compiler manifest** remains a package-hash alias with `effective_context_scope: context_package`. The **effective-input snapshot** uses `effective_context_digest` for the full final input. Consumers must respect the scope.
 - Every attempted role/repair submission records a digest-only entry in `submissions.jsonl`. Structured-output repairs have their own snapshot and do not incorrectly list previous-stage sources as part of the new repair prompt.
-- Inspector reads reject invalid digests, corrupted provenance, oversized snapshots, symlinks and path traversal. API responses are uncached and subject to the existing bearer check plus loopback/same-origin restrictions.
+- Inspector reads reject invalid digests, corrupted provenance, oversized snapshots, symlinks and path traversal. API responses are uncached and require a configured bearer token and a matching request token, plus loopback/same-origin restrictions; a tokenless read-only server cannot expose private context.
 
 ## API
 

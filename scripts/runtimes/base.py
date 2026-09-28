@@ -15,9 +15,12 @@ class RuntimeDescriptor:
     production: bool
     command: str
     api_required: bool
+    capabilities: tuple[str, ...] = ("text",)
 
     def as_json(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload["capabilities"] = list(self.capabilities)
+        return payload
 
 
 class Runtime(Protocol):

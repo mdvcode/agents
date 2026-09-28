@@ -1,31 +1,44 @@
-# AI Harness CLI
+# Tweebit AI Harness by Daryna CLI
 
 The Harness is installable as the `ai-harness` Python distribution and exposes one command: `agent`.
 
 ## Install
 
-For an ordinary installation, download and unpack the repository, then run the installer from that folder:
+Tweebit v0.4.0 is currently a local, unpublished release candidate. Install it only from the exact
+reviewed local checkout:
 
 ```sh
+cd /absolute/path/to/reviewed/tweebit-checkout
 ./install.sh
 ```
 
-The installer checks Python 3.11+, installs pipx when necessary without `sudo`, installs the isolated application, verifies `agent`, and prints the first-use commands. It also works as a remote bootstrap:
+The installer checks Python 3.11+, installs pipx when necessary without `sudo`, installs the isolated application, verifies `agent`, and prints the first-use commands. For an existing installation, keep the source explicit while this candidate is unpublished:
+
+```sh
+agent update --source /absolute/path/to/reviewed/tweebit-checkout
+hash -r
+agent doctor --full
+```
+
+The remote bootstrap below installs the public `mdvcode/agents` baseline, not this local Tweebit candidate:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mdvcode/agents/main/install.sh | sh
 ```
 
-Update an existing installation with the product command:
+After Tweebit is published from a reviewed source, ordinary updates may again use the product command:
 
 ```sh
 agent update
 agent doctor --full
 ```
 
-`agent update` uses the installed package source. A clean Git checkout is updated with a fast-forward-only pull; a ZIP/folder installation moves to the official repository source; a remote package installation is upgraded in place. It then verifies the new `agent` command and restarts the background worker. A dirty source checkout is never overwritten. To install a separately downloaded build explicitly, use `agent update --source /path/to/new-folder`.
+`agent update` uses the installed package source. A clean Git checkout is updated with a fast-forward-only pull; a ZIP/folder installation moves to the official public repository source; a remote package installation is upgraded in place. It then verifies the new `agent` command and restarts the background worker. A dirty source checkout is never overwritten. Consequently, this unpublished candidate must continue to use `agent update --source /absolute/path/to/reviewed/tweebit-checkout` rather than a source-less update.
 
-An installation old enough not to recognize `agent update` must be bootstrapped once with the current `install.sh`, either from a fresh download or through the remote installer above. Refresh the shell command cache with `hash -r`; future updates then use `agent update`.
+An installation old enough not to recognize `agent update` must be bootstrapped once. For this
+candidate, use `install.sh` from the reviewed local Tweebit checkout. The remote installer can only
+bootstrap the public baseline; after that, select Tweebit explicitly with `agent update --source
+/absolute/path/to/reviewed/tweebit-checkout`. Refresh the shell command cache with `hash -r`.
 
 Contributors may still use `pip install -e .` or direct pipx commands, but users do not need to manage those environments themselves.
 
@@ -61,7 +74,17 @@ The ordinary visual entry point is:
 agent dashboard
 ```
 
-It starts an authenticated loopback control center for the initialized project and opens it in the default browser. The page launches tasks through the same CLI policy boundary and healthy worker as `agent task`, refreshes live task/worker state, displays bounded attention questions, and provides answer, approval, retry, and abort controls. **Очистить историю** hides only completed and cancelled task rows in that browser; active or actionable tasks remain visible, queue/run evidence is retained, and **Вернуть скрытые** restores the rows. The temporary token is passed in the URL fragment, moved to session storage, and removed from the visible URL. Use `Ctrl+C` to stop only the dashboard server.
+It starts an authenticated loopback control center and opens it in the default browser. **Проекты**
+lists only repositories explicitly registered by `agent init`; it never scans the computer. Every
+new task selects one project, while **Задачи** remains the global operations list across all
+projects. Project actions can initialize another chosen folder and open a trusted project folder in
+Codex without accessing private Codex application state. The page launches tasks through the same
+CLI policy boundary and healthy worker as `agent task`, refreshes live task/worker state, displays
+bounded attention questions, and provides answer, approval, retry, and abort controls. **Очистить
+историю** hides only completed and cancelled task rows in that browser; active or actionable tasks
+remain visible, queue/run evidence is retained, and **Вернуть скрытые** restores the rows. The
+temporary token is passed in the URL fragment, moved to session storage, and removed from the
+visible URL. Use `Ctrl+C` to stop only the dashboard server.
 
 Validate the installation once after installation or an upgrade:
 
@@ -151,7 +174,10 @@ agent status --json
 
 Status is read-only, project-scoped, and compact. It shows queue, run, and worker-service states without role transcripts, source contents, credentials, or raw events. Worker startup is an intentional side effect of `agent task`; read-only commands never start it.
 
-The dashboard provides one cross-repository queue with `Queued`, `Running`, `Testing`, `Needs input`, `PR ready`, and `Failed` lifecycle views. Repository, task branch, and worker filters can be combined. When active branches in one repository currently touch the same paths, both tasks receive a probable-conflict marker and a deterministic publish-first/rebase-second recommendation.
+The dashboard provides one cross-project queue with `Queued`, `Running`, `Testing`, `Needs input`,
+`PR ready`, and `Failed` lifecycle views. Project, repository, task branch, and worker filters can be
+combined. When active branches in one repository currently touch the same paths, both tasks receive
+a probable-conflict marker and a deterministic publish-first/rebase-second recommendation.
 
 During implementation, a role may propose a bounded independent child task. The deterministic router—not the model—decides whether it is allowed. A writing child receives its own worktree, branch, SDK thread, token/time budget, and `allowed_paths`; the parent records `root_run_id` and `parent_run_id`. Blocking failures stay in the normal sequential repair loop. Independent children may run in the background, after which the parent alone joins their patch, resumes its original SDK thread, runs the combined verification, and owns publication. Fan-out is limited to three children and graph depth to two levels.
 

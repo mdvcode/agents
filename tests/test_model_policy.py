@@ -136,6 +136,57 @@ def test_reasoning_ladder_upgrades_model_then_stops_for_human() -> None:
     assert terminal["terminal_action"] == "human_or_dead_letter"
 
 
+def test_exact_human_escalation_approval_allows_one_final_complex_attempt() -> None:
+    approved = select(
+        failure_type="repeated_invalid_solution",
+        previous_profile="complex",
+        previous_reasoning_effort="xhigh",
+        human_escalation_approved=True,
+    )
+
+    assert approved["execution_profile"] == "complex"
+    assert approved["reasoning_effort"] == "xhigh"
+    assert approved["terminal_action"] == ""
+    assert "explicit one-role approval" in approved["profile_reason"]
+
+
+def test_persisted_model_exhaustion_cannot_reset_when_route_context_is_lost() -> None:
+    terminal = select(
+        previous_profile="complex",
+        previous_reasoning_effort="xhigh",
+        bounded_escalation_exhausted=True,
+    )
+    approved = select(
+        previous_profile="complex",
+        previous_reasoning_effort="xhigh",
+        bounded_escalation_exhausted=True,
+        human_escalation_approved=True,
+    )
+
+    assert terminal["execution_profile"] == "complex"
+    assert terminal["reasoning_effort"] == "high"
+    assert terminal["terminal_action"] == "human_or_dead_letter"
+    assert approved["reasoning_effort"] == "xhigh"
+    assert approved["terminal_action"] == ""
+    assert "explicit one-role approval" in approved["profile_reason"]
+
+
+def test_human_escalation_approval_does_not_change_nonterminal_or_deterministic_work() -> None:
+    ordinary = select(human_escalation_approved=True)
+    deterministic = select(
+        failure_type="test_failure",
+        previous_profile="economy",
+        repair_iteration=3,
+        repair_count=3,
+        human_escalation_approved=True,
+    )
+
+    assert ordinary["execution_profile"] == "balanced"
+    assert ordinary["reasoning_effort"] == "medium"
+    assert deterministic["execution_profile"] == "economy"
+    assert deterministic["terminal_action"] == ""
+
+
 def test_configured_profile_allows_only_its_reasoning_ladder() -> None:
     selected = validate_request_profile(
         {"execution_profile": "economy", "reasoning_effort": "medium"},

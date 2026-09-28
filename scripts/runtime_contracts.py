@@ -32,6 +32,17 @@ def validate_contract(data: dict[str, Any], schema: dict[str, Any], label: str) 
     for field in schema.get("required", []):
         if field not in data:
             errors.append(f"{label}: missing required field {field!r}")
+    for raw_group in schema.get("all_or_none", []):
+        if not isinstance(raw_group, list) or not all(
+            isinstance(field, str) and field for field in raw_group
+        ):
+            errors.append(f"{label}: schema has an invalid all_or_none group")
+            continue
+        present = [field for field in raw_group if field in data]
+        if present and len(present) != len(raw_group):
+            errors.append(
+                f"{label}: fields {', '.join(raw_group)} must be present together"
+            )
     for field, type_name in schema.get("types", {}).items():
         if field not in data:
             continue

@@ -22,19 +22,32 @@ CONFIG_FILES = (
     "Makefile",
 )
 
+OBSERVABILITY_ASSET_FILES = (
+    "tweebit-icon-16.png",
+    "tweebit-icon-24.png",
+    "tweebit-icon-32.png",
+    "tweebit-icon-48.png",
+    "tweebit-icon-128.png",
+    "tweebit-wordmark.svg",
+)
+
 
 def harness_build_fingerprint(root: Path, *, package_root: Path | None = None) -> str:
     """Hash the files that define installed worker and runtime behavior."""
 
     root = root.resolve()
     candidates = [root / relative for relative in CONFIG_FILES]
+    package_directory = (
+        root / "ai_harness"
+        if (root / "ai_harness").is_dir()
+        else (package_root or Path(__file__).resolve().parent)
+    )
+    candidates.extend(
+        package_directory / "observability" / "assets" / name
+        for name in OBSERVABILITY_ASSET_FILES
+    )
     for directory, pattern in (
-        (
-            root / "ai_harness"
-            if (root / "ai_harness").is_dir()
-            else (package_root or Path(__file__).resolve().parent),
-            "*.py",
-        ),
+        (package_directory, "*.py"),
         (root / "scripts", "*.py"),
         (root / "schemas", "*.json"),
         (root / ".agents" / "prompts", "*.md"),

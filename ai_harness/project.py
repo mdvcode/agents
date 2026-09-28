@@ -8,9 +8,12 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
+
+if TYPE_CHECKING:
+    from .attachments.models import AttachmentLimits
 
 
 CONFIG_RELATIVE_PATH = Path(".agent/project.yaml")
@@ -23,6 +26,26 @@ class ProjectConfigError(ValueError):
 
 
 @dataclass(frozen=True)
+class ProjectAttachmentConfig:
+    """Optional, locally trusted overrides for attachment intake limits."""
+
+    max_files: int | None = None
+    max_file_bytes: int | None = None
+    max_task_bytes: int | None = None
+
+    def as_document(self) -> dict[str, int]:
+        return {
+            key: value
+            for key, value in (
+                ("max_files", self.max_files),
+                ("max_file_bytes", self.max_file_bytes),
+                ("max_task_bytes", self.max_task_bytes),
+            )
+            if value is not None
+        }
+
+
+@dataclass(frozen=True)
 class ProjectConfig:
     repository: Path
     project_id: str
@@ -30,13 +53,14 @@ class ProjectConfig:
     base_branch: str
     branch_prefix: str
     runtime_provider: str
+    attachments: ProjectAttachmentConfig | None = None
 
     @property
     def path(self) -> Path:
         return self.repository / CONFIG_RELATIVE_PATH
 
     def as_document(self) -> dict[str, Any]:
-        return {
+        document: dict[str, Any] = {
             "version": 1,
             "project": {
                 "id": self.project_id,
@@ -47,6 +71,52 @@ class ProjectConfig:
             },
             "runtime": {"provider": self.runtime_provider},
         }
+        # Omitting defaults is intentional: existing project files retain their
+        # historical trust fingerprint when this optional feature is installed.
+        if self.attachments is not None:
+            document["attachments"] = self.attachments.as_document()
+        return document
+
+
+def project_attachment_limits(config: ProjectConfig) -> AttachmentLimits:
+    """Return validated effective attachment limits for one project config.
+
+    The import is intentionally local so ordinary project discovery does not
+    initialize the PDF toolchain. The configured task limit grows to at least
+    the configured per-file limit when it is otherwise omitted.
+    """
+
+    from .attachments.models import AttachmentLimits
+
+    defaults = AttachmentLimits()
+    selected = config.attachments
+    if selected is None:
+        return defaults
+    max_file_bytes = (
+        selected.max_file_bytes
+        if selected.max_file_bytes is not None
+        else defaults.max_file_bytes
+    )
+    max_task_bytes = (
+        selected.max_task_bytes
+        if selected.max_task_bytes is not None
+        else max(defaults.max_task_bytes, max_file_bytes)
+    )
+    if max_task_bytes < max_file_bytes:
+        raise ValueError("max_task_bytes must be at least max_file_bytes")
+    return AttachmentLimits(
+        max_files=(
+            selected.max_files
+            if selected.max_files is not None
+            else defaults.max_files
+        ),
+        max_file_bytes=max_file_bytes,
+        max_task_bytes=max_task_bytes,
+        chunk_bytes=defaults.chunk_bytes,
+        ttl_seconds=defaults.ttl_seconds,
+        max_image_pixels=defaults.max_image_pixels,
+        max_runtime_image_bytes=defaults.max_runtime_image_bytes,
+    )
 
 
 def slug(value: str, fallback: str = "project") -> str:
@@ -152,6 +222,8 @@ def default_config(
     profile: str = "auto",
     base_branch: str = "auto",
     branch_prefix: str = "feat/",
+    runtime_provider: str = "codex-sdk",
+    attachments: ProjectAttachmentConfig | None = None,
 ) -> ProjectConfig:
     selected_profile = detect_profile(repository) if profile == "auto" else profile
     selected_base_branch = detect_base_branch(repository) if base_branch == "auto" else base_branch.strip()
@@ -161,7 +233,8 @@ def default_config(
         profile=selected_profile,
         base_branch=selected_base_branch,
         branch_prefix=branch_prefix.strip(),
-        runtime_provider="codex-sdk",
+        runtime_provider=runtime_provider,
+        attachments=attachments,
     )
 
 
@@ -177,6 +250,14 @@ def validate_config(config: ProjectConfig) -> list[str]:
         errors.append("project.branch_prefix must form a safe Git branch name")
     if config.runtime_provider not in {"codex-sdk", "codex-cli"}:
         errors.append("runtime.provider must be codex-sdk or the codex-cli compatibility fallback")
+    if config.attachments is not None:
+        for field_name, value in config.attachments.as_document().items():
+            if isinstance(value, bool) or not isinstance(value, int):
+                errors.append(f"attachments.{field_name} must be an integer")
+        try:
+            project_attachment_limits(config)
+        except ValueError as exc:
+            errors.append(f"attachments limits are invalid: {exc}")
     return errors
 
 
@@ -190,8 +271,10 @@ def load_project_config(repository: Path) -> ProjectConfig:
         raise ProjectConfigError(f"cannot read {path}: {exc}") from exc
     if not isinstance(document, dict) or document.get("version") != 1:
         raise ProjectConfigError(f"{path}: version must be 1")
-    if set(document) != {"version", "project", "runtime"}:
+    if not set(document).issubset({"version", "project", "runtime", "attachments"}):
         raise ProjectConfigError(f"{path}: unexpected top-level fields")
+    if not {"version", "project", "runtime"}.issubset(document):
+        raise ProjectConfigError(f"{path}: project and runtime objects are required")
     project = document.get("project")
     runtime = document.get("runtime")
     if not isinstance(project, dict) or not isinstance(runtime, dict):
@@ -200,6 +283,25 @@ def load_project_config(repository: Path) -> ProjectConfig:
         raise ProjectConfigError(f"{path}: unexpected project fields")
     if set(runtime) != {"provider"}:
         raise ProjectConfigError(f"{path}: unexpected runtime fields")
+    raw_attachments = document.get("attachments")
+    attachments: ProjectAttachmentConfig | None = None
+    if "attachments" in document:
+        if not isinstance(raw_attachments, dict):
+            raise ProjectConfigError(f"{path}: attachments must be an object")
+        if not set(raw_attachments).issubset(
+            {"max_files", "max_file_bytes", "max_task_bytes"}
+        ):
+            raise ProjectConfigError(f"{path}: unexpected attachments fields")
+        for field_name, value in raw_attachments.items():
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ProjectConfigError(
+                    f"{path}: attachments.{field_name} must be an integer"
+                )
+        attachments = ProjectAttachmentConfig(
+            max_files=raw_attachments.get("max_files"),
+            max_file_bytes=raw_attachments.get("max_file_bytes"),
+            max_task_bytes=raw_attachments.get("max_task_bytes"),
+        )
     if project.get("repository") != ".":
         raise ProjectConfigError(f"{path}: project.repository must be '.'")
     config = ProjectConfig(
@@ -209,6 +311,7 @@ def load_project_config(repository: Path) -> ProjectConfig:
         base_branch=str(project.get("base_branch", "")),
         branch_prefix=str(project.get("branch_prefix", "")),
         runtime_provider=str(runtime.get("provider", "")),
+        attachments=attachments,
     )
     errors = validate_config(config)
     if errors:

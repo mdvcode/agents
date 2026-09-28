@@ -1,3 +1,3 @@
-"""User-facing package for the local AI Harness."""
+"""User-facing package for Tweebit AI Harness by Daryna."""
 
-__version__ = "0.2.0"
+__version__ = "0.4.0"

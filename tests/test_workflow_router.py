@@ -5,12 +5,20 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from workflow_router import decide_next_role  # noqa: E402
+from workflow_router import (  # noqa: E402
+    decide_next_role,
+    diff_hash,
+    failure_fingerprint,
+    verifier_artifact_fingerprint,
+)
 from security_approval import security_scope  # noqa: E402
+from runtime_contracts import load_json, validate_contract  # noqa: E402
 
 
 REQUIRED = [
@@ -193,6 +201,111 @@ def route(tmp_path: Path, state: dict[str, object], current_role: str, result: d
     )
 
 
+def bind_review_extension(
+    tmp_path: Path,
+    state: dict[str, object],
+    *,
+    role: str = "reviewer",
+    approval_id: str = "review-repair-extension",
+) -> dict[str, object]:
+    artifacts_dir = tmp_path / "artifacts"
+    artifact_names = {
+        "architecture-consistency-agent": "architecture_consistency.json",
+        "semantic-conflict-agent": "semantic_conflict.json",
+        "reviewer": "review.json",
+    }
+    result: dict[str, object] = {"status": "completed", "next_action": "continue"}
+    failure = failure_fingerprint(
+        role_result=result,
+        state=state,
+        artifacts_dir=artifacts_dir,
+    )
+    current_diff = diff_hash(state, artifacts_dir)
+    state["last_route"] = {
+        "next_role": "approval-gate",
+        "stop": True,
+        "loop": {
+            "name": "review_repair",
+            "iteration": 3,
+            "max_iterations": 3,
+            "failure_fingerprint": failure,
+            "diff_fingerprint": current_diff,
+            "progress_detected": True,
+        },
+    }
+    state["loops"] = {
+        **state.get("loops", {}),
+        "review_repair": {
+            "iterations": 3,
+            "max_iterations": 3,
+            "last_failure_fingerprint": failure,
+            "last_diff_fingerprint": current_diff,
+            "progress_detected": True,
+            "extensions_used": 0,
+        },
+    }
+    artifact_name = artifact_names[role]
+    scope = {
+        "actions": ["extend_review_repair_once", "resume_workflow"],
+        "gate": role,
+        "loop_name": "review_repair",
+        "at_iteration": 3,
+        "max_iterations": 3,
+        "failure_fingerprint": failure,
+        "diff_fingerprint": current_diff,
+        "additional_attempts": 1,
+        "verifier_fingerprint": verifier_artifact_fingerprint(
+            artifacts_dir,
+            artifact_name,
+        ),
+    }
+    state["approval_override"] = {
+        "approval_id": approval_id,
+        "gate": role,
+        "scope": scope,
+    }
+    return result
+
+
+def bind_model_escalation(
+    state: dict[str, object],
+    *,
+    role: str = "implementation-agent",
+    approval_id: str = "model-escalation-approval",
+) -> None:
+    scope = {
+        "actions": ["allow_one_model_escalation", "resume_workflow"],
+        "gate": role,
+        "additional_attempts": 1,
+        "model_escalation_role": role,
+        "model_escalation_uses": 1,
+        "model_escalation_fingerprint": "e" * 64,
+    }
+    state["approval_override"] = {
+        "approval_id": approval_id,
+        "gate": role,
+        "scope": scope,
+    }
+    state["approval_grants"] = [
+        {
+            "approval_id": approval_id,
+            "gate": role,
+            "scope": scope,
+            "reason": "Bounded model escalation is exhausted.",
+            "model_escalation_role": role,
+            "model_escalation_started_at": "2026-09-02T12:00:00+00:00",
+        }
+    ]
+    state["approval_action_uses"] = [
+        {
+            "approval_id": approval_id,
+            "action": "allow_one_model_escalation",
+            "role": role,
+            "started_at": "2026-09-02T12:00:00+00:00",
+        }
+    ]
+
+
 def test_high_risk_routes_to_approval_and_cannot_publish(tmp_path: Path) -> None:
     artifacts_dir = setup_artifacts(tmp_path, "high")
     result = decide_next_role(
@@ -307,6 +420,26 @@ def test_mixed_environment_and_code_verifier_blockers_start_repair(tmp_path: Pat
     assert result["loop"]["name"] == "review_repair"
 
 
+def test_browser_code_blocker_is_not_misclassified_as_environmental(
+    tmp_path: Path,
+) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    artifact(
+        artifacts_dir / "architecture_consistency.json",
+        {
+            "verdict": "broken",
+            "blockers": ["Browser route exposes unreviewed draft cases."],
+            "repair_required": True,
+        },
+    )
+    state = completed_state()
+
+    result = route(tmp_path, state, "architecture-consistency-agent")
+
+    assert result["next_role"] == "implementation-agent"
+    assert result["stop"] is False
+
+
 def test_environmental_verifier_approval_advances_without_reprompting(tmp_path: Path) -> None:
     artifacts_dir = setup_artifacts(tmp_path)
     semantic = {
@@ -338,7 +471,9 @@ def test_environmental_verifier_approval_advances_without_reprompting(tmp_path: 
     assert any("publication must remain draft" in item for item in result["warnings"])
 
 
-def test_active_verifier_acceptance_rebinds_to_rerun_artifact(tmp_path: Path) -> None:
+def test_works_plus_unavailable_warning_does_not_activate_acceptance(
+    tmp_path: Path,
+) -> None:
     artifacts_dir = setup_artifacts(tmp_path)
     review = {
         "verdict": "works",
@@ -368,16 +503,13 @@ def test_active_verifier_acceptance_rebinds_to_rerun_artifact(tmp_path: Path) ->
 
     result = route(tmp_path, state, "reviewer")
 
-    current_fingerprint = hashlib.sha256(
-        json.dumps(review, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
     assert result["next_role"] == "orchestrator"
     assert result["stop"] is False
     assert (
         state["approval_grants"][0]["scope"]["verifier_fingerprint"]
-        == current_fingerprint
+        == "previous-review-fingerprint"
     )
-    assert any("publication must remain draft" in item for item in result["warnings"])
+    assert not any("publication must remain draft" in item for item in result["warnings"])
 
 
 def test_active_verifier_acceptance_does_not_cover_code_blockers(tmp_path: Path) -> None:
@@ -731,6 +863,11 @@ def test_exhausted_review_repair_requests_one_scoped_approval(tmp_path: Path) ->
     assert result["next_role"] == "approval-gate"
     assert result["loop"]["iteration"] == 3
     assert state["loops"]["review_repair"]["iterations"] == 3  # type: ignore[index]
+    assert validate_contract(
+        result,
+        load_json(ROOT / "schemas" / "workflow_route.schema.json"),
+        "workflow_route",
+    ) == []
 
 
 def test_consumed_repair_approval_cannot_prompt_again(tmp_path: Path) -> None:
@@ -763,6 +900,294 @@ def test_consumed_repair_approval_cannot_prompt_again(tmp_path: Path) -> None:
     assert "still unresolved" in result["reason"]
     assert result["loop"]["iteration"] == 3
     assert state["loops"]["review_repair"]["iterations"] == 3  # type: ignore[index]
+
+
+def test_consumed_one_time_repair_extension_starts_one_more_repair(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    review = json.loads((artifacts_dir / "review.json").read_text(encoding="utf-8"))
+    review.update(
+        {
+            "verdict": "broken",
+            "status": "block",
+            "blockers": ["REV-LOOP"],
+            "blocker_ids": ["REV-LOOP"],
+            "repair_required": True,
+        }
+    )
+    artifact(artifacts_dir / "review.json", review)
+    state = completed_state(review_status="block")
+    result_payload = bind_review_extension(tmp_path, state)
+
+    result = route(tmp_path, state, "reviewer", result_payload)
+
+    assert result["next_role"] == "implementation-agent"
+    assert result["stop"] is False
+    assert "one-time approved repair extension" in result["reason"]
+    assert state["loops"]["review_repair"]["extensions_used"] == 1  # type: ignore[index]
+    assert (
+        state["loops"]["review_repair"]["extension_approval_id"]
+        == "review-repair-extension"
+    )  # type: ignore[index]
+    assert result["publication_allowed"] is False
+    assert validate_contract(
+        result,
+        load_json(ROOT / "schemas" / "workflow_route.schema.json"),
+        "workflow_route",
+    ) == []
+
+
+def test_repeated_exhausted_review_extension_is_still_exactly_once(
+    tmp_path: Path,
+) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    review = json.loads((artifacts_dir / "review.json").read_text(encoding="utf-8"))
+    review.update(
+        {
+            "verdict": "broken",
+            "status": "block",
+            "blockers": ["REV-LOOP"],
+            "blocker_ids": ["REV-LOOP"],
+            "repair_required": True,
+        }
+    )
+    artifact(artifacts_dir / "review.json", review)
+    state = completed_state(review_status="block")
+    result_payload = bind_review_extension(tmp_path, state)
+    state["last_route"]["loop"]["progress_detected"] = False  # type: ignore[index]
+    state["loops"]["review_repair"]["progress_detected"] = False  # type: ignore[index]
+
+    result = route(tmp_path, state, "reviewer", result_payload)
+
+    assert result["next_role"] == "implementation-agent"
+    assert result["stop"] is False
+    assert state["loops"]["review_repair"]["extensions_used"] == 1  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("loop_name", "quality_repair"),
+        ("at_iteration", 2),
+        ("max_iterations", 4),
+        ("additional_attempts", True),
+        ("failure_fingerprint", "0" * 64),
+        ("diff_fingerprint", "0" * 64),
+        ("verifier_fingerprint", "0" * 64),
+    ],
+)
+def test_review_extension_scope_mismatch_fails_closed(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    review = json.loads((artifacts_dir / "review.json").read_text(encoding="utf-8"))
+    review.update(
+        {
+            "verdict": "broken",
+            "status": "block",
+            "blockers": ["REV-LOOP"],
+            "blocker_ids": ["REV-LOOP"],
+            "repair_required": True,
+        }
+    )
+    artifact(artifacts_dir / "review.json", review)
+    state = completed_state(review_status="block")
+    result_payload = bind_review_extension(tmp_path, state)
+    state["approval_override"]["scope"][field] = value  # type: ignore[index]
+
+    result = route(tmp_path, state, "reviewer", result_payload)
+
+    assert result["next_role"] == "blocked"
+    assert result["stop"] is True
+    assert state["loops"]["review_repair"]["extensions_used"] == 0  # type: ignore[index]
+
+
+def test_review_extension_does_not_bypass_high_risk_gate(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path, risk_class="high")
+    review = json.loads((artifacts_dir / "review.json").read_text(encoding="utf-8"))
+    review.update(
+        {
+            "verdict": "broken",
+            "status": "block",
+            "blockers": ["REV-LOOP"],
+            "blocker_ids": ["REV-LOOP"],
+            "repair_required": True,
+        }
+    )
+    artifact(artifacts_dir / "review.json", review)
+    state = completed_state(review_status="block")
+    result_payload = bind_review_extension(tmp_path, state)
+
+    result = route(tmp_path, state, "reviewer", result_payload)
+
+    assert result["next_role"] == "approval-gate"
+    assert result["publication_allowed"] is False
+    assert state["loops"]["review_repair"]["extensions_used"] == 0  # type: ignore[index]
+
+
+def test_review_extension_does_not_bypass_security_gate(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    review = json.loads((artifacts_dir / "review.json").read_text(encoding="utf-8"))
+    review.update(
+        {
+            "verdict": "broken",
+            "status": "block",
+            "blockers": ["REV-LOOP"],
+            "blocker_ids": ["REV-LOOP"],
+            "repair_required": True,
+        }
+    )
+    artifact(artifacts_dir / "review.json", review)
+    security = json.loads((artifacts_dir / "security.json").read_text(encoding="utf-8"))
+    security.update(
+        {
+            "verdict": "broken",
+            "status": "fail",
+            "highest_severity": "medium",
+            "blockers": ["SEC-001"],
+            "blocker_ids": ["SEC-001"],
+            "findings": [{"id": "SEC-001", "severity": "medium"}],
+        }
+    )
+    artifact(artifacts_dir / "security.json", security)
+    state = completed_state(review_status="block")
+    result_payload = bind_review_extension(tmp_path, state)
+
+    result = route(tmp_path, state, "reviewer", result_payload)
+
+    assert result["next_role"] == "approval-gate"
+    assert result["publication_allowed"] is False
+    assert state["loops"]["review_repair"]["extensions_used"] == 0  # type: ignore[index]
+
+
+def test_review_extension_does_not_bypass_global_role_budget(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    review = json.loads((artifacts_dir / "review.json").read_text(encoding="utf-8"))
+    review.update(
+        {
+            "verdict": "broken",
+            "status": "block",
+            "blockers": ["REV-LOOP"],
+            "blocker_ids": ["REV-LOOP"],
+            "repair_required": True,
+        }
+    )
+    artifact(artifacts_dir / "review.json", review)
+    state = completed_state(
+        review_status="block",
+        role_count=40,
+        budgets={"max_roles": 40},
+    )
+    result_payload = bind_review_extension(tmp_path, state)
+
+    result = route(tmp_path, state, "reviewer", result_payload)
+
+    assert result["next_role"] == "approval-gate"
+    assert result["publication_allowed"] is False
+    assert state["loops"]["review_repair"]["extensions_used"] == 0  # type: ignore[index]
+
+
+def test_review_extension_grant_is_not_a_durable_global_budget_approval(
+    tmp_path: Path,
+) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    review = json.loads((artifacts_dir / "review.json").read_text(encoding="utf-8"))
+    review.update(
+        {
+            "verdict": "broken",
+            "status": "block",
+            "blockers": ["REV-LOOP"],
+            "blocker_ids": ["REV-LOOP"],
+            "repair_required": True,
+        }
+    )
+    artifact(artifacts_dir / "review.json", review)
+    state = completed_state(
+        review_status="block",
+        role_count=40,
+        budgets={"max_roles": 40},
+    )
+    result_payload = bind_review_extension(tmp_path, state)
+    override = state["approval_override"]  # type: ignore[assignment]
+    state["approval_grants"] = [
+        {
+            "approval_id": override["approval_id"],  # type: ignore[index]
+            "gate": "reviewer",
+            "scope": {
+                "actions": ["extend_repair_budget", "resume_workflow"],
+                "gate": "reviewer",
+            },
+            "reason": "Review repair budget exceeded",
+        }
+    ]
+
+    result = route(tmp_path, state, "reviewer", result_payload)
+
+    assert result["next_role"] == "approval-gate"
+    assert state["loops"]["review_repair"]["extensions_used"] == 0  # type: ignore[index]
+
+
+def test_legacy_unbound_repair_extension_action_is_rejected(tmp_path: Path) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    review = json.loads((artifacts_dir / "review.json").read_text(encoding="utf-8"))
+    review.update(
+        {
+            "verdict": "broken",
+            "status": "block",
+            "blockers": ["REV-LOOP"],
+            "blocker_ids": ["REV-LOOP"],
+            "repair_required": True,
+        }
+    )
+    artifact(artifacts_dir / "review.json", review)
+    state = completed_state(
+        review_status="block",
+        approval_override={
+            "approval_id": "legacy-extension",
+            "gate": "reviewer",
+            "scope": {
+                "actions": ["extend_repair_budget", "resume_workflow"],
+                "gate": "reviewer",
+            },
+        },
+    )
+    state["loops"]["review_repair"] = {"iterations": 3, "extensions_used": 0}  # type: ignore[index]
+
+    result = route(tmp_path, state, "reviewer")
+
+    assert result["next_role"] == "blocked"
+    assert result["stop"] is True
+    assert state["loops"]["review_repair"]["extensions_used"] == 0  # type: ignore[index]
+
+
+def test_post_extension_broken_verifier_is_terminal_without_new_approval(
+    tmp_path: Path,
+) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    review = json.loads((artifacts_dir / "review.json").read_text(encoding="utf-8"))
+    review.update(
+        {
+            "verdict": "broken",
+            "status": "block",
+            "blockers": ["REV-LOOP"],
+            "blocker_ids": ["REV-LOOP"],
+            "repair_required": True,
+        }
+    )
+    artifact(artifacts_dir / "review.json", review)
+    state = completed_state(review_status="block")
+    state["loops"]["review_repair"] = {  # type: ignore[index]
+        "iterations": 3,
+        "extensions_used": 1,
+    }
+
+    result = route(tmp_path, state, "reviewer")
+
+    assert result["next_role"] == "blocked"
+    assert result["stop"] is True
+    assert "no second extension" in result["reason"]
+    assert state["loops"]["review_repair"]["extensions_used"] == 1  # type: ignore[index]
 
 
 def test_critical_security_finding_blocks_workflow(tmp_path: Path) -> None:
@@ -1124,6 +1549,116 @@ def test_role_budget_remains_a_hard_approval_bound(tmp_path: Path) -> None:
 
     assert result["next_role"] == "approval-gate"
     assert result["stop"] is True
+
+
+def test_model_escalation_approval_does_not_bypass_high_risk_gate(
+    tmp_path: Path,
+) -> None:
+    setup_artifacts(tmp_path, risk_class="high")
+    state = completed_state()
+    bind_model_escalation(state)
+
+    result = route(
+        tmp_path,
+        state,
+        "implementation-agent",
+        {"status": "completed", "next_action": "continue"},
+    )
+
+    assert result["next_role"] == "approval-gate"
+    assert result["stop"] is True
+    assert result["publication_allowed"] is False
+
+
+def test_model_escalation_approval_does_not_bypass_security_gate(
+    tmp_path: Path,
+) -> None:
+    artifacts_dir = setup_artifacts(tmp_path)
+    security = json.loads((artifacts_dir / "security.json").read_text(encoding="utf-8"))
+    security.update(
+        {
+            "verdict": "broken",
+            "status": "fail",
+            "highest_severity": "high",
+            "blockers": ["SEC-MODEL-SCOPE"],
+        }
+    )
+    artifact(artifacts_dir / "security.json", security)
+    state = completed_state()
+    bind_model_escalation(state)
+
+    result = route(
+        tmp_path,
+        state,
+        "implementation-agent",
+        {"status": "completed", "next_action": "continue"},
+    )
+
+    assert result["next_role"] == "approval-gate"
+    assert result["stop"] is True
+
+
+def test_model_escalation_approval_does_not_bypass_global_role_budget(
+    tmp_path: Path,
+) -> None:
+    setup_artifacts(tmp_path)
+    state = completed_state(role_count=40, budgets={"max_roles": 40})
+    bind_model_escalation(state)
+
+    result = route(
+        tmp_path,
+        state,
+        "implementation-agent",
+        {"status": "completed", "next_action": "continue"},
+    )
+
+    assert result["next_role"] == "approval-gate"
+    assert "budget" in result["reason"].casefold()
+
+
+def test_model_escalation_approval_routes_normally_after_exact_use(
+    tmp_path: Path,
+) -> None:
+    setup_artifacts(tmp_path)
+    state = completed_state()
+    bind_model_escalation(state)
+
+    result = route(
+        tmp_path,
+        state,
+        "implementation-agent",
+        {"status": "completed", "next_action": "continue"},
+    )
+
+    assert result["next_role"] == "quality-runner"
+    assert result["stop"] is False
+
+
+def test_unstarted_or_unknown_model_approval_fails_closed(tmp_path: Path) -> None:
+    setup_artifacts(tmp_path)
+    state = completed_state()
+    bind_model_escalation(state)
+    state["approval_grants"][0].pop("model_escalation_started_at")
+
+    unstarted = route(tmp_path, state, "implementation-agent")
+
+    assert unstarted["next_role"] == "blocked"
+    assert unstarted["stop"] is True
+
+    state = completed_state(
+        approval_override={
+            "approval_id": "unknown-model-action",
+            "gate": "implementation-agent",
+            "scope": {
+                "actions": ["allow_unbounded_model", "resume_workflow"],
+                "gate": "implementation-agent",
+            },
+        }
+    )
+    unknown = route(tmp_path, state, "implementation-agent")
+
+    assert unknown["next_role"] == "blocked"
+    assert unknown["stop"] is True
 
 
 def test_workflow_token_budget_continues_in_economy(tmp_path: Path) -> None:

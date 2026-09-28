@@ -104,18 +104,13 @@ class CodexSdkServer:
             "AGENT_TOOL_POLICY_PATH": str(ROOT / ".agent-tool-policy.yaml"),
             "AGENT_CODEX_MANAGED_SESSION": "1",
         }
-        writable_roots = [str((ROOT / ".agent-runs").resolve())]
         self.codex = Codex(
             CodexConfig(
                 cwd=repository,
                 env=environment,
-                config_overrides=(
-                    "features.fast_mode=true",
-                    "sandbox_workspace_write.writable_roots="
-                    + json.dumps(writable_roots),
-                ),
+                config_overrides=("features.fast_mode=true",),
                 client_name="ai_harness_worker",
-                client_title="AI Harness Worker",
+                client_title="Tweebit AI Harness by Daryna",
             )
         )
         return self.codex

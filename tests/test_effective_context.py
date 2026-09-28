@@ -2,11 +2,14 @@ from __future__ import annotations
 
 # ruff: noqa: E402 -- test imports share the production script bootstrap.
 
+import base64
+import hashlib
+import io
 import json
 import sys
 import threading
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -32,6 +35,11 @@ from ai_harness.context.cache import fingerprint_text
 from ai_harness.context.content_guard import ContextGuardError, findings, redact_text
 from ai_harness.context.logging import JsonlContextLogger
 from ai_harness.context.payload import canonical_json, record_payload
+from ai_harness.attachments import AttachmentStore, IncomingAttachment
+from ai_harness.attachments.runtime import (
+    AttachmentContextError,
+    compile_attachment_context,
+)
 from context_compiler import create_context_manifest
 from context_inspector import get_input, list_inputs, preview_sources
 from control_plane_api import handler_factory
@@ -374,6 +382,7 @@ def test_sdk_submits_exact_frozen_prompt_and_schema_including_repair(
         stored = next(x for x in snapshots if x["payload"]["prompt"] == prompt)
         assert stored["prompt_digest"] == fingerprint_text(prompt)
         assert stored["payload"]["output_schema"] == kwargs["output_schema"]
+        assert stored["payload"]["images"] == []
     with pytest.raises(ContextGuardError):
         sdk.run_turn_streaming(
             Thread(),
@@ -384,6 +393,137 @@ def test_sdk_submits_exact_frozen_prompt_and_schema_including_repair(
             progress=progress,
         )
     assert len(calls) == 2
+
+
+def image_manifest(tmp_path: Path) -> tuple[dict, bytes]:
+    req = request(tmp_path)
+    contents = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+    store = AttachmentStore(tmp_path / "uploads")
+    staged = store.stage(
+        [
+            IncomingAttachment(
+                filename="reference.png",
+                stream=io.BytesIO(contents),
+                declared_mime="image/png",
+            )
+        ]
+    )
+    run_root = Path(str(req["artifacts_dir"])).parent
+    bound = store.bind_to_run(staged.set_id, run_root / "inputs")
+    context = compile_attachment_context(
+        run_root=run_root,
+        manifest_path=bound.manifest_path,
+        manifest_sha256=hashlib.sha256(bound.manifest_path.read_bytes()).hexdigest(),
+        runtime_consent=True,
+        expected_count=1,
+        expected_run_id=str(req["run_id"]),
+    )
+    return {
+        "run_id": req["run_id"],
+        "artifacts_dir": req["artifacts_dir"],
+        "attachment_context": context,
+    }, contents
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_sdk_image_turn_records_text_and_image_provenance_without_image_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, streaming: bool
+) -> None:
+    manifest, contents = image_manifest(tmp_path)
+    calls = []
+
+    class TextInput(SimpleNamespace):
+        pass
+
+    class LocalImageInput(SimpleNamespace):
+        pass
+
+    module = ModuleType("openai_codex")
+    module.TextInput = TextInput
+    module.LocalImageInput = LocalImageInput
+    monkeypatch.setitem(sys.modules, "openai_codex", module)
+    api = ModuleType("openai_codex.api")
+    api._collect_turn_result = lambda *_args, **_kwargs: SimpleNamespace(
+        final_response="{}"
+    )
+    monkeypatch.setitem(sys.modules, "openai_codex.api", api)
+
+    class Thread:
+        id = "image-thread"
+
+        def run(self, turn_input, **kwargs):
+            calls.append((turn_input, kwargs))
+            return SimpleNamespace(final_response="{}")
+
+    def notifications():
+        yield from ()
+
+    def turn(turn_input, **kwargs):
+        calls.append((turn_input, kwargs))
+        return SimpleNamespace(id="image-turn", stream=notifications)
+
+    thread = Thread()
+    if streaming:
+        thread.turn = turn
+    for phase, prompt in [
+        ("role", "Inspect this image"),
+        ("output_repair_1", "Repair JSON"),
+    ]:
+        sdk.run_turn_streaming(
+            thread,
+            prompt,
+            settings={
+                "model": "test-model",
+                "reasoning_effort": "medium",
+                "service_tier": "fast",
+            },
+            schema={"type": "object"},
+            sandbox="read-only",
+            progress=sdk.ProgressWriter(request(tmp_path)),
+            manifest=manifest,
+            phase=phase,
+        )
+    snapshots = {
+        row["phase"]: get_input(
+            tmp_path / "run", row["effective_context_digest"].removeprefix("sha256:")
+        )
+        for row in list_inputs(tmp_path / "run")["inputs"]
+    }
+    initial = snapshots["role"]
+    turn_input, kwargs = calls[0]
+    assert isinstance(turn_input[0], TextInput)
+    assert turn_input[0].text == initial["payload"]["prompt"] == "Inspect this image"
+    assert isinstance(turn_input[1], LocalImageInput)
+    metadata = initial["payload"]["images"]
+    assert len(metadata) == 1
+    assert metadata[0]["path"] == turn_input[1].path
+    assert metadata[0]["sha256"] == hashlib.sha256(contents).hexdigest()
+    assert metadata[0]["size"] == len(contents)
+    assert metadata[0]["media_type"] == "image/png"
+    assert initial["payload"]["output_schema"] == kwargs["output_schema"]
+    assert initial["prompt_digest"] == fingerprint_text(turn_input[0].text)
+    assert base64.b64encode(contents).decode("ascii") not in canonical_json(initial)
+    assert initial["scope"] == "harness_turn_input"
+    assert "image bytes" in " ".join(initial["limitations"])
+    assert calls[1][0] == "Repair JSON"
+    assert snapshots["output_repair_1"]["payload"]["prompt"] == calls[1][0]
+    assert snapshots["output_repair_1"]["payload"]["images"] == []
+
+
+def test_image_snapshot_revalidates_content_and_rejects_unknown_references(
+    tmp_path: Path,
+) -> None:
+    manifest, _contents = image_manifest(tmp_path)
+    path = manifest["attachment_context"]["image_references"][0]["path"]
+    with pytest.raises(ContextGuardError, match="validated attachment"):
+        record(tmp_path, manifest=manifest, image_paths=[str(tmp_path / "outside.png")])
+    record(tmp_path, manifest=manifest, image_paths=[path])
+    Path(path).write_bytes(b"changed image")
+    with pytest.raises(AttachmentContextError):
+        record(tmp_path, manifest=manifest, image_paths=[path])
+    assert len(list_inputs(tmp_path / "run")["inputs"]) == 1
 
 
 def test_cli_submits_exact_recorded_prompt(
@@ -426,13 +566,14 @@ def test_api_preview_refresh_and_run_inspection_are_read_only_and_authorized(
     tmp_path: Path,
 ) -> None:
     record(tmp_path)
+    test_bearer = "test-only"
     (tmp_path / "README.md").write_text("# Overview\nFirst architecture.")
     server = ThreadingHTTPServer(
         ("127.0.0.1", 0),
         handler_factory(
             queue=TaskQueue(tmp_path / "queue.db"),
             runs_dir=tmp_path,
-            auth_token="test-only",
+            auth_token=test_bearer,
             webhook_secret="",
             default_repository=tmp_path,
         ),
@@ -440,7 +581,7 @@ def test_api_preview_refresh_and_run_inspection_are_read_only_and_authorized(
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    def fetch(path, body=None, token="test-only", extra_headers=None):
+    def fetch(path, body=None, token=test_bearer, extra_headers=None):
         req = Request(
             f"http://127.0.0.1:{server.server_port}" + path,
             data=json.dumps(body).encode() if body is not None else None,
@@ -470,7 +611,7 @@ def test_api_preview_refresh_and_run_inspection_are_read_only_and_authorized(
         data = fetch("/runs/run/context/" + digest)
         assert data["payload"]["prompt"] == "Safe prompt"
         with pytest.raises(HTTPError) as error:
-            fetch("/runs/run/context/" + digest, token="incorrect")
+            fetch("/runs/run/context/" + digest, token="wrong")
         assert error.value.code == 401
         for headers in [
             {"Origin": "https://untrusted.example"},

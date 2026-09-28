@@ -44,7 +44,7 @@ def _positive_limit(value: Any, label: str, default: int = 0) -> int:
     return selected
 
 
-def _registered_projects() -> dict[str, Path]:
+def _registered_projects() -> dict[str, tuple[Path, ...]]:
     try:
         document = load_local_trust()
     except ProjectConfigError:
@@ -52,15 +52,27 @@ def _registered_projects() -> dict[str, Path]:
     projects = document.get("projects", {})
     if not isinstance(projects, dict):
         return {}
-    resolved: dict[str, Path] = {}
+    grouped: dict[str, set[Path]] = {}
     for raw in projects.values():
         if not isinstance(raw, dict):
             continue
         project_id = str(raw.get("project_id", "")).strip()
         repository = Path(str(raw.get("repository", ""))).expanduser().resolve()
         if project_id and repository.is_dir():
-            resolved[project_id] = repository
-    return resolved
+            grouped.setdefault(project_id, set()).add(repository)
+    return {
+        project_id: tuple(sorted(repositories, key=str))
+        for project_id, repositories in grouped.items()
+    }
+
+
+def _registered_project(project_id: str) -> Path | None:
+    repositories = _registered_projects().get(project_id, ())
+    if len(repositories) > 1:
+        raise BatchManifestError(
+            f"registered project id {project_id!r} is ambiguous; provide an explicit path"
+        )
+    return repositories[0] if repositories else None
 
 
 def _repository_definitions(
@@ -72,7 +84,6 @@ def _repository_definitions(
         return {}
     if not isinstance(value, dict):
         raise BatchManifestError("repositories must be an object")
-    registered = _registered_projects()
     definitions: dict[str, dict[str, Any]] = {}
     for alias, raw in value.items():
         if not isinstance(alias, str) or not alias.strip():
@@ -91,7 +102,7 @@ def _repository_definitions(
             candidate = Path(raw_path).expanduser()
             repository = (candidate if candidate.is_absolute() else base_dir / candidate).resolve()
         else:
-            repository = registered.get(alias, (base_dir / alias).resolve())
+            repository = _registered_project(alias) or (base_dir / alias).resolve()
         if not repository.is_dir():
             raise BatchManifestError(
                 f"repository {alias!r} does not resolve to an existing project folder"
@@ -161,7 +172,7 @@ def parse_batch_manifest(
                 candidate if candidate.is_absolute() else base_dir / candidate
             ).resolve()
             if not repository.is_dir():
-                registered = _registered_projects().get(raw_repo)
+                registered = _registered_project(raw_repo)
                 repository = registered or repository
             if not repository.is_dir():
                 raise BatchManifestError(f"{label}.repo does not resolve to a project folder")

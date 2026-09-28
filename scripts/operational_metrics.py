@@ -16,11 +16,13 @@ from list_runs import collect
 from task_queue import DEFAULT_DB, TaskQueue
 from worker_service import SERVICE_STATE, process_alive, read_state
 from ai_harness.branch_conflicts import analyze_branch_conflicts
+from ai_harness.project import trust_key
 from ai_harness.observability.adaptive_dashboard import (
     DEFAULT_ACCEPTANCE_PATH,
     adaptive_run_detail,
     load_adaptive_acceptance,
 )
+from run_state import continuation_project_identity
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -170,6 +172,8 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
     if isinstance(metrics.get("duration_ms"), (int, float)):
         elapsed_seconds = float(metrics["duration_ms"]) / 1000
     publication = read_json(run_dir / "artifacts" / "publication.json") or read_json(run_dir / "publication.json")
+    execution_status = str(workflow.get("execution_status", ""))
+    attention_statuses = {"awaiting_approval", "blocked", "dead_letter", "failed"}
     raw_attention = workflow.get("attention")
     attention = {
         "required": False,
@@ -180,7 +184,11 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
         "fingerprint": "",
         "repeated_question": False,
     }
-    if isinstance(raw_attention, dict) and raw_attention.get("required") is True:
+    if (
+        (not execution_status or execution_status in attention_statuses)
+        and isinstance(raw_attention, dict)
+        and raw_attention.get("required") is True
+    ):
         details = raw_attention.get("details", [])
         attention = {
             "required": True,
@@ -203,7 +211,7 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
     if publication.get("pr_created_or_updated") is True and started_at is not None and publication_path.exists():
         pr_time_seconds = round(max(0, publication_path.stat().st_mtime - started_at), 3)
     adaptive = adaptive_run_detail(run_dir, workflow, metrics)
-    return {
+    summary = {
         "run_id": run_dir.name,
         "task_id": str(workflow.get("task_id", "")),
         "project": str(workflow.get("project", "")),
@@ -262,6 +270,18 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
         "adaptive": adaptive,
         "updated_at": run_dir.joinpath("workflow.json").stat().st_mtime,
     }
+    try:
+        project_identity = continuation_project_identity(workflow)
+    except ValueError:
+        project_identity = {}
+    repository = str(workflow.get("repository", ""))
+    if (
+        project_identity
+        and repository
+        and project_identity["project_key"] == trust_key(Path(repository))
+    ):
+        summary.update(project_identity)
+    return summary
 
 
 def lifecycle_stage(task: Any, run: dict[str, Any] | None) -> str:

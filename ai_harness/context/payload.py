@@ -1,4 +1,4 @@
-"""Immutable, verifiable records of the exact input supplied by Harness."""
+"""Immutable Harness turn input records, with digests for local image bytes."""
 
 from __future__ import annotations
 
@@ -8,6 +8,11 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from ai_harness.attachments.runtime import (
+    MAX_RUNTIME_IMAGE_REFERENCES,
+    attachment_image_paths,
+)
 
 from .cache import fingerprint_text
 from .content_guard import (
@@ -20,6 +25,44 @@ from .models import PrivacyClass
 
 
 MAX_SNAPSHOT_BYTES = 4_000_000
+IMAGE_METADATA_FIELDS = (
+    "attachment_id",
+    "kind",
+    "path",
+    "media_type",
+    "size",
+    "sha256",
+    "width",
+    "height",
+    "page",
+)
+
+
+def image_metadata(
+    manifest: dict[str, Any], image_paths: list[str]
+) -> list[dict[str, Any]]:
+    """Identify submitted images without copying their bytes into evidence."""
+    if len(image_paths) > MAX_RUNTIME_IMAGE_REFERENCES or any(
+        not isinstance(path, str) for path in image_paths
+    ):
+        raise ContextGuardError("Invalid submitted image references")
+    if not image_paths:
+        return []
+    validated_paths = set(attachment_image_paths(manifest))
+    if any(path not in validated_paths for path in image_paths):
+        raise ContextGuardError("Submitted image is not a validated attachment")
+    references = {
+        item["path"]: item
+        for item in manifest["attachment_context"]["image_references"]
+    }
+    return [
+        {
+            key: references[path][key]
+            for key in IMAGE_METADATA_FIELDS
+            if key in references[path]
+        }
+        for path in image_paths
+    ]
 
 
 def canonical_json(value: Any) -> str:
@@ -144,6 +187,33 @@ def read_snapshot(path: Path) -> dict[str, Any]:
         payload.get("settings"), dict
     ):
         raise ContextGuardError("Invalid context execution contract")
+    images = payload.get("images", [])
+    if (
+        not isinstance(images, list)
+        or len(images) > MAX_RUNTIME_IMAGE_REFERENCES
+        or any(
+            not isinstance(item, dict)
+            or set(item) - set(IMAGE_METADATA_FIELDS)
+            or any(
+                not isinstance(item.get(key), str) or len(item[key]) > 4096
+                for key in ("attachment_id", "kind", "path", "media_type", "sha256")
+            )
+            or any(
+                type(item.get(key)) is not int or item[key] < 1
+                for key in ("size", "width", "height")
+            )
+            or item["kind"] != "local_image"
+            or item["media_type"] not in {"image/gif", "image/jpeg", "image/png"}
+            or len(item["sha256"]) != 64
+            or any(character not in "0123456789abcdef" for character in item["sha256"])
+            or (
+                "page" in item
+                and (type(item["page"]) is not int or not 1 <= item["page"] <= 50)
+            )
+            for item in images
+        )
+    ):
+        raise ContextGuardError("Invalid context image metadata")
     if not isinstance(value.get("included"), list) or not isinstance(
         value.get("excluded"), list
     ):
@@ -175,13 +245,17 @@ def record_payload(
     thread_id: str = "",
     phase: str = "role",
     control_root: Path,
+    image_paths: list[str] | None = None,
 ) -> dict[str, Any]:
     """Scan and freeze immediately before submission, including repair turns.
 
-    The digest covers prompt, output schema, destination and execution settings.
+    The digest covers prompt, output schema, destination, execution settings and
+    submitted image metadata/digests, but never stores raw image bytes.
     Runtime-owned system instructions, earlier turns and tool reads are outside
     this new-input snapshot. Recording is not proof the provider accepted a turn.
     """
+    if not isinstance(prompt, str):
+        raise ContextGuardError("Context prompt must be text")
     policy = ContextPrivacyPolicy.load(control_root, str(manifest.get("project", "")))
     # Task descriptions and role contracts are private even if all references
     # happen to be public; adding a provider never grants it implicit access.
@@ -207,6 +281,7 @@ def record_payload(
         "thread_id": thread_id,
         "run_id": str(request.get("run_id", "")),
         "role": str(request.get("role", "")),
+        "images": image_metadata(manifest, image_paths or []),
     }
     require_safe_value(payload, "Final runtime input")
     digest = fingerprint_text(canonical_json(payload))
@@ -225,7 +300,9 @@ def record_payload(
         "status": "prepared_for_submission",
         "scope": "harness_turn_input",
         "limitations": [
-            "Runtime system instructions, previous session turns and subsequent tool reads are not part of this snapshot."
+            "Runtime system instructions, previous session turns and subsequent tool reads are not part of this snapshot.",
+            "Images are represented only by revalidated local metadata and content digests; "
+            "image bytes and provider image processing are not recorded or scanned by the text credential guard.",
         ],
         "payload": payload,
         "included": manifest.get("selected_context", []) if phase == "role" else [],

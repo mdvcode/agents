@@ -4,9 +4,12 @@ import threading
 import time
 import sys
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+
+from ai_harness.project import trust_key
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -187,6 +190,51 @@ def test_worker_accepts_explicit_goal_mode(tmp_path: Path) -> None:
     )
 
     assert safe_payload(record)["mode"] == "goal"
+
+
+def test_worker_preserves_valid_project_identity_and_accepts_legacy_payload(
+    tmp_path: Path,
+) -> None:
+    queue = TaskQueue(tmp_path / "queue.db")
+    identified = queue.enqueue(
+        task_key="identified",
+        payload={
+            "task_id": "identified",
+            "repository": str(tmp_path),
+            "project": "nextjs_web",
+            "project_id": "shared-name",
+            "project_key": trust_key(tmp_path),
+        },
+    )
+    legacy = queue.enqueue(
+        task_key="legacy",
+        payload={"task_id": "legacy", "repository": str(tmp_path)},
+    )
+
+    assert safe_payload(identified)["project_key"] == trust_key(tmp_path)
+
+    mismatched = replace(
+        identified,
+        payload={**identified.payload, "project_key": trust_key(tmp_path / "other")},
+    )
+    with pytest.raises(ValueError, match="does not match the canonical repository"):
+        safe_payload(mismatched)
+    assert "project_key" not in safe_payload(legacy)
+
+
+def test_worker_rejects_incomplete_project_identity(tmp_path: Path) -> None:
+    queue = TaskQueue(tmp_path / "queue.db")
+    record = queue.enqueue(
+        task_key="partial-project",
+        payload={
+            "task_id": "partial-project",
+            "repository": str(tmp_path),
+            "project_id": "project",
+        },
+    )
+
+    with pytest.raises(ValueError, match="identity is incomplete"):
+        safe_payload(record)
 
 
 def test_worker_preserves_exact_attention_question() -> None:

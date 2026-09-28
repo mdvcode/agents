@@ -11,7 +11,11 @@ Step 2 uses one supervised operational control plane around the authoritative ru
 - `worker_service.py` owns process lifecycle and worker registration. It supports foreground service, detached start, restart, status, database-backed health, graceful shutdown, heartbeats, stale monitoring, and a bounded restart limit.
 - CLI, GitHub Issue, generic webhook, API, and CI deliveries normalize into the same idempotent task envelope before entering the queue.
 - GitHub Actions feedback is accepted only for an HMAC-authenticated completed failure. Failed logs are fetched through the declared GitHub tool policy, sanitized, capped, and stored under the existing run. Repair resumes at `ci-repair-agent` on the same branch so publication updates the existing PR.
-- The loopback control API exposes task intake, approve, reject, resume, health, runs, workers, queue, leases, budgets, and exceptions. It returns compact structured state and never raw transcripts. Optional bearer authentication is supported; non-loopback binding is rejected.
+- The loopback control API exposes task intake, approve, reject, resume, health, runs, workers,
+  queue, leases, budgets, and exceptions. It returns compact structured state and never raw
+  transcripts. The product dashboard always supplies an ephemeral bearer token. A lower-level
+  server without `AGENT_CONTROL_PLANE_TOKEN` is read-only and rejects every POST mutation; an exact
+  bearer token is mandatory when mutations are enabled. Non-loopback binding is rejected.
 
 ## State boundaries
 

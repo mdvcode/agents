@@ -63,6 +63,7 @@ class KnowledgeRequest:
     runtime: str
     project: str
     project_profile: str
+    project_key: str = ""
 
 
 @dataclass(frozen=True)

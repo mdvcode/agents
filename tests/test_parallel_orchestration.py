@@ -7,12 +7,20 @@ import sys
 import threading
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from ai_harness.branch_conflicts import analyze_branch_conflicts
-from ai_harness.task_batch import parse_batch_manifest
+from ai_harness.project import (
+    default_config,
+    register_local_project,
+    trust_key,
+    write_project_config,
+)
+from ai_harness.task_batch import BatchManifestError, parse_batch_manifest
 from ai_harness.workspace_cache import cache_environment
 from task_graph import finalize_child_run, reconcile_waiting_parent, spawn_children
 from task_queue import TaskQueue
@@ -75,6 +83,41 @@ tasks:
     assert [task["parallel"] for task in tasks] == [False, True, False]
     assert [task["max_parallel_tasks"] for task in tasks] == [3, 3, 2]
     assert [task["repository"] for task in tasks] == [backend, backend, frontend]
+
+
+def test_batch_manifest_rejects_ambiguous_registered_project_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_home = tmp_path / "config"
+    monkeypatch.setenv("AI_HARNESS_CONFIG_HOME", str(config_home))
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    for repository in (first, second):
+        repository.mkdir()
+        config = default_config(repository, project_id="shared")
+        write_project_config(config)
+        register_local_project(config)
+
+    with pytest.raises(BatchManifestError, match="ambiguous; provide an explicit path"):
+        parse_batch_manifest(
+            {
+                "version": 1,
+                "repositories": {"shared": {}},
+                "tasks": [{"repo": "shared", "goal": "Do not guess the folder"}],
+            },
+            base_dir=tmp_path,
+        )
+
+    tasks = parse_batch_manifest(
+        {
+            "version": 1,
+            "repositories": {"chosen": {"path": str(first)}},
+            "tasks": [{"repo": "chosen", "goal": "Use the explicit folder"}],
+        },
+        base_dir=tmp_path,
+    )
+    assert tasks[0]["repository"] == first.resolve()
 
 
 def test_repository_parallel_limit_is_enforced_inside_atomic_claim(tmp_path: Path) -> None:
@@ -267,6 +310,8 @@ def test_child_spawn_is_bounded_idempotent_and_uses_isolated_worktree(tmp_path: 
         "task_branch": "fix/parent",
         "base_branch": "main",
         "project": "agent_workspace",
+        "project_id": "parent-project",
+        "project_key": trust_key(repository),
         "repository": str(repository),
         "allowed_child_repositories": [str(repository)],
         "repository_max_parallel_tasks": 2,
@@ -303,6 +348,8 @@ def test_child_spawn_is_bounded_idempotent_and_uses_isolated_worktree(tmp_path: 
     assert duplicate == []
     record = queue.list()[0]
     assert record.payload["workspace_mode"] == "worktree"
+    assert record.payload["project_id"] == "parent-project"
+    assert record.payload["project_key"] == trust_key(repository)
     assert record.payload["parent_run_id"] == "parent"
     assert record.payload["dependency_mode"] == "blocking"
     assert record.payload["repository_max_parallel_tasks"] == 2

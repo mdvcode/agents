@@ -47,6 +47,7 @@ from ai_harness.model_policy import (  # noqa: E402
     load_execution_profiles,
     validate_request_profile,
 )
+from ai_harness.attachments.runtime import attachment_image_paths  # noqa: E402
 
 
 ROOT = SCRIPT_DIR.parents[1]
@@ -297,18 +298,27 @@ def run_turn_streaming(
 ) -> Any:
     """Run a turn while making every SDK notification observable."""
 
+    image_paths = attachment_image_paths(manifest or {}) if phase == "role" else []
     snapshot = record_payload(
-        request=progress.request, manifest=manifest or {}, prompt=prompt,
-        output_schema=schema, runtime="codex-sdk", settings=settings,
-        sandbox=str(getattr(sandbox, "value", sandbox)), thread_id=str(getattr(thread, "id", "")),
-        phase=phase, control_root=ROOT,
+        request=progress.request,
+        manifest=manifest or {},
+        prompt=prompt,
+        output_schema=schema,
+        runtime="codex-sdk",
+        settings=settings,
+        sandbox=str(getattr(sandbox, "value", sandbox)),
+        thread_id=str(getattr(thread, "id", "")),
+        phase=phase,
+        control_root=ROOT,
+        image_paths=image_paths,
     )
     prompt = snapshot["payload"]["prompt"]
     schema = snapshot["payload"]["output_schema"]
     settings = snapshot["payload"]["settings"]
+    turn_input = sdk_run_input(prompt, manifest or {}) if image_paths else prompt
     if not hasattr(thread, "turn"):
         return thread.run(
-            prompt,
+            turn_input,
             effort=settings["reasoning_effort"],
             output_schema=schema,
             sandbox=sandbox,
@@ -317,7 +327,7 @@ def run_turn_streaming(
     from openai_codex.api import _collect_turn_result
 
     handle = thread.turn(
-        prompt,
+        turn_input,
         effort=settings["reasoning_effort"],
         output_schema=schema,
         sandbox=sandbox,
@@ -344,6 +354,20 @@ def run_turn_streaming(
     finally:
         stream.close()
     return _collect_turn_result(iter(events), turn_id=handle.id)
+
+
+def sdk_run_input(prompt: str, manifest: dict[str, Any]) -> Any:
+    """Build one SDK turn input from revalidated local attachment references."""
+
+    image_paths = attachment_image_paths(manifest)
+    if not image_paths:
+        return prompt
+    from openai_codex import LocalImageInput, TextInput
+
+    return [
+        TextInput(text=prompt),
+        *(LocalImageInput(path=path) for path in image_paths),
+    ]
 
 
 def run_sdk(
@@ -418,7 +442,7 @@ def run_sdk(
                     env=environment,
                     config_overrides=tuple(config_overrides),
                     client_name="ai_harness",
-                    client_title="AI Harness",
+                    client_title="Tweebit AI Harness by Daryna",
                 )
             )
         account = codex.account().account
@@ -454,7 +478,7 @@ def run_sdk(
                 ephemeral=False,
                 model=settings["model"],
                 sandbox=sdk_sandbox(filesystem_access),
-                service_name="ai-harness",
+                service_name="tweebit-ai-harness",
                 service_tier=settings["service_tier"],
             )
         thread_id = sdk_thread.id

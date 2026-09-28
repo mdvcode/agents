@@ -28,6 +28,8 @@ from ai_harness.context import (
 from ai_harness.context.cache import fingerprint_text, repository_fingerprints
 from ai_harness.context.sources import ObsidianSource, PolicySource
 from ai_harness.context.deduplication import deduplicate_documents
+from ai_harness.project import trust_key
+from scripts.adapters.codex_cli_executor import role_prompt_payload
 from scripts.context_compiler import create_context_manifest
 
 
@@ -130,6 +132,54 @@ def test_policy_source_keeps_control_plane_and_target_agents_distinct(tmp_path: 
     assert "Use target conventions" in by_path["repository/AGENTS.md"].content
     assert by_path["control-plane/AGENTS.md"].metadata["scope"] == "control_plane"
     assert by_path["repository/AGENTS.md"].metadata["scope"] == "target_repository"
+
+
+@pytest.mark.parametrize(
+    ("privacy", "reason"),
+    [("local-only", "privacy"), ("secret-never-model", "privacy"), ("project-private", "secret")],
+)
+def test_withheld_sources_stay_out_of_repository_index_and_final_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, privacy: str, reason: str
+) -> None:
+    control = tmp_path / "control"
+    repository = tmp_path / "repository"
+    run = control / ".agent-runs" / "run"
+    prepare_control_root(control)
+    monkeypatch.setattr("scripts.context_compiler.MEMORY_CONTROL_ROOT", control)
+    write(repository / "README.md", "# Repository overview\nPublic architecture.\n")
+    relative = "docs/PRIVATE_CLIENT_ACQUISITION.md"
+    body = "Private acquisition details not for the model"
+    if reason == "secret":
+        body += "\napi_key = " + "x" * 30
+    write(repository / relative, f"---\nprivacy: {privacy}\n---\n{body}\n")
+    manifest_path = create_context_manifest(
+        run_id="run",
+        role="planner",
+        goal="Review repository architecture",
+        repository=repository,
+        artifacts_dir=run / "artifacts",
+        context_dir=run / "context-manifests",
+        project="example",
+        project_profile="agent_workspace",
+        token_budget=4000,
+        allowed_tools=["filesystem_read"],
+        previous_roles=[],
+    )
+    manifest = json.loads(manifest_path.read_text())
+    excluded = next(item for item in manifest["excluded_context"] if item["path"] == relative)
+    assert excluded["reason_code"] == reason
+    assert any(item["source"] == "git_repository" for item in manifest["selected_context"])
+    prompt = role_prompt_payload(
+        request={"artifacts_dir": str(run / "artifacts")},
+        prompt_text="Plan the repository change.",
+        manifest=manifest,
+        output_contract={},
+    )
+    package = Path(manifest["context_package_path"]).read_text()
+    for value in (package, prompt):
+        assert "README.md" in value
+        assert Path(relative).name not in value
+        assert "Private acquisition details not for the model" not in value
 
 
 def test_context_builder_enforces_total_and_category_budgets() -> None:

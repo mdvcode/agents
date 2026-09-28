@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -117,3 +118,54 @@ def test_completed_input_is_deduplicated(tmp_path: Path) -> None:
         "input_fingerprint": "same",
         "execution_status": "completed",
     }
+
+
+def test_empty_attachment_digest_preserves_legacy_task_fingerprint(tmp_path: Path) -> None:
+    values = {
+        "task_id": "task-1",
+        "goal": "Keep legacy identity",
+        "repository": tmp_path,
+        "branch": "codex/task-1",
+        "base_branch": "main",
+        "workspace_mode": "worktree",
+        "workflow_mode": "auto",
+    }
+    legacy_payload = {
+        **values,
+        "repository": str(tmp_path.resolve()),
+    }
+    expected = hashlib.sha256(
+        json.dumps(
+            legacy_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    assert run_state.task_fingerprint(**values) == expected
+    assert run_state.task_fingerprint(
+        **values,
+        input_manifest_sha256="a" * 64,
+    ) != expected
+
+
+def test_continuation_project_identity_preserves_new_and_legacy_runs() -> None:
+    assert run_state.continuation_project_identity({}) == {}
+    assert run_state.continuation_project_identity(
+        {"project_id": "local-project", "project_key": "b" * 64}
+    ) == {"project_id": "local-project", "project_key": "b" * 64}
+
+
+def test_continuation_project_identity_rejects_partial_or_corrupt_state() -> None:
+    for workflow in (
+        {"project_id": "local-project"},
+        {"project_id": "", "project_key": ""},
+        {"project_id": "Local Project", "project_key": "b" * 64},
+        {"project_id": "local-project", "project_key": "short"},
+    ):
+        try:
+            run_state.continuation_project_identity(workflow)
+        except ValueError:
+            continue
+        raise AssertionError(f"invalid project identity was accepted: {workflow!r}")

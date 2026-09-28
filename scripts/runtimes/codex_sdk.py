@@ -32,6 +32,7 @@ class CodexSdkRuntime(SubprocessRuntime):
                 production=True,
                 command=command,
                 api_required=False,
+                capabilities=("text", "local_image"),
             ),
             timeout_seconds=timeout_seconds,
             raw_output_dir=raw_output_dir,

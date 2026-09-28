@@ -13,7 +13,7 @@ from ai_harness.context.content_guard import (
     require_safe,
 )
 from ai_harness.context.payload import confined_path, read_snapshot
-from ai_harness.project import default_config, load_project_config
+from ai_harness.project import default_config, load_project_config, trust_key
 from context_compiler import role_contract
 from runtimes.registry import load_runtime_config
 
@@ -42,6 +42,7 @@ def preview_sources(
         control_root=control_root,
         project=config.project_id,
         project_profile=config.profile,
+        project_key=trust_key(repository),
         repository=repository,
         token_budget=12_000,
     )

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -27,10 +28,12 @@ if str(ROOT) not in sys.path:
 
 from ai_harness.observability import NoOpTelemetryRuntime, TelemetryRuntime, safe_telemetry_runtime
 from ai_harness.processes import run_managed_process
+from ai_harness.project import trust_key
 from ai_harness.recovery import RecoveryCoordinator, classify_failure, load_recovery_policy
 from ai_harness.recovery.models import persist_failure, sanitized_message
 from ai_harness.sdk_session import ManagedCodexSdkSession, SdkSessionUnavailable
 from ai_harness.workspace_cache import cache_environment
+from run_state import continuation_project_identity
 from task_graph import finalize_child_run, reconcile_waiting_parent
 
 RUNS_DIR = ROOT / ".agent-runs"
@@ -113,6 +116,8 @@ def safe_payload(record: TaskRecord) -> dict[str, Any]:
     allowed = {
         "task_id",
         "project",
+        "project_id",
+        "project_key",
         "repository",
         "branch",
         "base_branch",
@@ -142,6 +147,10 @@ def safe_payload(record: TaskRecord) -> dict[str, Any]:
         "graph_depth",
         "child_budget",
         "spawn_fingerprint",
+        "input_manifest",
+        "input_manifest_sha256",
+        "attachment_count",
+        "attachment_runtime_consent",
     }
     unknown = sorted(set(record.payload) - allowed)
     if unknown:
@@ -150,6 +159,11 @@ def safe_payload(record: TaskRecord) -> dict[str, Any]:
     missing = [field for field in required if not isinstance(record.payload.get(field), str) or not record.payload[field]]
     if missing:
         raise ValueError("missing task payload fields: " + ", ".join(missing))
+    project_identity = continuation_project_identity(record.payload)
+    if project_identity and project_identity["project_key"] != trust_key(
+        Path(str(record.payload["repository"]))
+    ):
+        raise ValueError("task project key does not match the canonical repository")
     workspace_mode = record.payload.get("workspace_mode", "worktree")
     if workspace_mode not in {"checkout", "worktree", "isolated", "current_branch"}:
         raise ValueError("workspace_mode must be checkout or worktree")
@@ -269,6 +283,49 @@ class WorkflowWorkerPool:
                 requires_human=True,
                 exception_reason="worker lease lost",
             )
+        input_manifest = str(payload.get("input_manifest", "")).strip()
+        input_manifest_sha256 = str(payload.get("input_manifest_sha256", "")).strip()
+        attachment_count = payload.get("attachment_count", 0)
+        attachment_runtime_consent = payload.get("attachment_runtime_consent", False)
+        if (
+            isinstance(attachment_count, bool)
+            or not isinstance(attachment_count, int)
+            or attachment_count < 0
+            or attachment_count > 5
+            or bool(attachment_count) != bool(input_manifest)
+            or bool(input_manifest) != bool(input_manifest_sha256)
+            or bool(input_manifest) != (attachment_runtime_consent is True)
+        ):
+            return WorkerOutcome(
+                status="failed",
+                run_id=run_id,
+                error="attachment manifest metadata is incomplete",
+                failure_kind="policy_block",
+                recovery_action="approval",
+                requires_human=True,
+                exception_reason="invalid attachment manifest metadata",
+            )
+        if input_manifest:
+            manifest_path = Path(input_manifest).resolve()
+            expected_path = (run_dir / "inputs" / "manifest.json").resolve()
+            try:
+                manifest_bytes = manifest_path.read_bytes()
+            except OSError:
+                manifest_bytes = b""
+            if (
+                manifest_path != expected_path
+                or not manifest_bytes
+                or hashlib.sha256(manifest_bytes).hexdigest() != input_manifest_sha256
+            ):
+                return WorkerOutcome(
+                    status="failed",
+                    run_id=run_id,
+                    error="attachment manifest failed integrity validation",
+                    failure_kind="policy_block",
+                    recovery_action="approval",
+                    requires_human=True,
+                    exception_reason="attachment manifest integrity check failed",
+                )
         command = [
             sys.executable,
             "scripts/run_workflow.py",
@@ -290,6 +347,10 @@ class WorkflowWorkerPool:
             "--mode",
             payload.get("mode", "auto"),
         ]
+        if payload.get("project_id"):
+            command.extend(["--project-id", str(payload["project_id"])])
+        if payload.get("project_key"):
+            command.extend(["--project-key", str(payload["project_key"])])
         if payload.get("adapter_command"):
             command.extend(["--adapter-command", payload["adapter_command"]])
         if payload.get("runtime_provider"):
@@ -338,6 +399,16 @@ class WorkflowWorkerPool:
         workflow_environment["AGENT_TASK_GRAPH_METADATA"] = json.dumps(
             graph_metadata, ensure_ascii=False
         )
+        if input_manifest:
+            workflow_environment["AGENT_INPUT_MANIFEST"] = input_manifest
+            workflow_environment["AGENT_INPUT_MANIFEST_SHA256"] = input_manifest_sha256
+            workflow_environment["AGENT_ATTACHMENT_COUNT"] = str(attachment_count)
+            workflow_environment["AGENT_ATTACHMENT_RUNTIME_CONSENT"] = "1"
+        else:
+            workflow_environment.pop("AGENT_INPUT_MANIFEST", None)
+            workflow_environment.pop("AGENT_INPUT_MANIFEST_SHA256", None)
+            workflow_environment.pop("AGENT_ATTACHMENT_COUNT", None)
+            workflow_environment.pop("AGENT_ATTACHMENT_RUNTIME_CONSENT", None)
         next_heartbeat_at = 0.0
         next_cancel_check_at = 0.0
         cancellation_seen = False

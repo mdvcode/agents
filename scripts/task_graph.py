@@ -232,6 +232,8 @@ def spawn_children(
             payload=payload,
             repository=Path(proposal["repository"]),
             project=str(state.get("project", "agent_workspace")),
+            project_id=str(state.get("project_id", "")),
+            project_key=str(state.get("project_key", "")),
         )
         record = enqueue_envelope(queue, envelope)
         child = {

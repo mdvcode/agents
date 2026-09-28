@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 
+from ai_harness.project import trust_key
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_workflow.py"
 SPEC = importlib.util.spec_from_file_location("run_workflow", MODULE_PATH)
@@ -82,6 +83,52 @@ workflows:
     markers = list((tmp_path / ".agent-runs").glob("*/artifacts/marker.txt"))
     assert len(markers) == 1
     assert markers[0].read_text(encoding="utf-8") == "ok"
+
+
+def test_workflow_runner_persists_and_forwards_project_identity(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    workflows_path = tmp_path / ".agent-workflows.yaml"
+    workflows_path.write_text(
+        """
+version: 1
+workflows:
+  sample:
+    steps:
+      - name: "role"
+        command: "python3 scripts/agent_role_runner.py --project {project}"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    runs = tmp_path / ".agent-runs"
+    monkeypatch.setattr(run_workflow, "WORKFLOWS", workflows_path)
+    monkeypatch.setattr(run_workflow, "RUNS_DIR", runs)
+    commands: list[str] = []
+
+    def fake_run_command(command: str, _cwd: Path, _timeout: int) -> tuple[int, str, str]:
+        commands.append(command)
+        return 0, "ok", ""
+
+    monkeypatch.setattr(run_workflow, "run_command", fake_run_command)
+
+    result = run_workflow.run_workflow(
+        "sample",
+        root=tmp_path,
+        run_id="identity-run",
+        project="nextjs_web",
+        project_id="shared-name",
+        project_key=trust_key(tmp_path),
+    )
+
+    state = json.loads((runs / "identity-run" / "workflow.json").read_text(encoding="utf-8"))
+    arguments = shlex.split(commands[0])
+    assert result == 0
+    assert state["project"] == "nextjs_web"
+    assert state["project_id"] == "shared-name"
+    assert state["project_key"] == trust_key(tmp_path)
+    assert arguments[arguments.index("--project-id") + 1] == "shared-name"
+    assert arguments[arguments.index("--project-key") + 1] == trust_key(tmp_path)
 
 
 def test_workflow_runner_uses_workflow_timeout(tmp_path: Path, monkeypatch: object) -> None:
