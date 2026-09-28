@@ -2639,6 +2639,112 @@ def test_manual_recovery_archives_active_technical_attention() -> None:
     assert workflow["attention_history"][0]["resolution"] == "manual_recovery"
 
 
+@pytest.mark.parametrize("role", ["reviewer", "implementation-agent"])
+def test_retry_preserves_completed_review_or_expired_model_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: object,
+    role: str,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    run_id = "run-retry-checkpoint"
+    run_dir = state_root / ".agent-runs" / run_id
+    completed_review = role == "reviewer"
+    summary = (
+        "Review requires a repair."
+        if completed_review
+        else agent_role_runner.MODEL_ESCALATION_SUMMARY
+    )
+    attention = {
+        "required": True,
+        "role": role,
+        "action": "fix_then_retry" if completed_review else "answer",
+        "summary": summary,
+        "details": [summary],
+        "fingerprint": "sha256:" + "a" * 64,
+        "requirement": {
+            "requirement_id": agent_role_runner.MODEL_ESCALATION_REQUIREMENT,
+        },
+    }
+    profile = {"terminal_action": "human_or_dead_letter"}
+    requirement = {
+        **attention["requirement"],
+        "role": role,
+        "fingerprint": attention["fingerprint"],
+    }
+    workflow = {
+        "run_id": run_id,
+        "repository": str(repository),
+        "execution_status": "blocked",
+        "current_role": role,
+        "current_execution_profile": profile,
+        "roles": [{
+            "role": role,
+            "result": {
+                "status": "completed" if completed_review else "awaiting_approval",
+                "summary": summary,
+            },
+            "execution_profile": profile,
+        }],
+        "attention": attention,
+        "missing_requirement_requests": [] if completed_review else [requirement],
+        "blockers": [
+            summary if completed_review else "approval expired",
+            "approval rejected: obsolete technical gate" if completed_review else summary,
+            "Independent security blocker.",
+        ],
+    }
+    cli.write_checkpoint(
+        run_dir,
+        cli.RoleCheckpoint(
+            run_id=run_id,
+            role=role,
+            state="role_completed" if completed_review else "role_running",
+            attempt=2,
+            worktree=str(repository),
+            input_fingerprint="task-fingerprint",
+        ),
+    )
+    (run_dir / "workflow.json").write_text(json.dumps(workflow), encoding="utf-8")
+    task_queue = cli.load_harness_module(state_root, "task_queue")
+    queue = task_queue.TaskQueue(state_root / ".agent-queue" / "tasks.db")
+    queued = queue.enqueue(
+        task_key=run_id,
+        payload={"task_id": run_id, "repository": str(repository)},
+        run_id=run_id,
+    )
+    assert queue.claim(worker_id="worker-1") is not None
+    assert queue.mark_running(queued.id, "worker-1")
+    queue.finish(task_id=queued.id, worker_id="worker-1", status="blocked", run_id=run_id)
+
+    assert cli.main(["retry", run_id, "--repo", str(repository), "--json"]) == 0
+
+    retried = json.loads((run_dir / "workflow.json").read_text(encoding="utf-8"))
+    assert retried["execution_status"] == "retry_wait"
+    assert queue.get(queued.id).status == "retry_wait"
+    assert retried["resume_role"] == role
+    assert "Independent security blocker." in retried["blockers"]
+    assert not retried.get("approval_grants")
+    checkpoint = cli.read_checkpoint(run_dir, role)
+    assert checkpoint is not None
+    if completed_review:
+        assert checkpoint.state == "role_completed"
+        assert "attention" not in retried
+        assert retried["blockers"] == ["Independent security blocker."]
+        assert retried["attention_history"][-1]["resolution"] == "retry_requested"
+    else:
+        assert checkpoint.state == "role_pending"
+        assert retried["attention"] == attention
+        assert agent_role_runner.bounded_model_escalation_checkpoint(retried, role)
+        assert retried["missing_requirement_requests"] == []
+        assert retried["expired_requirement_requests"][-1]["resolution"] == "approval_expired"
+
+
 def test_retry_reconciles_false_completion_from_blocked_review(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

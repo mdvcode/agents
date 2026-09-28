@@ -726,10 +726,16 @@ def test_repeated_exhausted_review_can_request_only_one_explicit_extension(
     assert approval["requested_scope"]["additional_attempts"] == 1
 
 
+@pytest.mark.parametrize("action", ["answer", "approve"])
 def test_terminal_model_profile_requests_exact_one_use_escalation_scope(
     tmp_path: Path,
+    action: str,
 ) -> None:
     run = exhausted_model_run(tmp_path)
+    workflow_path = run / "workflow.json"
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    workflow["attention"]["action"] = action
+    write_json(workflow_path, workflow)
 
     approval = request_approval(
         run,
@@ -760,6 +766,31 @@ def test_terminal_model_profile_is_bound_to_the_current_role() -> None:
     assert approval_lifecycle.model_escalation_terminal_state(
         workflow, "implementation-agent"
     ) is False
+
+
+@pytest.mark.parametrize("changed", ["diff", "model"])
+def test_model_approval_resume_rejects_changed_evidence_before_archiving_attention(
+    tmp_path: Path,
+    changed: str,
+) -> None:
+    run = exhausted_model_run(tmp_path)
+    request_approval(run, reason=approval_lifecycle.MODEL_ESCALATION_SUMMARY)
+    approve_run(run, actor="reviewer")
+    workflow_path = run / "workflow.json"
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    if changed == "diff":
+        workflow["diff_hash"] = "d" * 64
+    else:
+        workflow["current_execution_profile"]["model"] = "unapproved-model"
+    write_json(workflow_path, workflow)
+
+    with pytest.raises(ApprovalError, match="no longer matches the exhausted model checkpoint"):
+        prepare_resume(run)
+
+    assert json.loads(workflow_path.read_text(encoding="utf-8")) == workflow
+    approval = json.loads((run / "artifacts" / "approval.json").read_text(encoding="utf-8"))
+    assert approval["status"] == "approved"
+    assert approval["resume_count"] == 0
 
 
 @pytest.mark.parametrize(

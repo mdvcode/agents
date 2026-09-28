@@ -12,11 +12,16 @@ from typing import Iterable, Protocol, Sequence
 
 import yaml
 
+from ai_harness.project import trust_key
+
+from .content_guard import findings, source_privacy
+
 from .models import (
     DocumentType,
     KnowledgeDocument,
     KnowledgeRequest,
     KnowledgeType,
+    PrivacyClass,
     TrustStatus,
 )
 
@@ -185,6 +190,7 @@ def _file_document(
         document_type=document_type,
         priority=priority,
         metadata=metadata or {},
+        privacy=source_privacy(content),
         trust=(
             TrustStatus.TRUSTED
             if knowledge_type
@@ -292,6 +298,7 @@ class RepositoryMetadataSource:
     def collect(self, request: KnowledgeRequest) -> tuple[KnowledgeDocument, ...]:
         repository = request.repository.resolve()
         entries: list[str] = []
+        inspected = 0
         for current, directory_names, file_names in os.walk(repository, topdown=True, followlinks=False):
             current_path = Path(current)
             directory_names[:] = sorted(
@@ -302,15 +309,25 @@ class RepositoryMetadataSource:
                 and not (current_path / name).is_symlink()
             )
             for file_name in sorted(file_names):
+                if inspected >= self.max_entries:
+                    break
                 if file_name.startswith("."):
                     continue
                 path = current_path / file_name
                 if path.is_symlink() or not path.is_file():
                     continue
+                inspected += 1
+                if path.suffix.lower() in TEXT_SUFFIXES or file_name.lower().startswith("readme"):
+                    content = _safe_text(path, repository)
+                    # The index is model-bound too: withholding a source must
+                    # also withhold its identity from this derived document.
+                    if content is None or source_privacy(content) in {
+                        PrivacyClass.LOCAL_ONLY,
+                        PrivacyClass.SECRET_NEVER_MODEL,
+                    } or findings(content):
+                        continue
                 entries.append(str(path.relative_to(repository)))
-                if len(entries) >= self.max_entries:
-                    break
-            if len(entries) >= self.max_entries:
+            if inspected >= self.max_entries:
                 break
         content = "Repository file index (bounded):\n" + "\n".join(f"- {item}" for item in entries)
         return (

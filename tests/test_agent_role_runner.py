@@ -257,6 +257,37 @@ def test_technical_failures_and_approval_gates_are_not_answerable_questions() ->
     assert agent_role_runner.role_attention_action({"status": "awaiting_approval"}) == "approve"
 
 
+@pytest.mark.parametrize(
+    ("role", "terminal_action", "expected_requirement"),
+    [
+        ("implementation-agent", "human_or_dead_letter", True),
+        ("implementation-agent", "", False),
+        ("reviewer", "human_or_dead_letter", False),
+    ],
+)
+def test_model_gate_identity_requires_terminal_execution_evidence(
+    role: str,
+    terminal_action: str,
+    expected_requirement: bool,
+) -> None:
+    state = {
+        "current_role": role,
+        "current_execution_profile": {"terminal_action": terminal_action},
+    }
+
+    repeated = agent_role_runner.set_attention(
+        state,
+        summary=agent_role_runner.MODEL_ESCALATION_SUMMARY,
+        details=[],
+        role=role,
+        action="approve",
+    )
+
+    assert repeated is False
+    assert ("requirement" in state["attention"]) is expected_requirement
+    assert "missing_requirement_requests" not in state
+
+
 def test_blocked_role_with_structured_question_remains_answerable() -> None:
     result = {
         "status": "blocked",
@@ -937,9 +968,11 @@ def test_technical_publication_failure_does_not_create_approval_gate(
     assert not (run_dir / "artifacts" / "approval.json").exists()
 
 
+@pytest.mark.parametrize("resume_case", ["approved", "stale_after_resume", "already_started"])
 def test_terminal_model_resume_requests_exact_one_use_approval_without_runtime(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    resume_case: str,
 ) -> None:
     runs = tmp_path / ".agent-runs"
     monkeypatch.setattr(agent_role_runner, "RUNS", runs)
@@ -1050,6 +1083,8 @@ def test_terminal_model_resume_requests_exact_one_use_approval_without_runtime(
     scope = approval["requested_scope"]
     assert resumed["execution_status"] == "awaiting_approval"
     assert resumed["attention"]["summary"] == agent_role_runner.MODEL_ESCALATION_SUMMARY
+    assert resumed["attention"]["action"] == "approve"
+    assert resumed["missing_requirement_requests"] == []
     assert resumed["attention"]["requirement"]["requirement_id"] == (
         agent_role_runner.MODEL_ESCALATION_REQUIREMENT
     )
@@ -1071,6 +1106,56 @@ def test_terminal_model_resume_requests_exact_one_use_approval_without_runtime(
     assert latest["role"] == role
     assert latest["llm_invoked"] is False
     assert latest["execution_profile"]["terminal_action"] == "human_or_dead_letter"
+
+    approved = approve_run(run_dir, actor="reviewer")
+    prepared = prepare_resume(run_dir)
+    assert agent_role_runner.active_model_escalation_approval_id(
+        prepared["workflow"], role
+    ) == approved["approval_id"]
+    if resume_case != "approved":
+        durable = prepared["workflow"]
+        if resume_case == "stale_after_resume":
+            durable["diff_hash"] = "d" * 64
+            agent_role_runner.write_json(workflow_path, durable)
+        else:
+            assert agent_role_runner.consume_model_escalation_approval(
+                run_dir, durable, role=role, approval_id=approved["approval_id"]
+            ) is True
+        assert agent_role_runner.active_model_escalation_approval_id(durable, role) == ""
+        assert agent_role_runner.model_escalation_terminal_state(durable, role) is True
+
+        stopped = agent_role_runner.run_roles(run_id=run_id, resume=True, dry_run=True)
+
+        assert stopped["execution_status"] in {"blocked", "awaiting_approval"}
+        latest = next(
+            entry for entry in reversed(stopped["roles"]) if entry.get("role") == role
+        )
+        assert latest["llm_invoked"] is False
+        assert latest["execution_profile"]["terminal_action"] == "human_or_dead_letter"
+        return
+    executed: list[str] = []
+
+    def execute_approved_retry(runtime: object, **kwargs: object) -> dict[str, object]:
+        executed.append(str(kwargs["role"]))
+        durable = json.loads(workflow_path.read_text(encoding="utf-8"))
+        assert durable["approval_action_uses"][-1]["approval_id"] == approved["approval_id"]
+        assert agent_role_runner.active_model_escalation_approval_id(durable, role) == ""
+        task = kwargs["task"]
+        assert isinstance(task, dict)
+        assert task["reasoning_effort"] == "xhigh"
+        return agent_role_runner.blocked_result(
+            "Approved retry completed with a technical blocker.",
+            ["Independent failure after the approved model invocation."],
+        )
+
+    monkeypatch.setattr(agent_role_runner, "execute_runtime_observed", execute_approved_retry)
+    after_retry = agent_role_runner.run_roles(run_id=run_id, resume=True, dry_run=True)
+
+    assert executed == [role]
+    assert len(after_retry["approval_action_uses"]) == 1
+    assert agent_role_runner.consume_model_escalation_approval(
+        run_dir, after_retry, role=role, approval_id=approved["approval_id"]
+    ) is False
 
 
 @pytest.mark.parametrize(

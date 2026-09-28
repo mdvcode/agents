@@ -5,6 +5,7 @@ This is the compounding knowledge layer for the agent workspace.
 Unlike `artifacts/`, this directory is not cleared between tasks. Agents update it when a task produces durable knowledge that should improve future work.
 
 ## Pages
+- `decisions/2026-09-05-effective-input-boundary.md`: enforced context privacy, immutable final input snapshots and the Inspector UI/API.
 - `concepts/context-intelligence-platform.md`: the single knowledge-to-context boundary, static sources, rule retrieval, budgets, provenance, and memory interface.
 - `concepts/agent-memory.md`: layered memory architecture and local RAG retrieval for role context.
 - `concepts/goal-prompt.md`: `/goal` structure for scoping tasks.

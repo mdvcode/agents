@@ -833,6 +833,14 @@ def set_attention(
     }
     if normalized_question:
         attention["question"] = normalized_question
+    if (
+        action == "approve"
+        and summary == MODEL_ESCALATION_SUMMARY
+        and role in {"implementation-agent", "ci-repair-agent"}
+        and model_escalation_terminal_state(state, role)
+    ):
+        # Authority gates retain their exact identity without entering question deduplication.
+        attention["requirement"] = {"requirement_id": MODEL_ESCALATION_REQUIREMENT}
     if stop_if_previously_answered:
         attention["requirement"] = requirement
         requests = state.get("missing_requirement_requests", [])
@@ -2612,6 +2620,7 @@ def run_adaptive_read_only_verifier(
         prompt_path=str(contract.get("prompt_path", "")),
         output_contract=str(contract.get("output_contract", "")),
         expected_artifacts=list(contract.get("expected_artifacts", [])),
+        runtime=runtime.descriptor.provider,
     )
     errors = validate_manifest(manifest_path, role)
     if errors:
@@ -3465,6 +3474,7 @@ def run_roles(
                     prompt_path=str(contract.get("prompt_path", "")),
                     output_contract=str(contract.get("output_contract", "")),
                     expected_artifacts=list(contract.get("expected_artifacts", [])),
+                    runtime=runtime.descriptor.provider,
                 )
                 manifest_errors = validate_manifest(manifest_path, role)
                 if manifest_errors:
@@ -3519,7 +3529,7 @@ def run_roles(
                         )
                         bounded_escalation_exhausted = bool(
                             model_escalation_approval_id
-                        ) or bounded_model_escalation_checkpoint(state, role)
+                        ) or model_escalation_terminal_state(state, role)
                         execution_settings = select_execution_profile(
                             role=role,
                             goal=role_goal,

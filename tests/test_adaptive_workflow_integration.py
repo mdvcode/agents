@@ -4,11 +4,15 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
+from ai_harness.recovery.checkpoints import RoleCheckpoint, write_checkpoint
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from workflow_router import decide_next_role  # noqa: E402
+from approval_lifecycle import approve_run, prepare_resume, request_approval  # noqa: E402
 
 
 def write_json(path: Path, value: dict[str, object]) -> None:
@@ -166,9 +170,9 @@ def test_adaptive_router_ignores_historical_repair_counters(tmp_path: Path) -> N
     assert route["next_role"] == "security-agent"
 
 
-def test_approved_hard_bound_window_runs_one_complete_review_repair_iteration(
+def approved_hard_bound_workflow(
     tmp_path: Path,
-) -> None:
+) -> tuple[dict[str, object], Path]:
     plan_path = tmp_path / "execution-plan.json"
     plan(plan_path, max_duration_seconds=1_200)
     artifacts = tmp_path / "artifacts"
@@ -206,24 +210,38 @@ def test_approved_hard_bound_window_runs_one_complete_review_repair_iteration(
     )
     workflow.update(
         {
+            "run_id": "approved-duration",
+            "execution_status": "awaiting_approval",
+            "artifacts_dir": str(artifacts),
             "elapsed_seconds": 1_656,
-            "adaptive_budget_extensions": [
-                {
-                    "approval_id": "duration-extension",
-                    "dimensions": ["elapsed_seconds"],
-                    "baselines": {"elapsed_seconds": 1_656},
-                }
-            ],
-            "approval_override": {
-                "approval_id": "duration-extension",
-                "gate": "reviewer",
-                "scope": {
-                    "actions": ["extend_execution_budget", "resume_workflow"],
-                    "gate": "reviewer",
-                },
+            "budget_action": {
+                "action": "require_approval",
+                "exhausted_dimensions": ["elapsed_seconds"],
             },
         }
     )
+    write_json(tmp_path / "workflow.json", workflow)
+    write_checkpoint(
+        tmp_path,
+        RoleCheckpoint(
+            run_id="approved-duration",
+            role="reviewer",
+            state="role_completed",
+            attempt=1,
+            worktree=str(tmp_path),
+            input_fingerprint="review-input",
+        ),
+    )
+    request_approval(tmp_path, reason="Adaptive hard execution bound exhausted.")
+    approve_run(tmp_path, actor="reviewer")
+    resumed = prepare_resume(tmp_path)
+    return resumed["workflow"], artifacts
+
+
+def test_approved_hard_bound_window_runs_one_complete_review_repair_iteration(
+    tmp_path: Path,
+) -> None:
+    workflow, artifacts = approved_hard_bound_workflow(tmp_path)
 
     repair = decide_next_role(
         current_role="reviewer",
@@ -258,6 +276,56 @@ def test_approved_hard_bound_window_runs_one_complete_review_repair_iteration(
 
     assert verify_repair["next_role"] == "quality-runner"
     assert verify_repair["stop"] is False
+
+
+@pytest.mark.parametrize("missing", ["approval_grants", "adaptive_budget_extensions"])
+def test_budget_extension_rejects_missing_lifecycle_evidence(
+    tmp_path: Path,
+    missing: str,
+) -> None:
+    workflow, artifacts = approved_hard_bound_workflow(tmp_path)
+    workflow.pop(missing)
+
+    route = decide_next_role(
+        current_role="reviewer",
+        role_result={"status": "completed", "next_action": "repair"},
+        run_dir=tmp_path,
+        artifacts_dir=artifacts,
+        workflow_state=workflow,
+    )
+
+    assert route["next_role"] == "blocked"
+    assert "consumed grant and bounded baseline" in route["reason"]
+
+
+@pytest.mark.parametrize("gate", ["risk", "security", "roles", "elapsed", "repair"])
+def test_budget_extension_preserves_independent_gates(tmp_path: Path, gate: str) -> None:
+    workflow, artifacts = approved_hard_bound_workflow(tmp_path)
+    if gate == "risk":
+        write_json(artifacts / "risk.json", {"risk_class": "high"})
+    elif gate == "security":
+        write_json(
+            artifacts / "security.json",
+            {"highest_severity": "high", "blockers": ["SEC-001"], "status": "fail"},
+        )
+    elif gate == "roles":
+        workflow["role_count"] = 20
+    elif gate == "elapsed":
+        workflow["elapsed_seconds"] = 2_856
+    else:
+        workflow["loops"]["review_repair"]["iterations"] = 3
+
+    route = decide_next_role(
+        current_role="reviewer",
+        role_result={"status": "completed", "next_action": "repair"},
+        run_dir=tmp_path,
+        artifacts_dir=artifacts,
+        workflow_state=workflow,
+    )
+
+    assert route["stop"] is True
+    assert route["next_role"] == ("blocked" if gate == "repair" else "approval-gate")
+    assert route["publication_allowed"] is False
 
 
 def test_adaptive_blocked_verdict_reruns_stale_gates_after_repair(tmp_path: Path) -> None:

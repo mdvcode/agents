@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Mapping, Protocol
 
 from .models import Context
+from .content_guard import redact_value
 
 
 class ContextLogger(Protocol):
@@ -23,7 +24,7 @@ class JsonlContextLogger:
             raise ValueError("refusing to write context log through a symbolic link")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(dict(event), ensure_ascii=False, sort_keys=True) + "\n")
+            handle.write(json.dumps(redact_value(dict(event)), ensure_ascii=False, sort_keys=True) + "\n")
         return str(self.path.resolve())
 
 

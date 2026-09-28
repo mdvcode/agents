@@ -13,7 +13,7 @@ from typing import Any
 
 import yaml
 
-from ai_harness.economics import BudgetAction, BudgetController, BudgetUsage
+from ai_harness.economics import HARD_BUDGET_DIMENSIONS, BudgetAction, BudgetController, BudgetUsage
 from security_approval import scope_accepts_security, security_finding_ids
 from verifier_environment import verifier_artifact_unavailable
 
@@ -691,28 +691,7 @@ def verifier_environment_unavailable(artifacts_dir: Path, artifact_name: str) ->
     artifact = _artifact(artifacts_dir, artifact_name)
     if not isinstance(artifact, dict):
         return False
-    markers = (
-        "unavailable",
-        "missing dependenc",
-        "command not found",
-        "browser",
-        "playwright",
-        "read-only",
-        "runtime capability",
-        "did not complete",
-    )
-    if str(artifact.get("verdict", "")).lower() == "unavailable":
-        return True
-    blockers = [item.lower() for item in _blocker_values(artifact)]
-    if blockers:
-        return all(any(marker in blocker for marker in markers) for blocker in blockers)
-    fallback = " ".join(
-        [
-            *[str(item) for item in artifact.get("warnings", []) if isinstance(item, (str, int))],
-            *[str(item) for item in artifact.get("observed", []) if isinstance(item, (str, int))],
-        ]
-    ).lower()
-    return any(marker in fallback for marker in markers)
+    return verifier_artifact_unavailable(artifact)
 
 
 def verifier_artifact_fingerprint(artifacts_dir: Path, artifact_name: str) -> str:
@@ -916,6 +895,62 @@ def review_repair_extension_scope_valid(
         and diff_scope
         == loop.get("diff_fingerprint")
         == expected_diff
+    )
+
+
+def execution_budget_scope_valid(
+    *,
+    state: dict[str, Any],
+    current_role: str,
+    scope: dict[str, Any],
+    approval_id: str,
+) -> bool:
+    """Require the consumed grant and bounded baseline created by approval resume."""
+
+    if not approval_id or scope.get("gate") != current_role:
+        return False
+    if set(_list_values(scope.get("actions"))) != {
+        "extend_execution_budget",
+        "resume_workflow",
+    }:
+        return False
+    grants = state.get("approval_grants", [])
+    extensions = state.get("adaptive_budget_extensions", [])
+    if not isinstance(grants, list) or not isinstance(extensions, list):
+        return False
+    matching_grants = [
+        grant
+        for grant in grants
+        if isinstance(grant, dict)
+        and grant.get("approval_id") == approval_id
+        and grant.get("gate") == current_role
+        and grant.get("scope") == scope
+    ]
+    matching_extensions = [
+        extension
+        for extension in extensions
+        if isinstance(extension, dict) and extension.get("approval_id") == approval_id
+    ]
+    if len(matching_grants) != 1 or len(matching_extensions) != 1:
+        return False
+    extension = matching_extensions[0]
+    dimensions = extension.get("dimensions", [])
+    baselines = extension.get("baselines", {})
+    if (
+        extension.get("checkpoint_role") != current_role
+        or not isinstance(dimensions, list)
+        or not dimensions
+        or not all(isinstance(value, str) and value in HARD_BUDGET_DIMENSIONS for value in dimensions)
+        or not isinstance(baselines, dict)
+        or set(baselines) != set(dimensions)
+    ):
+        return False
+    usage = BudgetUsage.from_state(state).as_dict()
+    return all(
+        isinstance(baselines[dimension], int)
+        and not isinstance(baselines[dimension], bool)
+        and 0 <= baselines[dimension] <= usage[dimension]
+        for dimension in dimensions
     )
 
 
@@ -1425,8 +1460,21 @@ def decide_next_role(
             approval_id=approval_id,
         )
     )
+    execution_budget_requested = bool(
+        approval_consumed and "extend_execution_budget" in restricted_actions
+    )
+    execution_budget_valid = bool(
+        execution_budget_requested
+        and execution_budget_scope_valid(
+            state=state,
+            current_role=current_role,
+            scope=override_scope,
+            approval_id=approval_id,
+        )
+    )
     unknown_restricted_actions = restricted_actions - {
         "extend_review_repair_once",
+        "extend_execution_budget",
         MODEL_ESCALATION_ACTION,
     }
     restricted_approval_requested = approval_consumed and bool(restricted_actions)
@@ -1498,6 +1546,11 @@ def decide_next_role(
         return _blocked(
             "The scoped approval contains an unknown restricted action.",
             warnings + sorted(unknown_restricted_actions),
+        )
+    if execution_budget_requested and not execution_budget_valid:
+        return _blocked(
+            "The execution budget approval does not match its consumed grant and bounded baseline.",
+            warnings,
         )
     if extension_requested and not repair_budget_extended:
         return _blocked(

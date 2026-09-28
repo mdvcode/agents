@@ -152,6 +152,14 @@ Tools are governed capabilities and permissions, not memory. A curated editable 
 surface remains deferred until its provenance, freshness, retention, and runtime indexing can be
 shown honestly.
 
+**Посмотреть глазами AI** opens the Context Inspector from the task composer or a task row.
+Before launch it previews the selected role's repository sources, including inclusion/exclusion
+reasons, privacy/trust labels, token counts, and the assembled source package. Pending attachments
+are excluded from this preview and require consent when the task starts. In an existing run, the
+inspector shows verified saved inputs for individual stages: the exact prompt, response contract,
+runtime settings, and source provenance. Session history, provider-internal instructions, and
+subsequent file reads are outside that snapshot; older runs may not have a saved input.
+
 The dashboard's **Adaptive Lab** section reads the backend acceptance report and
 compares Full with Adaptive. `NOT ENOUGH DATA` means that the representative paired A/B acceptance
 run has not been completed; it is not a failure of the current task and does not prevent explicit
@@ -402,11 +410,11 @@ agent dashboard [--repo PATH] [--port PORT] [--no-open]
 ```
 
 The dashboard binds to loopback and opens in the default browser. A lightweight collapsible sidebar
-on desktop, and an accessible off-canvas menu on mobile, navigate between **Создать**, **Задачи**,
-**Статистика**, and **Adaptive Lab**. **Создать** provides focused single-task launch, the current initialized-project
+on desktop, and an accessible off-canvas menu on mobile, navigate between **Проекты**, **Задачи**,
+**Статистика**, and **Adaptive Lab**. **Новая задача** provides focused single-task launch, the trusted initialized-project
 selector, attachment context, execution-mode (`auto`, `adaptive`, `fast`, `full`, or explicit
-`goal`), and Git-workspace selection. It does not introduce a project catalog or another project
-authority. **Задачи** contains attention-first task filtering, active work, history, probable-conflict
+`goal`), and Git-workspace selection. The project catalog uses only explicitly registered trusted
+repositories and does not grant additional execution or publication authority. **Задачи** contains attention-first task filtering, active work, history, probable-conflict
 hints, structured answer choices with a custom-answer fallback, approval, retry, abort controls, and
 the progressive-disclosure visual/YAML batch tools. **Статистика** is a separate full section for
 operational counters, service health, and worker state; it does not duplicate task details.
