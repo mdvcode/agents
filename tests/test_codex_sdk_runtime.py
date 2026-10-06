@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
@@ -56,6 +58,14 @@ class FakeTextInput:
 class FakeLocalImageInput:
     def __init__(self, *, path: str) -> None:
         self.path = path
+
+
+class FakeConnection:
+    def __init__(self) -> None:
+        self.messages: list[bytes] = []
+
+    def sendall(self, payload: bytes) -> None:
+        self.messages.append(payload)
 
 
 def test_sdk_preflight_requires_and_reports_chatgpt_subscription(
@@ -190,13 +200,6 @@ def test_worker_sdk_server_reuses_run_bound_thread(monkeypatch: object, tmp_path
     )
     server.codex = object()
 
-    class Connection:
-        def __init__(self) -> None:
-            self.messages: list[bytes] = []
-
-        def sendall(self, payload: bytes) -> None:
-            self.messages.append(payload)
-
     message = {
         "request": {
             "run_id": "run-1",
@@ -207,11 +210,128 @@ def test_worker_sdk_server_reuses_run_bound_thread(monkeypatch: object, tmp_path
         "output_contract": {},
         "manifest": {},
     }
-    server.execute(Connection(), message)
-    server.execute(Connection(), message)
+    roles = ("planner", "risk-classifier", "implementation-agent", "test-generator", "ci-repair-agent")
+    for role in roles:
+        message["request"]["role"] = role
+        server.execute(FakeConnection(), message)
 
-    assert observed_thread_ids == ["", "thread-run-1"]
+    assert observed_thread_ids == ["", *(["thread-run-1"] * (len(roles) - 1))]
     assert server.state()["threads"] == {"run-1": "thread-run-1"}
+
+
+@pytest.mark.parametrize(
+    "verifier_role",
+    ["reviewer", "security-agent", "frontend-qa-agent", "architecture-consistency-agent", "semantic-conflict-agent"],
+)
+def test_worker_sdk_verifiers_start_fresh_without_replacing_writer_thread(
+    monkeypatch: object, tmp_path: Path, verifier_role: str
+) -> None:
+    observed: list[tuple[str, str]] = []
+    emitted_thread_ids: list[str] = []
+    server_options = {
+        "socket_path": tmp_path / "sdk.sock",
+        "state_path": tmp_path / "sdk.json",
+        "max_requests": 10,
+        "max_age_seconds": 600,
+    }
+    server = codex_sdk_server.CodexSdkServer(**server_options)
+    server.codex = object()
+    manifest = {"filesystem_access": "read_only"}
+    contract = {"type": "object"}
+
+    def fake_run_sdk(**kwargs: object) -> dict[str, object]:
+        request = kwargs["request"]
+        role = request["role"]
+        observed.append((role, kwargs["thread_id"]))
+        thread_id = kwargs["thread_id"] or f"thread-{len(observed)}"
+        emitted_thread_ids.append(thread_id)
+        assert kwargs["manifest"] is manifest
+        assert kwargs["output_contract"] is contract
+        assert kwargs["prompt"] == "current task and evidence"
+        assert request["filesystem_access"] == ("read_only" if role == verifier_role else "workspace_write")
+        assert request["model"] == "gpt-5.6-terra"
+        assert request["service_tier"] == "fast"
+        assert kwargs["codex_client"] is server.codex
+        kwargs["progress_sink"]({"thread_id": thread_id})
+        if role == verifier_role:
+            assert server.state()["threads"] == {"run-1": "thread-1"}
+        return {"status": "completed", "thread_id": thread_id}
+
+    monkeypatch.setattr(codex_sdk_server, "run_sdk", fake_run_sdk)
+    roles = ("implementation-agent", verifier_role, "ci-repair-agent", verifier_role, "test-generator")
+    for index, role in enumerate(roles):
+        if index == 2:
+            # A worker recycle must restore only the writer's conversation.
+            server = codex_sdk_server.CodexSdkServer(**server_options)
+            server.codex = object()
+        server.execute(
+            FakeConnection(),
+            {
+                "request": {
+                    "run_id": "run-1",
+                    "role": role,
+                    "repository": str(tmp_path),
+                    "filesystem_access": "read_only" if role == verifier_role else "workspace_write",
+                    "model": "gpt-5.6-terra",
+                    "service_tier": "fast",
+                },
+                "prompt": "current task and evidence",
+                "output_contract": contract,
+                "manifest": manifest,
+            },
+        )
+        assert server.state()["threads"] == {"run-1": "thread-1"}
+
+    assert observed == [
+        ("implementation-agent", ""),
+        (verifier_role, ""),
+        ("ci-repair-agent", "thread-1"),
+        (verifier_role, ""),
+        ("test-generator", "thread-1"),
+    ]
+    assert emitted_thread_ids == ["thread-1", "thread-2", "thread-1", "thread-4", "thread-1"]
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_failed_verifier_does_not_seed_a_later_writer_thread(
+    monkeypatch: object, tmp_path: Path, interrupted: bool
+) -> None:
+    observed_thread_ids: list[str] = []
+    server = codex_sdk_server.CodexSdkServer(
+        socket_path=tmp_path / "sdk.sock",
+        state_path=tmp_path / "sdk.json",
+        max_requests=10,
+        max_age_seconds=600,
+    )
+    server.codex = object()
+
+    def fake_run_sdk(**kwargs: object) -> dict[str, object]:
+        observed_thread_ids.append(kwargs["thread_id"])
+        if kwargs["request"]["role"] == "reviewer":
+            kwargs["progress_sink"]({"thread_id": "failed-review-thread"})
+            assert server.state()["threads"] == {}
+            if interrupted:
+                raise ConnectionError("review interrupted")
+            return {"status": "failed", "thread_id": "failed-review-thread"}
+        return {"status": "completed", "thread_id": "writer-thread"}
+
+    monkeypatch.setattr(codex_sdk_server, "run_sdk", fake_run_sdk)
+    message = {
+        "request": {"run_id": "run-1", "role": "reviewer", "repository": str(tmp_path)},
+        "prompt": "current task and evidence",
+        "output_contract": {},
+        "manifest": {},
+    }
+    if interrupted:
+        with pytest.raises(ConnectionError, match="review interrupted"):
+            server.execute(FakeConnection(), message)
+    else:
+        server.execute(FakeConnection(), message)
+    message["request"]["role"] = "implementation-agent"
+    server.execute(FakeConnection(), message)
+
+    assert observed_thread_ids == ["", ""]
+    assert server.state()["threads"] == {"run-1": "writer-thread"}
 
 
 def test_sdk_session_rejects_non_socket_transport(tmp_path: Path) -> None:

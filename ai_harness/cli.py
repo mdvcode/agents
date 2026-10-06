@@ -27,7 +27,7 @@ import yaml
 
 from . import __version__
 from .build import harness_build_fingerprint
-from .paths import HarnessNotFoundError, harness_home
+from .paths import HarnessNotFoundError, harness_home, home_config_path, save_harness_home
 from .project import (
     SUPPORTED_PROFILES,
     ProjectConfigError,
@@ -142,14 +142,15 @@ def source_build_comparison(repository: Path, root: Path) -> tuple[Path | None, 
     repository = repository.resolve()
     root = root.resolve()
     source: Path | None = None
-    if (
-        repository != root
-        and (repository / "pyproject.toml").is_file()
-        and (repository / "ai_harness" / "build.py").is_file()
-        and (repository / "scripts" / "worker_service.py").is_file()
-    ):
-        source = repository
-    elif root == (Path(sys.prefix) / "share" / "ai-harness").resolve():
+    for candidate in (repository, root):
+        if (
+            (candidate / "pyproject.toml").is_file()
+            and (candidate / "ai_harness" / "build.py").is_file()
+            and (candidate / "scripts" / "worker_service.py").is_file()
+        ):
+            source = candidate
+            break
+    if source is None and root == (Path(sys.prefix) / "share" / "ai-harness").resolve():
         pipx = shutil.which("pipx")
         if pipx:
             try:
@@ -166,7 +167,9 @@ def source_build_comparison(repository: Path, root: Path) -> tuple[Path | None, 
                 source = candidate.resolve()
     if source is None:
         return None, True
-    return source, harness_build_fingerprint(root) == harness_build_fingerprint(source)
+    return source, harness_build_fingerprint(
+        root, package_root=Path(__file__).resolve().parent
+    ) == harness_build_fingerprint(source)
 
 
 def require_current_installed_build(repository: Path, root: Path) -> None:
@@ -3245,10 +3248,33 @@ def handle_doctor(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def handle_home(args: argparse.Namespace) -> int:
+    saved = save_harness_home(Path(args.set)) if args.set else None
+    if args.clear:
+        home_config_path().unlink(missing_ok=True)
+    root = harness_home()
+    payload = {"home": str(root), "config": str(home_config_path())}
+    if saved is not None:
+        payload["saved_home"] = str(saved)
+    emit(
+        payload,
+        as_json=args.json,
+        lines=(f"Harness home: {root}", *([f"Saved home: {saved}"] if saved else [])),
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent", description=__doc__)
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    home_parser = subparsers.add_parser("home", help="show or select the persistent control-plane home")
+    home_selection = home_parser.add_mutually_exclusive_group()
+    home_selection.add_argument("--set", default="", metavar="PATH", help="save an existing Harness home")
+    home_selection.add_argument("--clear", action="store_true", help="clear the saved home selection")
+    home_parser.add_argument("--json", action="store_true")
+    home_parser.set_defaults(handler=handle_home)
 
     update_parser = subparsers.add_parser("update", help="download and install the latest system update")
     update_parser.add_argument(

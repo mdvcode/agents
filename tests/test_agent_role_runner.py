@@ -16,6 +16,7 @@ from ai_harness import cli as agent_cli
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from approval_lifecycle import approve_run, prepare_resume, request_approval  # noqa: E402
+from adapters.codex_cli_executor import role_prompt_payload  # noqa: E402
 from runtimes.codex_cli import CodexCliRuntime  # noqa: E402
 from runtimes.codex_sdk import CodexSdkRuntime  # noqa: E402
 
@@ -753,6 +754,80 @@ def test_fast_workflow_uses_only_implementation_model_for_non_code_change(
     assert implementation_context["project"] == "fast-project"
     assert implementation_context["project_key"] == trust_key(tmp_path)
     assert implementation_context["project_profile"] == "agent_workspace"
+    run_dir = tmp_path / ".agent-runs" / "fast-role-bound"
+    request = json.loads(
+        (run_dir / "role-requests" / "implementation-agent.json").read_text(encoding="utf-8")
+    )
+    # Fixture subprocesses cannot receive private context; compile the production
+    # destination separately to check the real model input without a model call.
+    sdk_manifest_path = agent_role_runner.create_context_manifest(
+        run_id="fast-role-bound",
+        role="implementation-agent",
+        goal="Fix CSS color",
+        repository=tmp_path,
+        artifacts_dir=run_dir / "artifacts",
+        context_dir=run_dir / "sdk-context",
+        project="fast-project",
+        project_key=trust_key(tmp_path),
+        project_profile="agent_workspace",
+        token_budget=12000,
+        allowed_tools=request["allowed_tools"],
+        previous_roles=["issue-intake", "context-compiler"],
+        runtime="codex-sdk",
+    )
+    prompt = role_prompt_payload(
+        request=request,
+        prompt_text=(agent_role_runner.ROOT / request["prompt_path"]).read_text(encoding="utf-8"),
+        manifest=json.loads(sdk_manifest_path.read_text(encoding="utf-8")),
+        output_contract=json.loads(
+            (agent_role_runner.ROOT / request["output_contract"]).read_text(encoding="utf-8")
+        ),
+    )
+    assert "# FAST EXECUTION" in prompt
+    assert "Fast does not invoke separate Planner, Risk Classifier, or Test Generator roles." in prompt
+    assert "add or update focused tests" in prompt
+    assert "Do not wait for omitted roles or overwrite their artifacts." in prompt
+    assert "the deterministic router decides escalation and required approvals" in prompt
+    assert "deterministic quality/security checks" in prompt
+    assert "approval gates remain mandatory" in prompt
+    assert "not permission to expand scope or bypass a gate" in prompt
+    assert "produced by the dedicated\nrisk-classifier after planning" not in prompt
+
+
+@pytest.mark.parametrize("mode", ["fast", "adaptive"])
+def test_deterministic_context_keeps_fast_instructions_scoped_to_mode(
+    tmp_path: Path, mode: str
+) -> None:
+    artifacts = tmp_path / "run" / "artifacts"
+    artifacts.mkdir(parents=True)
+    if mode == "adaptive":
+        (artifacts.parent / "execution-plan.json").write_text(
+            json.dumps({"analysis": {"risk": "low", "indicators": [], "domains": []}}),
+            encoding="utf-8",
+        )
+    result = agent_role_runner.run_context_compiler(
+        run_id="context-mode",
+        goal="Fix a label with a focused regression test",
+        project="test",
+        project_key=trust_key(tmp_path),
+        worktree=tmp_path,
+        artifacts_dir=artifacts,
+        context_dir=tmp_path / "run" / "context-manifests",
+        project_profile="agent_workspace",
+        token_budget=12000,
+        execution_mode=mode,
+    )
+
+    plan = (artifacts / "plan.md").read_text(encoding="utf-8")
+    risk = json.loads((artifacts / "risk.json").read_text(encoding="utf-8"))
+    assert result["status"] == "completed"
+    assert ("# FAST EXECUTION" in plan) is (mode == "fast")
+    assert "Protected paths, auth, billing, payments, migrations, secrets" in plan
+    assert risk["autonomy_allowed"]["auto_merge"] is False
+    assert risk["autonomy_allowed"]["deploy_production"] is False
+    if mode == "fast":
+        assert risk["risk_class"] == "low"
+        assert "Provisional fast-mode classification" in risk["reasons"][0]
 
 
 def test_resume_production_runtime_reloads_trusted_command() -> None:

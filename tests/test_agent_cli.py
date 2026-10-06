@@ -18,6 +18,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from ai_harness import cli
+from ai_harness import paths as harness_paths
 from ai_harness.attachments import AttachmentStore, IncomingAttachment
 from ai_harness.build import harness_build_fingerprint
 from ai_harness.project import load_project_config, safe_branch
@@ -67,6 +68,46 @@ def configure_temporary_harness(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
         },
     )
     return state_root
+
+
+def test_agent_home_selects_and_clears_without_starting_services(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: object
+) -> None:
+    monkeypatch.delenv("AI_HARNESS_HOME", raising=False)
+    root = tmp_path / "home"
+    for name in (".agent-runtime.yaml", "scripts/task_queue.py", "schemas/task_envelope.schema.json"):
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n", encoding="utf-8")
+
+    def reject_service(*args: object, **kwargs: object) -> None:
+        pytest.fail("home selection must not start services or tasks")
+
+    monkeypatch.setattr(cli.subprocess, "run", reject_service)
+    assert cli.main(["home", "--set", str(root), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["home"] == str(root)
+    assert cli.main(["home", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["home"] == str(root)
+    assert not (root / ".agent-queue").exists()
+    harness_paths.home_config_path().write_text("broken json", encoding="utf-8")
+    assert cli.main(["home", "--clear", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["home"] == str(ROOT)
+    assert not harness_paths.home_config_path().exists()
+
+
+def test_agent_home_reports_explicit_override_of_saved_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: object
+) -> None:
+    saved = tmp_path / "saved"
+    for name in (".agent-runtime.yaml", "scripts/task_queue.py", "schemas/task_envelope.schema.json"):
+        path = saved / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setenv("AI_HARNESS_HOME", str(ROOT))
+    assert cli.main(["home", "--set", str(saved), "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["saved_home"] == str(saved)
+    assert result["home"] == str(ROOT)
 
 
 def test_agent_task_checks_managed_sdk_transport_before_git_or_queue_mutation(
@@ -1107,6 +1148,43 @@ def test_source_build_comparison_uses_pipx_local_source_for_other_projects(
 
     assert detected == source.resolve()
     assert matches is False
+
+
+def test_source_home_cannot_hide_stale_installed_cli_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    installed_package = tmp_path / "site-packages/ai_harness"
+    (source / "scripts").mkdir(parents=True)
+    (source / "scripts/worker_service.py").write_text("RUN = True\n", encoding="utf-8")
+    (source / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+    for package in (source / "ai_harness", installed_package):
+        package.mkdir(parents=True)
+        (package / "build.py").write_text("VALUE = 1\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "__file__", str(installed_package / "cli.py"))
+
+    assert cli.source_build_comparison(source, source) == (source, True)
+    (installed_package / "build.py").write_text("VALUE = 0\n", encoding="utf-8")
+    assert cli.source_build_comparison(source, source) == (source, False)
+    assert cli.source_build_comparison(tmp_path / "target-project", source) == (source, False)
+    with pytest.raises(cli.CLIError, match="installed harness differs"):
+        cli.require_current_installed_build(source, source)
+
+
+def test_selected_source_home_does_not_hide_active_checkout_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    repository = tmp_path / "active-source"
+    for source, version in ((home, 1), (repository, 2)):
+        (source / "ai_harness").mkdir(parents=True)
+        (source / "scripts").mkdir()
+        (source / "ai_harness/build.py").write_text(f"VALUE = {version}\n", encoding="utf-8")
+        (source / "scripts/worker_service.py").write_text("RUN = True\n", encoding="utf-8")
+        (source / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "__file__", str(home / "ai_harness/cli.py"))
+
+    assert cli.source_build_comparison(repository, home) == (repository, False)
 
 
 def test_agent_task_preserves_queued_run_when_worker_startup_fails(

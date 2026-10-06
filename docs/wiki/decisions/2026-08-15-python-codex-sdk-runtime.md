@@ -24,7 +24,7 @@ An API-key account is rejected before a role turn. The Harness never reads, writ
 
 ## Reliability boundary
 
-Each queue worker owns one managed SDK sidecar and therefore one Codex app-server process. All model-backed roles for a run use one persisted thread id; implementation, repair, a user-answer continuation, and verification resume that thread. The sidecar is heartbeat-checked, recycles after an age or request budget, restarts after failure, and resumes persisted non-ephemeral threads after process replacement.
+Each queue worker owns one managed SDK sidecar and therefore one Codex app-server process. Planning, implementation, test generation, repair and user-answer continuations for these roles reuse the run's working thread. Model-backed reviewer, security, frontend, architecture and semantic verification each start a fresh thread for every invocation, including rechecks after repair or a user answer. Verifier progress and results never replace the run's working-thread identity. Validation-only repair within one verifier invocation remains on that invocation's thread; sandbox and approval policies are unchanged. The sidecar is heartbeat-checked, recycles after an age or request budget, restarts after failure, and resumes persisted non-ephemeral working threads after process replacement.
 
 Each role adapter remains a bounded subprocess. It talks to the sidecar through a worker-owned `0600` Unix socket, and the sidecar interrupts the active SDK turn when that bounded client disconnects. The outer Harness retains hard wall-clock and event-aware idle timeouts, process-tree termination, output limits, artifact limits, file-descriptor limits, read-only Git snapshots, structured-output validation, and at most two validation-only repair turns.
 
