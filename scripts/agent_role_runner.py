@@ -2446,6 +2446,25 @@ def run_context_compiler(
                     else "Guarded fast path. Inspect only files directly relevant to the request using targeted search."
                 ),
                 "",
+                *(
+                    [
+                        "# FAST EXECUTION",
+                        "The Context Compiler prepared this plan, provisional risk.json, and project_profile.json. "
+                        "Fast does not invoke separate Planner, Risk Classifier, or Test Generator roles.",
+                        "Inspect the scoped source, implement the minimal change, add or update focused tests, "
+                        "and run the relevant available checks in this implementation turn. "
+                        "Do not wait for omitted roles or overwrite their artifacts.",
+                        "The provisional risk is not a grant to expand scope. Report newly discovered risk or "
+                        "protected work and stop before performing it; the deterministic router decides "
+                        "escalation and required approvals from the actual scope and diff.",
+                        "Return the owned implementation artifact for deterministic quality/security checks, "
+                        "required review, and final orchestration. Existing tool, filesystem, publication, "
+                        "and approval gates remain mandatory; implementation never authorizes merge or deployment.",
+                        "",
+                    ]
+                    if execution_mode == "fast"
+                    else []
+                ),
                 "# FILES_TO_CHANGE",
                 "Determine the smallest relevant file set; stop if the task expands beyond a narrow local patch.",
                 "",

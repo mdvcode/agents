@@ -2,6 +2,7 @@
 
 ## Backlog
 - Add automation later to create an issue branch and issue journal from one command.
+- Compare Fast, Full and direct Codex on the same representative tasks using accepted outcomes and user intervention.
 
 ## Ready
 - Keep `.agents/prompts/` aligned with the docs/onboarding flow.
@@ -15,6 +16,7 @@
 - Milestone PR1 production runtime: every locally verifiable requirement, all 20 chaos scenarios, runtime preflight, and real Codex smoke are complete; only the user-excluded real 30-task multi-hour soak remains the production-readiness gate.
 
 ## Done
+- Fast runtime alignment: implementation owns the complete narrow code-and-test task; managed model verifiers use independent sessions; persistent home selection and actual CLI/source fingerprint checks prevent silent queue or build drift.
 - Effective Context Inspector: central privacy filtering, credential checks, immutable final SDK/CLI input snapshots with integrity digests, source preview and saved-stage UI, API/browser regressions, and real SDK smoke. Draft source previews and runtime-owned session/tool context are explicitly distinguished; production soak remains separate.
 - Dashboard and README alignment: task creation is now the primary view, technical analytics live under Statistics, operational controls are preserved, responsive light/dark navigation is verified, and first-use guidance matches the actual product.
 - Tweebit v0.4.1 context foundation: complete-source cache revision, exact Effective Context digest, normalized Inspector evidence with privacy/trust labels, reference-only authority marking, packaged skills/templates, and verified wheel contents.
@@ -24,7 +26,7 @@
 - Task execution reliability: fixed strict SDK response-schema rejection, stale source/install task intake, unverified worker startup/shutdown, pre-supersession runtime validation, and virtualenv selection; installed worker, real SDK smoke, runtime chaos, and full repository checks pass.
 - Parallel orchestration: bounded YAML/UI/API batch intake, visual auto-worktree selection, per-repository worker limits, shared worktree caches, branch-overlap ordering, cross-repository dashboard filters, and safe parent/child fan-out with parent-only join/publication.
 - P1 execution efficiency: deterministic Sol/Terra/Luna profiles, failure-only escalation, changed-file/risk-driven role activation, local quality/security/orchestration gates, and semantic missing-requirement deduplication with same-thread answer continuation.
-- P0 runtime continuity: one health-checked Codex app-server per worker, one reusable SDK thread per run, live event/tool/budget status, event-aware stuck detection, and canonical checkout/worktree identity.
+- P0 runtime continuity: one health-checked Codex app-server per worker, a reusable working SDK thread per run with independent verifier sessions, live event/tool/budget status, event-aware stuck detection, and canonical checkout/worktree identity.
 - Execution boundedness hardening: timeout monitoring now covers stdin delivery and full process trees, step timeouts use remaining workflow/recovery budgets, approval expiry synchronizes queue state, fast mode is enforced by the outer workflow, and watch reports missing workers without an indefinite silent wait.
 - Question-loop hardening: answered-question fingerprints stop repeated gates, technical failures remain distinct from informational questions, and the dashboard offers recommended choices plus a persistent custom-answer draft.
 - Fast workflow routing: ordinary tasks now use two model-backed roles with deterministic gates, a 15-minute budget, safe full-chain escalation, checkpoint reuse, capability preflight, and a healthy packaged worker.

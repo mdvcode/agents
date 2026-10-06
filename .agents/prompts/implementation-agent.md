@@ -45,12 +45,14 @@ Never apply Django conventions to a web project solely because Django skills exi
 - If more context is needed, state exactly which file or symbol is missing.
 
 ## Risk gates
-`risk.json` is the authoritative classification produced by the dedicated
-risk-classifier after planning. A planner's `INITIAL_RISK_CLASS` is advisory;
-disagreement between that preliminary value and `risk.json` is not by itself a
-conflict or an escalation. Continue under `risk.json` unless source inspection
-reveals a concrete protected path, protected action, or other policy trigger
-that the risk-classifier did not evaluate.
+Read the current run-scoped `risk.json` and its provenance. The selected workflow
+may prepare plan, risk, and profile artifacts deterministically rather than invoke
+separate planning and risk-classification roles. A provisional classification is
+not permission to expand scope or bypass a gate. A planner's `INITIAL_RISK_CLASS`
+is advisory; disagreement with `risk.json` is not by itself a conflict or an
+escalation. Continue within the recorded scope unless source inspection reveals a
+concrete protected path, protected action, or other policy trigger not evaluated
+in the current classification.
 
 The deterministic orchestrator checks for a consumed `patch_high_risk` grant
 before dispatching an implementation whose `risk.json` is HIGH. When the
@@ -101,13 +103,14 @@ At completion, return `implementation.json` with:
 ```
 
 ## Verification handoff
-Do not claim the task is complete. After implementation, hand off to:
-1. Test Generator Agent when code changed and test work is required
-2. deterministic Quality Runner
-3. deterministic Security Agent
-4. optional impact-specific verifiers selected from changed files and risk
-5. Reviewer Agent, model-backed only for code, UI, risk-bearing, or large changes
-6. deterministic Orchestrator Agent
+Do not claim the task is complete. Return the owned implementation artifact to
+the deterministic orchestrator; it selects the next required stage for the current
+mode and actual diff. Implement and verify the focused tests required by the task
+in this turn; do not defer them merely because another workflow has a Test
+Generator Agent. Do not wait for or request specialist roles that the selected
+mode omits. A selected Test Generator or impact-specific verifier may perform
+additional work, but deterministic quality and security checks, required review,
+final orchestration, and applicable approval gates remain mandatory.
 
 ## Independent background work
 

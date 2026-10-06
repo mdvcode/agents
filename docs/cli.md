@@ -42,7 +42,18 @@ bootstrap the public baseline; after that, select Tweebit explicitly with `agent
 
 Contributors may still use `pip install -e .` or direct pipx commands, but users do not need to manage those environments themselves.
 
-The installation bundles the policy, workflow, schemas, prompts, scripts, official Python Codex SDK, and CLI compatibility adapter under an isolated environment. `AI_HARNESS_HOME` may point at a source checkout when developing or diagnosing a custom installation.
+The installation bundles the policy, workflow, schemas, prompts, scripts, official Python Codex SDK, and CLI compatibility adapter under an isolated environment.
+
+Select one existing control-plane home when using the installed command with a source checkout:
+
+```sh
+agent home --set /absolute/path/to/agents
+agent home --json
+```
+
+The selection is saved privately in `~/.config/ai-harness/home.json` (or under `AI_HARNESS_CONFIG_HOME`). Subsequent commands use that home's queue, run history and policies. Selection does not move state, restart services or authorize any project operation. Stop idle services using the old home before changing it, preserve their state, then start the service for the selected home. `agent home --clear` removes the saved selection. An explicit `AI_HARNESS_HOME` takes precedence for development or diagnosis; an invalid explicit or saved home fails with recovery instructions instead of silently switching queues.
+
+Freshness checks compare the actual CLI package against the selected source as well as the worker. Selecting a source home therefore does not hide an older installed command. After changing source code, install the reviewed checkout with `agent update --source /absolute/path/to/agents` before starting tasks.
 
 ## Initialize a project
 
@@ -113,6 +124,10 @@ If an older installed command does not list `adaptive`, install the current chec
 Task mode defaults to `auto`. Auto uses the current guarded fast path unless the goal names a sensitive or broad change such as authentication, migrations, payments, production, dependencies, architecture, or a refactor; it never selects a multi-hour mode or Adaptive before acceptance. `--mode adaptive` explicitly opts into deterministic task analysis and an auditable minimum-safe execution DAG. It may skip optional roles, use deterministic verification instead of optional model calls, run independent read-only checks in parallel, and provide each model-backed role only its scoped context. Low-confidence or sensitive analysis expands to a safer workflow, and hard security, approval, recovery, and publication gates remain mandatory.
 
 Adaptive Acceptance is intentionally separate from task execution. Until representative paired Full/Adaptive evaluation passes, the dashboard reports `NOT ENOUGH DATA` and `auto` keeps the established routing policy; explicit Adaptive tasks remain available. Fast mode invokes only implementation and review models; context, quality, security, and verdict stages are deterministic. It escalates to the full workflow when the resulting patch exceeds five files or 200 changed lines, touches protected areas, or reports increased risk. The complete fast workflow has a 15-minute budget, while `full` runs the complete specialist chain for at most 60 minutes. Use `--mode goal` only for an explicit checkpointed objective that may run for up to 4 hours. The separate 30-minute role timeout bounds one model executor and does not define total task duration.
+
+Fast gives the implementation role the complete narrow task, including focused tests and ordinary fixes. Its plan and initial risk assessment are prepared deterministically; the implementation must not wait for separate planning, risk-classification or test-generation roles. The router decides escalation and the required verification sequence. In managed SDK execution, every model-backed reviewer or specialist verifier starts a clean session with its scoped task context and evidence; implementation and repair keep their working session. A verification recheck starts clean again and cannot replace the implementation session. Quality, security scanning and approval gates remain mandatory.
+
+Codex is already connected through the official Python SDK using ChatGPT sign-in. This local execution path does not require an OpenAI API key. The SDK dependency is pinned and includes its own runtime; updating the desktop app or a separate CLI does not upgrade that dependency. Verify compatibility and run the real SDK smoke before changing the pin or execution profiles. OpenAI's managed Agents API is a separate API-billed deployment option, not a prerequisite for Fast or Full.
 
 By default, the command creates a fresh dedicated task branch in the current checkout from the configured base branch. It never silently reuses an existing branch and does not create a worktree. Repeating the same queued task id is idempotent; intentional work on an existing branch requires `--current-branch`. If queueing fails before ownership is recorded, a newly created clean branch is rolled back. The checkout must be clean. Setup files intentionally ignored by Git may stay local and must not be force-added; otherwise commit or intentionally ignore new setup files and commit or stash other intended changes before starting the first task. Only one unfinished current-checkout task may own a repository at a time.
 

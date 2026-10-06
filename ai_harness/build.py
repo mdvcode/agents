@@ -38,10 +38,9 @@ def harness_build_fingerprint(root: Path, *, package_root: Path | None = None) -
     root = root.resolve()
     candidates = [root / relative for relative in CONFIG_FILES]
     package_directory = (
-        root / "ai_harness"
-        if (root / "ai_harness").is_dir()
-        else (package_root or Path(__file__).resolve().parent)
-    )
+        package_root
+        or (root / "ai_harness" if (root / "ai_harness").is_dir() else Path(__file__).resolve().parent)
+    ).resolve()
     candidates.extend(
         package_directory / "observability" / "assets" / name
         for name in OBSERVABILITY_ASSET_FILES
@@ -61,11 +60,9 @@ def harness_build_fingerprint(root: Path, *, package_root: Path | None = None) -
     for path in {item.resolve() for item in candidates if item.is_file()}:
         try:
             try:
-                relative = path.relative_to(root)
+                relative = Path("ai_harness") / path.relative_to(package_directory)
             except ValueError:
-                relative = Path("ai_harness") / path.relative_to(
-                    package_root or Path(__file__).resolve().parent
-                )
+                relative = path.relative_to(root)
             entries[str(relative)] = path.read_bytes()
         except (OSError, ValueError):
             continue

@@ -4,6 +4,8 @@ import importlib.util
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "security_scan.py"
 SPEC = importlib.util.spec_from_file_location("security_scan", MODULE_PATH)
@@ -109,3 +111,64 @@ def test_changed_files_between_refs_raises_when_base_ref_missing(tmp_path: Path)
         assert "missing-base" in str(exc) or "unknown revision" in str(exc)
     else:
         raise AssertionError("missing base ref must not return an empty changed-file list")
+
+
+def test_new_branch_scan_covers_all_tracked_files_and_detects_existing_secret(tmp_path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    token = "ghp_" + ("A" * 24)
+    (tmp_path / "config.txt").write_text("token='" + token + "'\n", encoding="utf-8")
+    subprocess.run(["git", "add", "config.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    (tmp_path / "safe.txt").write_text("safe\n", encoding="utf-8")
+    subprocess.run(["git", "add", "safe.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "second"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    (tmp_path / "untracked.txt").write_text("local only\n", encoding="utf-8")
+
+    changed = security_scan.changed_files_between_refs(tmp_path, "0" * 40, "HEAD")
+    findings = security_scan.scan(repo=tmp_path, profile="agent_workspace", staged_paths=changed)
+
+    assert changed == ["config.txt", "safe.txt"]
+    assert findings == ["possible secret in config.txt"]
+
+
+def test_new_branch_scan_rejects_missing_head(tmp_path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    with pytest.raises(RuntimeError, match="HEAD"):
+        security_scan.changed_files_between_refs(tmp_path, "0" * 40, "HEAD")
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ['quoted"name.txt', "line\nbreak.txt", "carriage\rreturn.txt", " padded name.txt ", "данные.txt"],
+)
+@pytest.mark.parametrize("mode", ["first_push", "range", "staged"])
+def test_git_scan_preserves_filenames_without_skipping_secrets(
+    tmp_path: Path, filename: str, mode: str
+) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    (tmp_path / "safe.txt").write_text("safe\n", encoding="utf-8")
+    subprocess.run(["git", "add", "safe.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True).stdout.strip()
+    token = "ghp_" + ("A" * 24)
+    (tmp_path / filename).write_text(token, encoding="utf-8")
+    subprocess.run(["git", "add", "--", filename], cwd=tmp_path, check=True)
+    if mode != "staged":
+        subprocess.run(["git", "commit", "-m", "second"], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    changed = (
+        security_scan.staged_files(tmp_path)
+        if mode == "staged"
+        else security_scan.changed_files_between_refs(tmp_path, "0" * 40 if mode == "first_push" else base, "HEAD")
+    )
+    findings = security_scan.scan(
+        repo=tmp_path, profile="agent_workspace", staged_paths=None if mode == "staged" else changed
+    )
+
+    assert set(changed) == ({"safe.txt", filename} if mode == "first_push" else {filename})
+    assert findings == [f"possible secret in {filename}"]

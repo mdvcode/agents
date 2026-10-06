@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -71,15 +72,14 @@ def iter_files(repo: Path) -> list[Path]:
 
 def staged_files(repo: Path) -> list[str]:
     result = subprocess.run(
-        ["git", "diff", "--cached", "--name-only"],
+        ["git", "diff", "--cached", "--name-only", "-z"],
         cwd=repo,
-        text=True,
         capture_output=True,
         check=False,
     )
     if result.returncode != 0:
         return []
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return [os.fsdecode(path) for path in result.stdout.split(b"\0") if path]
 
 
 def paths_from_file(paths_file: Path) -> list[str]:
@@ -91,17 +91,23 @@ def paths_from_file(paths_file: Path) -> list[str]:
 
 
 def changed_files_between_refs(repo: Path, base_ref: str, head_ref: str) -> list[str]:
+    # GitHub uses an all-zero before SHA when a branch is first pushed.
+    # Scan its complete tracked tree rather than treating it as an empty diff.
+    command = (
+        ["git", "ls-tree", "-r", "--name-only", "-z", head_ref]
+        if base_ref == "0" * 40
+        else ["git", "diff", "--name-only", "-z", f"{base_ref}...{head_ref}"]
+    )
     result = subprocess.run(
-        ["git", "diff", "--name-only", f"{base_ref}...{head_ref}"],
+        command,
         cwd=repo,
-        text=True,
         capture_output=True,
         check=False,
     )
     if result.returncode != 0:
-        message = (result.stderr or result.stdout).strip() or f"git diff failed for {base_ref}...{head_ref}"
+        message = os.fsdecode(result.stderr or result.stdout).strip() or f"git diff failed for {base_ref}...{head_ref}"
         raise RuntimeError(message)
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return [os.fsdecode(path) for path in result.stdout.split(b"\0") if path]
 
 
 def protected_staged_prefixes(profile: str) -> tuple[str, ...]:
