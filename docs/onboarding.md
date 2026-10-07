@@ -9,6 +9,14 @@ establish a separate PyPI/tagged release or production acceptance. See `README.m
 
 Use this checklist before making changes.
 
+Executable scripts that import Harness code must add their own source root and script directory
+to the import path before importing local modules. During an update, a newer control-plane source
+may be invoked by an older installed CLI; late path setup can mix package versions before the
+worker is stopped. Worker lifecycle commands and their background entry point use the same early
+bootstrap. Installed resource-only homes continue to resolve the package from the installation.
+Test this boundary with a non-editable older package: an editable development install can hide
+missing modules by resolving them from the current source checkout.
+
 ## Entry Order
 1. Read `AGENTS.md`.
 2. Read `docs/memory/lessons_learned.md`.
