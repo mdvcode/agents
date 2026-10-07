@@ -603,7 +603,9 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         assert "Добавьте данные для выбранного варианта" in dashboard
         assert "choice: ${select.value}" in dashboard
         assert "answers:{}" in dashboard
-        assert "contains(document.activeElement)" in dashboard
+        assert "focused=document.activeElement" in dashboard
+        assert "'taskList','resultDialog'" in dashboard
+        assert ".contains(focused)" in dashboard
         assert 'id="adaptivePanel"' in dashboard
         assert "Adaptive Acceptance" in dashboard
         assert 'id="adaptiveComparison"' in dashboard
@@ -615,7 +617,7 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         assert 'id="adaptiveRole"' in dashboard
         assert 'id="adaptiveOutcome"' in dashboard
         assert 'id="adaptiveMode"' in dashboard
-        assert "Execution plan & efficiency" in dashboard
+        assert "Как выполнялась задача" in dashboard
         assert "model_calls_reduced_40_percent" not in dashboard
         assert "api-run" not in dashboard
 

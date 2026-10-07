@@ -20,6 +20,11 @@ RUNTIME_CONFIG = ROOT / ".agent-runtime.yaml"
 SUPPORTED_PROVIDERS = {"codex-cli", "codex-sdk"}
 
 
+def discover_models(*, worktree: Path, provider: str = "", timeout_seconds: int = 20) -> dict[str, Any]:
+    """Query only the configured runtime; discovery never runs a model turn."""
+    return create_runtime(provider=provider).list_models(worktree=worktree, timeout_seconds=timeout_seconds)
+
+
 class RuntimeConfigurationError(ValueError):
     """Raised when runtime configuration violates the local-subscription contract."""
 

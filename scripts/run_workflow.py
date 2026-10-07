@@ -41,6 +41,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ai_harness.observability import safe_telemetry_runtime
+from ai_harness.model_selection import normalize_model_override, resumed_model_override
 from ai_harness.processes import run_managed_process
 from ai_harness.recovery import RecoveryCoordinator, classify_failure, load_recovery_policy
 from ai_harness.recovery.checkpoints import RoleCheckpoint, write_checkpoint
@@ -309,7 +310,12 @@ def run_workflow(
     resume: bool = False,
     runtime_provider: str = "",
     runtime_command: str = "",
+    model_override: str = "",
 ) -> int:
+    model_override = normalize_model_override(model_override)
+    saved_workflow = RUNS_DIR / run_id / "workflow.json"
+    if resume and run_id and saved_workflow.is_file():
+        model_override = resumed_model_override(model_override, json.loads(saved_workflow.read_text(encoding="utf-8")))
     if mode not in {"auto", "adaptive", "fast", "full", "goal"}:
         raise ValueError("mode must be auto, adaptive, fast, full, or goal")
     workflows = read_workflows()
@@ -353,6 +359,7 @@ def run_workflow(
         workspace_mode="checkout" if current_branch else "worktree",
         workflow_mode=mode,
         input_manifest_sha256=input_manifest_sha256,
+        model_override=model_override,
     )
     existing = find_completed_run(RUNS_DIR, fingerprint, exclude_run_id="") if not resume else None
     if existing is not None:
@@ -435,6 +442,7 @@ def run_workflow(
                     "branch_owner_run_id": run_id,
                     "execution_status": "running",
                     "mode": mode,
+                    "model_override": model_override,
                     "roles": [],
                     "loops": {
                         "quality_repair": {"iterations": 0},
@@ -615,6 +623,8 @@ def run_workflow(
                 command = command + " --resume"
             if command.startswith("python3 scripts/agent_role_runner.py") and "--mode" not in command:
                 command = f"{command} --mode {quote_placeholder(mode)}"
+            if model_override and command.startswith("python3 scripts/agent_role_runner.py"):
+                command = f"{command} --model {quote_placeholder(model_override)}"
             if project_identity and command.startswith("python3 scripts/agent_role_runner.py"):
                 if "--project-id" not in command:
                     command = (
@@ -831,6 +841,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--adapter-command", default="")
     parser.add_argument("--runtime-provider", default="")
     parser.add_argument("--runtime-command", default="")
+    parser.add_argument("--model", default="")
     parser.add_argument("--resume", action="store_true")
     return parser.parse_args()
 
@@ -857,6 +868,7 @@ def main() -> int:
             resume=args.resume,
             runtime_provider=args.runtime_provider,
             runtime_command=args.runtime_command,
+            model_override=args.model,
         )
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"invalid harness state: {exc}", file=sys.stderr)

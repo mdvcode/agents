@@ -17,6 +17,7 @@ from task_queue import DEFAULT_DB, TaskQueue
 from worker_service import SERVICE_STATE, process_alive, read_state
 from ai_harness.branch_conflicts import analyze_branch_conflicts
 from ai_harness.project import trust_key
+from ai_harness.result_acceptance import compare_results, result_observation
 from ai_harness.observability.adaptive_dashboard import (
     DEFAULT_ACCEPTANCE_PATH,
     adaptive_run_detail,
@@ -211,6 +212,7 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
     if publication.get("pr_created_or_updated") is True and started_at is not None and publication_path.exists():
         pr_time_seconds = round(max(0, publication_path.stat().st_mtime - started_at), 3)
     adaptive = adaptive_run_detail(run_dir, workflow, metrics)
+    result_feedback = result_observation(run_dir, workflow, metrics)
     summary = {
         "run_id": run_dir.name,
         "task_id": str(workflow.get("task_id", "")),
@@ -268,6 +270,8 @@ def run_summary(run_dir: Path) -> dict[str, Any] | None:
         },
         "approval_status": str(approval.get("status", "")),
         "adaptive": adaptive,
+        "result_acceptance": result_feedback["acceptance"],
+        "result_observation": result_feedback,
         "updated_at": run_dir.joinpath("workflow.json").stat().st_mtime,
     }
     try:
@@ -465,6 +469,7 @@ def collect_metrics(
             runs_dir=runs_dir,
             acceptance_path=adaptive_acceptance_path,
         ),
+        "result_comparison": compare_results([run["result_observation"] for run in runs]),
         "exceptions": [asdict(item) for item in exceptions],
         "service": {**service, "alive": process_alive(service_pid)},
     }

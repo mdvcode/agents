@@ -48,6 +48,8 @@ from ai_harness.model_policy import (  # noqa: E402
     validate_request_profile,
 )
 from ai_harness.attachments.runtime import attachment_image_paths  # noqa: E402
+from ai_harness.model_selection import normalize_model_override, require_available_model  # noqa: E402
+from codex_sdk_models import models_for_client  # noqa: E402
 
 
 ROOT = SCRIPT_DIR.parents[1]
@@ -235,8 +237,8 @@ class ProgressWriter:
         return payload
 
 
-def sdk_settings(request: dict[str, Any]) -> dict[str, str]:
-    return validate_request_profile(request)
+def sdk_settings(request: dict[str, Any], *, model_catalog: dict[str, Any] | None = None) -> dict[str, str]:
+    return validate_request_profile(request, model_catalog=model_catalog)
 
 
 def sdk_sandbox(filesystem_access: str) -> Any:
@@ -395,8 +397,16 @@ def run_sdk(
     filesystem_access = str(request.get("filesystem_access", "read_only"))
     schema = standard_role_result_schema(output_contract)
     try:
-        settings = sdk_settings(request)
-    except ModelPolicyError as exc:
+        model_override = normalize_model_override(request.get("model_override", ""))
+        validation_request = request
+        if model_override:
+            if request.get("model", model_override) != model_override:
+                raise ModelPolicyError("Requested model does not match the task model_override")
+            validation_request = {key: value for key, value in request.items() if key not in {"model", "model_override"}}
+        settings = sdk_settings(validation_request)
+        if model_override:
+            settings["model"] = model_override
+    except ValueError as exc:
         return failure_result(
             "Codex SDK execution profile is invalid.",
             [str(exc)],
@@ -456,6 +466,20 @@ def run_sdk(
                 kind="policy_block",
                 error_type="SubscriptionAuthRequired",
             )
+        model_catalog: dict[str, Any] | None = None
+        if model_override:
+            model_catalog = models_for_client(codex)
+            try:
+                selected_model = require_available_model(model_override, model_catalog)
+                settings = sdk_settings(request, model_catalog=model_catalog)
+                if attachment_image_paths(manifest) and "image" not in selected_model.get("input_modalities", []):
+                    raise ModelPolicyError("Selected model does not support the attached images")
+            except ValueError as exc:
+                return failure_result(
+                    "The selected model is unavailable or incompatible.", [str(exc)],
+                    kind="policy_block", error_type="ModelUnavailable",
+                )
+            request.update(settings)
         sdk_thread = None
         if thread_id:
             try:
@@ -528,6 +552,11 @@ def run_sdk(
             if not errors:
                 break
             economy_settings = load_execution_profiles()["economy"]
+            if model_override:
+                economy_settings = sdk_settings(
+                    {**economy_settings, "execution_profile": "economy", "model": model_override, "model_override": model_override},
+                    model_catalog=model_catalog,
+                )
             if repair_thread is None:
                 repair_thread = codex.thread_resume(
                     thread_id,

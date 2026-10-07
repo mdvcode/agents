@@ -403,6 +403,7 @@ def task_fingerprint(
     workspace_mode: str = "worktree",
     workflow_mode: str = "auto",
     input_manifest_sha256: str = "",
+    model_override: str = "",
 ) -> str:
     payload = {
         "task_id": task_id,
@@ -415,6 +416,8 @@ def task_fingerprint(
     }
     if input_manifest_sha256:
         payload["input_manifest_sha256"] = input_manifest_sha256
+    if model_override:
+        payload["model_override"] = model_override
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     ).hexdigest()

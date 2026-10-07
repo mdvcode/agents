@@ -205,6 +205,7 @@ def spawn_children(
             "base_branch": str(state.get("base_branch", "main")),
             "workspace_mode": "worktree",
             "mode": "fast",
+            "model_override": str(state.get("model_override", "")),
             "priority": int(state.get("priority", 0) or 0) + 1,
             "max_retries": 1,
             "repository_max_parallel_tasks": int(

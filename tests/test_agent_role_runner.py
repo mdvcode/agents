@@ -881,6 +881,22 @@ def test_resume_rejects_project_identity_change(
     assert state["blockers"] == ["project identity changed since this run started"]
 
 
+def test_resume_rejects_changed_model_without_mutating_run(tmp_path: Path, monkeypatch: object) -> None:
+    runs = tmp_path / ".agent-runs"
+    run_dir = runs / "model-resume"
+    run_dir.mkdir(parents=True)
+    saved = {"run_id": "model-resume", "execution_status": "resuming", "model_override": "original-model"}
+    workflow = run_dir / "workflow.json"
+    workflow.write_text(json.dumps(saved), encoding="utf-8")
+    monkeypatch.setattr(agent_role_runner, "RUNS", runs)
+
+    state = agent_role_runner.run_roles(run_id="model-resume", resume=True, model_override="another-model")
+
+    assert state["execution_status"] == "blocked"
+    assert "model_override changed" in state["blockers"][0]
+    assert json.loads(workflow.read_text(encoding="utf-8")) == saved
+
+
 def test_agent_role_runner_preflights_configured_runtime_before_roles(tmp_path: Path, monkeypatch: object) -> None:
     subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
@@ -1386,15 +1402,21 @@ def test_adaptive_resume_validates_pending_output_before_budget_or_runtime(
     assert not pending_path.exists()
 
 
+@pytest.mark.parametrize("model_override", ["", "available-custom-model"])
 def test_resumed_run_stops_instead_of_reopening_the_same_question(
     tmp_path: Path,
     monkeypatch: object,
+    model_override: str,
 ) -> None:
     runs = tmp_path / ".agent-runs"
     monkeypatch.setattr(agent_role_runner, "RUNS", runs)
     command = fake_adapter_script(tmp_path / "fake_adapter.py")
+    requested_models: list[str] = []
 
     def ask_same_question(*args: object, **kwargs: object) -> dict[str, object]:
+        requested_models.append(str(kwargs["task"].get("model_override", "")))
+        if model_override:
+            assert kwargs["task"]["model"] == model_override
         artifacts = Path(str(kwargs["artifacts"]))
         (artifacts / "plan.md").write_text("# Plan\n", encoding="utf-8")
         return {
@@ -1431,6 +1453,7 @@ def test_resumed_run_stops_instead_of_reopening_the_same_question(
         repository=tmp_path,
         adapter_command=command,
         dry_run=True,
+        model_override=model_override,
     )
     run_dir = runs / "repeat-question"
     approval = approve_run(run_dir, actor="user")
@@ -1460,6 +1483,9 @@ def test_resumed_run_stops_instead_of_reopening_the_same_question(
     resumed = agent_role_runner.run_roles(run_id="repeat-question", resume=True, dry_run=True)
 
     assert first["execution_status"] == "awaiting_approval"
+    assert first["model_override"] == model_override
+    assert resumed["model_override"] == model_override
+    assert requested_models == [model_override, model_override]
     assert resumed["execution_status"] == "blocked"
     assert resumed["attention"]["repeated_question"] is True
     assert resumed["attention"]["action"] == "fix_then_retry"

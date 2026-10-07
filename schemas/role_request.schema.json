@@ -30,6 +30,7 @@
     "filesystem_access": "str",
     "execution_profile": "str",
     "model": "str",
+    "model_override": "str",
     "reasoning_effort": "str",
     "service_tier": "str",
     "profile_reason": "str",

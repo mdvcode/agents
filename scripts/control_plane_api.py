@@ -61,6 +61,13 @@ from ai_harness.project_catalog import (
 from ai_harness.task_batch import BatchManifestError, parse_batch_manifest
 from ai_harness.context.content_guard import ContextGuardError, require_safe  # noqa: E402
 from context_inspector import get_input, list_inputs, preview_sources  # noqa: E402
+from ai_harness.result_acceptance import (  # noqa: E402
+    ResultAcceptanceError,
+    StaleResultError,
+    record_result_acceptance,
+    result_acceptance,
+)
+from runtimes.registry import discover_models  # noqa: E402
 
 RUNS_DIR = ROOT / ".agent-runs"
 ATTACHMENT_STORE_ROOT = ROOT / ".agent-uploads"
@@ -651,6 +658,18 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 return
             self.authorize()
             parts = path.strip("/").split("/")
+            if len(parts) == 3 and parts[0] == "runs" and parts[2] == "result-acceptance":
+                self.authorize_context_read()
+                self.send_json(HTTPStatus.OK, result_acceptance(run_path(self.runs_dir, parts[1])))
+                return
+            if path == "/models":
+                self.authorize_context_read()
+                repository = self.query_repository(parse_qs(urlparse(self.path).query, keep_blank_values=True))
+                _, provider, _, trusted = self.repository_settings(repository)
+                if not trusted:
+                    raise APIError(HTTPStatus.BAD_REQUEST, "connect a trusted project before choosing a model")
+                self.send_json(HTTPStatus.OK, discover_models(worktree=repository, provider=provider, timeout_seconds=20))
+                return
             if len(parts) in {3, 4} and parts[0] == "runs" and parts[2] == "context":
                 self.authorize_context_read()
                 run_dir = run_path(self.runs_dir, parts[1])
@@ -660,6 +679,32 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             if path == "/projects" or path.startswith("/projects/"):
                 self.require_project_catalog_authorization()
             metrics = collect_metrics(runs_dir=self.runs_dir, db_path=self.queue.path)
+            # Feedback and result evidence have the same private boundary as context.
+            # Legacy tokenless metrics remain available without the new private fields.
+            private_results = bool(self.auth_token)
+            if private_results:
+                try:
+                    self.authorize_context_read()
+                except APIError:
+                    private_results = False
+            for item in metrics.get("runs", {}).get("items", []):
+                item.pop("result_observation", None)
+                feedback = item.pop("result_acceptance", None)
+                if private_results and isinstance(feedback, dict):
+                    current = feedback.get("current")
+                    historical = feedback.get("historical")
+                    historical_assessment = historical.get("assessment") if isinstance(historical, dict) else None
+                    item["result_acceptance"] = {
+                        "eligible": feedback.get("eligible", False),
+                        "stale": feedback.get("stale", False),
+                        "current": {"status": current.get("status")} if isinstance(current, dict) else None,
+                        "historical": {
+                            "status": historical_assessment.get("status"),
+                            "availability": historical.get("availability"),
+                        } if isinstance(historical_assessment, dict) else None,
+                    }
+            if not private_results:
+                metrics.pop("result_comparison", None)
             if path == "/health":
                 self.send_json(HTTPStatus.OK, {"status": "ok", "service": metrics["service"]})
             elif path == "/metrics":
@@ -767,6 +812,29 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.CREATED, self.stage_attachment())
                 return
             raw, payload = self.body()
+            parts = [part for part in path.split("/") if part]
+            if len(parts) == 3 and parts[0] == "runs" and parts[2] == "result-acceptance":
+                self.authorize_context_read()
+                self.require_cli_mutations_enabled()
+                if self.headers.get_content_type() != "application/json":
+                    raise APIError(HTTPStatus.BAD_REQUEST, "result feedback requires JSON")
+                for name in ("status", "reason", "expected_fingerprint"):
+                    if not isinstance(payload.get(name, ""), str):
+                        raise APIError(HTTPStatus.BAD_REQUEST, f"{name} must be text")
+                try:
+                    value = record_result_acceptance(
+                        run_path(self.runs_dir, parts[1]),
+                        status=payload.get("status", ""),
+                        reason=payload.get("reason", ""),
+                        actor="dashboard-user",
+                        expected_fingerprint=payload.get("expected_fingerprint", ""),
+                    )
+                except StaleResultError as exc:
+                    raise APIError(HTTPStatus.CONFLICT, str(exc)) from exc
+                except ResultAcceptanceError as exc:
+                    raise APIError(HTTPStatus.BAD_REQUEST, str(exc)) from exc
+                self.send_json(HTTPStatus.OK, value)
+                return
             if path == "/ui/context/preview":
                 self.authorize_context_read()
                 if self.headers.get_content_type() != "application/json":
@@ -873,6 +941,11 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 if execution_mode not in {"auto", "adaptive", "fast", "full", "goal"}:
                     raise APIError(HTTPStatus.BAD_REQUEST, "unknown execution mode")
                 arguments = ["task", goal, "--mode", execution_mode]
+                model_override = payload.get("model_override", "")
+                if not isinstance(model_override, str) or len(model_override) > 128:
+                    raise APIError(HTTPStatus.BAD_REQUEST, "model_override must be a model identifier")
+                if model_override.strip():
+                    arguments.extend(["--model", model_override.strip()])
                 attachment_set_ids = payload.get("attachment_set_ids", [])
                 if not isinstance(attachment_set_ids, list) or not all(
                     isinstance(value, str) and value for value in attachment_set_ids

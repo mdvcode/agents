@@ -461,6 +461,7 @@ def test_resume_enqueues_same_run_and_checkpoint(tmp_path: Path) -> None:
             "base_sha": "abc123",
             "branch_owner_run_id": "run-approval",
             "runtime": {"provider": "codex-sdk"},
+            "model_override": "available-custom-model",
             "input_manifest": str(run / "inputs" / "manifest.json"),
             "input_manifest_sha256": "a" * 64,
             "attachment_count": 2,
@@ -502,6 +503,7 @@ def test_resume_enqueues_same_run_and_checkpoint(tmp_path: Path) -> None:
     assert record.payload["base_sha"] == "abc123"
     assert record.payload["branch_owner_run_id"] == "run-approval"
     assert record.payload["runtime_provider"] == "codex-sdk"
+    assert record.payload["model_override"] == "available-custom-model"
     assert record.payload["input_manifest"] == str(run / "inputs" / "manifest.json")
     assert record.payload["input_manifest_sha256"] == "a" * 64
     assert record.payload["attachment_count"] == 2

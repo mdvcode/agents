@@ -673,6 +673,46 @@ def test_agent_task_dry_run_does_not_switch_branch_start_worker_or_create_queue(
     assert not (state_root / ".agent-queue").exists()
 
 
+@pytest.mark.parametrize("available", [False, True])
+def test_task_model_selection_checks_catalog_before_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: object, available: bool
+) -> None:
+    import runtimes.registry
+
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    commit_all(repository)
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    original_branch = subprocess.run(
+        ["git", "branch", "--show-current"], cwd=repository, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    discoveries: list[dict[str, object]] = []
+
+    def discover(**kwargs: object) -> dict[str, object]:
+        discoveries.append(kwargs)
+        return {"status": "available", "models": [{"id": "available-custom-model"}] if available else []}
+
+    monkeypatch.setattr(runtimes.registry, "discover_models", discover)
+    result = cli.main([
+        "task", "Check model selection", "--repo", str(repository), "--model", "available-custom-model", "--dry-run", "--json",
+    ])
+    captured = capsys.readouterr()
+    assert discoveries == [{"worktree": repository, "provider": "codex-sdk", "timeout_seconds": 20}]
+    if available:
+        assert result == 0
+        assert json.loads(captured.out)["envelope"]["model_override"] == "available-custom-model"
+    else:
+        assert result == 2
+        assert "not available" in json.loads(captured.out)["error"]
+    assert subprocess.run(
+        ["git", "branch", "--show-current"], cwd=repository, check=True, capture_output=True, text=True
+    ).stdout.strip() == original_branch
+    assert not (state_root / ".agent-queue").exists()
+
+
 def test_agent_task_keys_distinguish_repositories_with_same_project_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -142,6 +142,8 @@ class CodexSdkServer:
         if not isinstance(output_contract, dict) or not isinstance(manifest, dict):
             raise ValueError("session execute contracts are malformed")
         run_id = str(request.get("run_id", ""))
+        model_override = str(request.get("model_override", ""))
+        thread_key = json.dumps([run_id, model_override]) if model_override else run_id
         # Every verifier invocation starts fresh, including rechecks after repair.
         # Its progress must not replace the implementation's resumable thread.
         reuse_run_thread = bool(run_id) and request.get("role") not in INDEPENDENT_VERIFIER_ROLES
@@ -152,7 +154,7 @@ class CodexSdkServer:
         def progress_sink(progress: dict[str, Any]) -> None:
             live_thread_id = str(progress.get("thread_id", ""))
             if reuse_run_thread and live_thread_id:
-                self.threads[run_id] = live_thread_id
+                self.threads[thread_key] = live_thread_id
             self.write_state("busy", active_run_id=run_id)
             self.send(connection, {"type": "progress", "progress": progress})
 
@@ -185,7 +187,7 @@ class CodexSdkServer:
                 output_contract=output_contract,
                 manifest=manifest,
                 codex_client=self.ensure_codex(request),
-                thread_id=str(self.threads.get(run_id, "")) if reuse_run_thread else "",
+                thread_id=str(self.threads.get(thread_key, "")) if reuse_run_thread else "",
                 progress_sink=progress_sink,
                 turn_started=turn_started,
             )
@@ -193,7 +195,7 @@ class CodexSdkServer:
             monitor_stop.set()
         thread_id = str(result.get("thread_id", ""))
         if reuse_run_thread and thread_id:
-            self.threads[run_id] = thread_id
+            self.threads[thread_key] = thread_id
         self.write_state("ready")
         self.send(connection, {"type": "result", "result": result})
 

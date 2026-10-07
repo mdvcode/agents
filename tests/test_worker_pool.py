@@ -264,12 +264,13 @@ def test_worker_telemetry_rejects_run_paths_outside_run_store(
     assert telemetry_run_dir("../outside") is None
 
 
-def test_reclaimed_run_uses_resume_command(tmp_path: Path, monkeypatch: object) -> None:
+@pytest.mark.parametrize("model_override", ["", "available-custom-model"])
+def test_reclaimed_run_uses_resume_command(tmp_path: Path, monkeypatch: object, model_override: str) -> None:
     runs = tmp_path / ".agent-runs"
     run_dir = runs / "run-recover"
     run_dir.mkdir(parents=True)
     (run_dir / "workflow.json").write_text(
-        json.dumps({"execution_status": "running"}), encoding="utf-8"
+        json.dumps({"execution_status": "running", "model_override": model_override}), encoding="utf-8"
     )
     monkeypatch.setattr(worker_pool, "RUNS_DIR", runs)
     commands: list[list[str]] = []
@@ -295,6 +296,7 @@ def test_reclaimed_run_uses_resume_command(tmp_path: Path, monkeypatch: object) 
             "repository": str(tmp_path),
             "run_id": "run-recover",
             "workspace_mode": "current_branch",
+            "model_override": model_override,
         },
         run_id="run-recover",
     )
@@ -308,6 +310,10 @@ def test_reclaimed_run_uses_resume_command(tmp_path: Path, monkeypatch: object) 
     assert outcome.run_id == "run-recover"
     assert commands and "--resume" in commands[0]
     assert "--current-branch" in commands[0]
+    if model_override:
+        assert commands[0][commands[0].index("--model") + 1] == model_override
+    else:
+        assert "--model" not in commands[0]
 
 
 def test_two_workers_cannot_resume_the_same_run_concurrently(tmp_path: Path, monkeypatch: object) -> None:

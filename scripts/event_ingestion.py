@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_harness.project import trust_key
+from ai_harness.model_selection import ModelSelectionError, normalize_model_override
 from runtime_contracts import load_json, validate_contract
 from task_queue import DEFAULT_DB, TaskQueue, TaskRecord
 from ai_harness.context.content_guard import ContextGuardError, require_safe
@@ -114,6 +115,10 @@ def normalize_event(
     if mode not in {"auto", "adaptive", "fast", "full", "goal"}:
         raise EventError("event mode must be auto, adaptive, fast, full, or goal")
     runtime_provider = text(payload.get("runtime_provider"), "codex-sdk")
+    try:
+        model_override = normalize_model_override(payload.get("model_override", ""))
+    except ModelSelectionError as exc:
+        raise EventError(str(exc)) from exc
     if runtime_provider not in {"codex-sdk", "codex-cli"}:
         raise EventError("event runtime_provider must be codex-sdk or codex-cli")
     run_id = text(payload.get("run_id"))
@@ -211,6 +216,7 @@ def normalize_event(
         "branch_owner_run_id": text(payload.get("branch_owner_run_id"), run_id),
         "mode": mode,
         "runtime_provider": runtime_provider,
+        "model_override": model_override,
         "run_id": run_id,
         "priority": priority,
         "max_retries": max_retries,
@@ -282,7 +288,7 @@ def enqueue_envelope(queue: TaskQueue, envelope: dict[str, Any]) -> TaskRecord:
             "allowed_child_repositories", "graph_depth", "child_budget", "spawn_fingerprint"
         )
     }
-    for key in ("project_id", "project_key"):
+    for key in ("project_id", "project_key", "model_override"):
         if key in envelope:
             payload[key] = envelope[key]
     if "input_manifest" in envelope:

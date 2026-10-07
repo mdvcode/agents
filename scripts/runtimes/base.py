@@ -31,6 +31,8 @@ class Runtime(Protocol):
 
     def preflight(self, *, worktree: Path, timeout_seconds: int) -> dict[str, Any]: ...
 
+    def list_models(self, *, worktree: Path, timeout_seconds: int) -> dict[str, Any]: ...
+
     def execute(
         self,
         *,
