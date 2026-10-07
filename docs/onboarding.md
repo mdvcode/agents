@@ -1,10 +1,11 @@
 # Agent Onboarding
 
-For the local, unpublished Tweebit v0.4.0 release candidate, run `./install.sh` only from the exact
-reviewed local checkout, then run `agent init` inside the project. Keep updates pinned with `agent
-update --source /absolute/path/to/reviewed/tweebit-checkout`; a source-less or public
-`mdvcode/agents` install selects the public baseline. See `README.md` and `docs/cli.md`. The
-lower-level checklist below is for contributors changing the Harness itself.
+The Tweebit v0.4.0 source is available in `mdvcode/agents` on `main`. Run `./install.sh` from a
+reviewed checkout or use the public bootstrap, then run `agent init` inside the target project.
+Use `agent update` to update the installed source, or `agent update --source
+/absolute/path/to/agents` to select a specific reviewed checkout. Source availability does not
+establish a separate PyPI/tagged release or production acceptance. See `README.md` and
+`docs/cli.md`. The lower-level checklist below is for contributors changing the Harness itself.
 
 Use this checklist before making changes.
 

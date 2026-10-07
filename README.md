@@ -4,8 +4,9 @@ Tweebit AI Harness by Daryna runs software tasks in local Git repositories throu
 
 It supports single tasks, parallel work in isolated Git worktrees, batches across several repositories, background recovery, and explicit human approval when a decision cannot be made safely. Merge and deployment always remain human actions.
 
-The local Tweebit v0.4.0 release candidate keeps this standalone architecture—there is no Chrome
-extension or cloud synchronization. Its local **Проекты** catalog reads only explicitly
+The v0.4.0 source is available in this repository's `main` branch. This is a source version, not a
+claim of a separately published PyPI/tagged release or completed production acceptance. The Harness
+uses local Git repositories, a local queue, and the Codex SDK. Its **Проекты** catalog reads only explicitly
 initialized, trusted repositories and uses the same folder, Git workspace, `AGENTS.md`, and
 `.agent/project.yaml` as Codex. The dashboard uses a lightweight, collapsible desktop sidebar and a
 mobile off-canvas menu to separate **Проекты**, **Задачи**, **Статистика**, and **Adaptive Lab**,
@@ -26,21 +27,77 @@ reference; image context is fail-closed above 20 references rather than silently
 
 ## How a task runs
 
+**The Harness manages the job; Codex performs the coding work.** The Harness owns the queue, Git
+workspace, task context, budgets, checkpoints, required checks, and publication permissions. Codex
+reads the project, changes code, adds tests, and repairs problems within that scope. Required quality
+and security tools check the result; a separate Codex reviewer examines the change before the
+Harness decides whether it can finish locally or publish a PR.
+
 ```mermaid
 flowchart LR
-    A["Task or batch"] --> B["Queue and Git workspace"]
-    B --> C["Execution mode"]
-    C -->|"adaptive"| D["Task Analyzer and Workflow Compiler"]
-    C -->|"auto, fast, full, or goal"| E["Existing workflow policy"]
-    D --> F["Minimum safe execution DAG"]
-    E --> F
-    F --> G["Implementation and required verification"]
-    G -->|"recoverable failure"| F
-    G -->|"passed"| H["Reviewable branch or PR"]
-    G -->|"decision required"| I["Human attention"]
+    A["Dashboard or agent task"] --> B["Queue, context, Git workspace and execution mode"]
+    B --> C["Codex implements code and tests"]
+    C --> D["Required quality and security checks"]
+    D -->|"passed"| E["Codex review in a separate session"]
+    D -->|"recoverable failure"| C
+    E -->|"repair required"| C
+    E -->|"passed"| F["Local result or policy-authorized PR"]
+    B -->|"information or permission required"| G["Human attention, then the same run resumes"]
 ```
 
-One run keeps the same task identity, Git workspace, checkpoint, and Codex thread across implementation, repair, user answers, and verification. A blocking compiler or test failure stays in that run. Only genuinely independent work may become a bounded child run. Adaptive mode reduces unnecessary roles, context, and model calls without changing recovery, approvals, security gates, worktree isolation, or publication safety.
+The diagram shows the core implementation and verification cycle. Full adds planning, risk
+classification, test generation for code changes, and applicable specialist checks; Adaptive compiles its own
+execution plan. The modes are explained below.
+
+One run keeps its task identity, Git workspace, and checkpoint through implementation, repair, and
+user answers. The working Codex session retains continuity for that work. Model-backed reviewers
+and specialist verifiers start a **fresh session for each invocation**, including a recheck after a
+repair. This separates review from the writer's conversation; it does not guarantee a different
+model or an error-free review. Repairs stay in the same run and are bounded by its budgets. Only
+independent work may become a governed child run.
+
+Start a Harness task through the dashboard or `agent task`. A message in an ordinary Codex chat
+does not automatically enter the Harness queue. By default, a task gets a dedicated branch in the
+current clean checkout; parallel work requires `--worktree` or the dashboard's **Parallel task**.
+
+### Example: fix CSV export
+
+Assume a project already has a CSV exporter that incorrectly writes `None` for empty values. This
+illustrative task requests a local result:
+
+```sh
+cd /path/to/project
+agent task --mode auto --task-id fix-csv-empty \
+  "Fix CSV export: empty values must remain empty cells. Add a regression test. Local only. Do not publish."
+agent watch --task-id fix-csv-empty
+```
+
+1. **The Harness prepares the task.** It validates project trust and the clean checkout, creates a
+   branch, loads project instructions, and selects Fast for an ordinary narrow change.
+2. **Codex does the whole fix.** In Fast, the implementation role handles the exporter, the
+   regression test, and ordinary repairs together, without waiting for a separate test writer.
+3. **Tools verify it.** The selected project profile determines the required quality, test, and
+   security commands. A failing check returns to a bounded repair cycle; it cannot be reported as
+   a successful check.
+4. **A fresh Codex session reviews it.** The reviewer receives scoped task and change evidence,
+   separately from the working conversation. Actionable findings lead to repair and another check.
+5. **The Harness returns the result.** If the required checks and review pass, this local-only task
+   finishes with a reviewable branch and a report. A task requesting a PR may publish only when the
+   central repository registry and policy allow it. Merge and deployment require explicit human
+   authorization.
+
+If scope or risk grows, Fast escalates before publication. Missing information or a protected
+action may pause the run with a concrete question or approval request. These are possible paths,
+not a promise that every example task will succeed.
+
+### Fast and Full use different workflows
+
+Fast gives one implementation role the complete narrow task and then uses tools plus a separate
+reviewer. For code changes, Full currently uses five base model-backed roles: planner, risk classifier, implementer,
+test generator, and reviewer, with specialist checks when applicable. It has not yet been reduced
+to one executor. Both use the configured Codex runtime; choosing Full does not itself select a
+stronger model. The profile and model settings are separate from the workflow mode. Fast normally
+has two main model stages, but retries and structured-output repairs can add calls.
 
 ## Requirements
 
@@ -53,24 +110,22 @@ The installer creates an isolated application environment, installs the official
 
 ## Install
 
-Tweebit v0.4.0 is currently a local, unpublished release candidate. Install it only from the exact
-reviewed local checkout that contains the candidate:
+Install from a reviewed checkout of this repository:
 
 ```sh
-cd /absolute/path/to/reviewed/tweebit-checkout
+cd /absolute/path/to/agents
 ./install.sh
 ```
 
 For an existing Harness installation, select that checkout explicitly and verify it:
 
 ```sh
-agent update --source /absolute/path/to/reviewed/tweebit-checkout
+agent update --source /absolute/path/to/agents
 hash -r
 agent doctor --full
 ```
 
-The public `mdvcode/agents` installer below installs the public baseline, **not** this unpublished
-Tweebit candidate:
+The public bootstrap installs from `mdvcode/agents` on `main`, which includes the v0.4.0 source:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mdvcode/agents/main/install.sh | sh
@@ -82,6 +137,22 @@ If the shell does not immediately find `agent`, open a new terminal or refresh i
 hash -r
 agent --version
 ```
+
+The runtime uses ChatGPT subscription authentication; a separate OpenAI API key is not required.
+The Python SDK includes its own pinned Codex runtime. Updating the desktop app or a global Codex
+CLI does not update the Harness's pinned SDK or configured model profiles. See the
+[official Codex SDK documentation](https://learn.chatgpt.com/docs/codex-sdk).
+
+If you maintain a source checkout as your control-plane home, select it explicitly:
+
+```sh
+agent home --set /absolute/path/to/agents
+agent home --json
+```
+
+This selects the existing queue, run history, and policies; it does not move state or restart
+services. Preserve the old home and stop its idle services before switching. Ordinary bundled
+installations do not need this setting. See the [CLI guide](docs/cli.md) for precedence and recovery.
 
 ## Quick start
 
@@ -100,7 +171,7 @@ agent task "Fix startup and add a regression test"
 agent watch
 ```
 
-The accepted production default remains `auto`. To use the new adaptive planner explicitly:
+The default remains `auto`, which selects guarded Fast or Full. To use the adaptive planner explicitly:
 
 ```sh
 agent task --mode adaptive --task-id fix-startup \
@@ -117,7 +188,8 @@ hash -r
 agent task --help
 ```
 
-Adaptive mode analyzes the task deterministically where possible, persists an auditable
+Adaptive is a manual Beta opt-in whose representative paired acceptance is still pending. It
+analyzes the task deterministically where possible, persists an auditable
 `.agent-runs/<run-id>/execution-plan.json`, and runs the minimum safe role DAG. It prefers
 deterministic format, lint, type, test, secret, and dependency checks before optional model-backed
 review. Low-confidence or sensitive work expands to a safer workflow; hard security, approval,
@@ -276,10 +348,10 @@ agent task --mode goal "Complete a checkpointed multi-hour objective"
 | `auto` | Selects the guarded Fast or Full workflow from task risk. It cannot select Adaptive until the authoritative acceptance verdict is `PASS`, and it never selects `goal`. |
 | `adaptive` | Manual Beta opt-in to deterministic task analysis and an auditable minimum-safe execution DAG. Optional roles may be skipped, independent read-only checks may run in parallel, and model-backed roles receive scoped context and the cheapest sufficient profile. Low confidence expands the plan safely. |
 | `fast` | Runs the short workflow for at most 15 minutes, with implementation and review as the only model-backed roles. Context, quality, security, and verdict stages are deterministic. |
-| `full` | Runs the complete specialist workflow for at most 60 minutes. |
+| `full` | Runs planning, risk classification, implementation, test generation for code changes, review, and applicable specialist checks for at most 60 minutes. |
 | `goal` | Explicitly runs a checkpointed long objective for at most 4 hours. Use it only when the success condition genuinely needs multiple hours. |
 
-Choose exactly one execution mode per task; Adaptive is not an additional checkbox. Use `auto` for the current accepted production behavior and `adaptive` when explicitly evaluating or using the Beta planner. Fast mode automatically escalates to the full workflow before publication if the patch touches protected areas, changes more than five files, exceeds 200 changed lines, or reports increased risk. Required checks and approval gates are never bypassed. The 30-minute role timeout is an emergency limit for one model executor, not the duration of the whole task; workflow, recovery, iteration, and human-attention limits are tracked separately.
+Choose exactly one execution mode per task; Adaptive is not an additional checkbox. Use `auto` for the current default behavior and `adaptive` when explicitly evaluating or using the Beta planner. Fast mode automatically escalates to the full workflow before publication if the patch touches protected areas, changes more than five files, exceeds 200 changed lines, or reports increased risk. Required checks and approval gates are never bypassed. The 30-minute role timeout is an emergency limit for one model executor, not the duration of the whole task; workflow, recovery, iteration, and human-attention limits are tracked separately.
 
 ## Branch and workspace modes
 
@@ -341,11 +413,11 @@ agent update --json
 ```
 
 - `agent --version` prints the installed version.
-- `agent update` installs from the configured/public source and restarts the worker service; it does
-  not discover this unpublished local Tweebit candidate.
+- `agent update` updates the installed package source, verifies the CLI, and restarts the worker
+  service. A dirty source checkout is never overwritten.
 - `--source` installs an explicitly selected local folder, `git+https`, or `git+ssh` source.
-- Until Tweebit is published, use `agent update --source
-  /absolute/path/to/reviewed/tweebit-checkout` for every candidate install or update.
+- Use `agent update --source /absolute/path/to/agents` when intentionally installing a specific
+  reviewed checkout rather than updating the existing source.
 
 ### Project initialization
 
@@ -510,6 +582,35 @@ Do not edit queue database rows or workflow state files manually. The recovery c
 - Low- and medium-risk work may be prepared for review only when repository policy allows it.
 - The system never auto-merges or deploys.
 - Private run state, raw events, and local memory remain in the Harness control plane and must not be copied into public project output.
+
+## What to build next
+
+This is a **proposed roadmap**, checked against official documentation on **2026-10-07**. It does
+not describe features already delivered by the Harness.
+
+The relevant recent changes are GPT-6.1 Sol availability on September 29, opt-in input steering in
+CLI 0.159, and resume/reconnection/subagent fixes in CLI 0.160. CLI 0.160.1 adds a remote Windows
+MCP environment fix. See the [official changelog](https://learn.chatgpt.com/docs/changelog).
+These client features are not automatically available through the Harness's pinned SDK. The
+[Python SDK documentation](https://learn.chatgpt.com/docs/codex-sdk) explains its pinned runtime;
+the current repository pins `openai-codex==0.144.4` and GPT-5.6 profiles.
+
+| Priority | Next delivery slice | Evidence needed before adopting it |
+| --- | --- | --- |
+| 1 | Add explicit result acceptance: accepted, needs changes, or rejected, with a reason and links to the diff/checks. Compare direct Codex, Fast, and Full on the same representative tasks. | Record versions, project, scope and budgets; compare accepted results, elapsed time, token usage, automatic repairs and user interventions separately. A completed workflow is not proof that its result was accepted. Keep existing Adaptive/Step 2/production acceptance gates. |
+| 2 | Upgrade the pinned SDK deliberately and evaluate available current model profiles, including `gpt-6.1-sol` where the account supports it. | Run authenticated preflight, installed-package smoke, real task and repair/resume/reviewer-isolation checks, then compare against the current profiles. Keep a reproducible pin and rollback; do not replace profiles solely because a release exists. |
+| 3 | Evaluate a simpler Full workflow: one coherent executor, mandatory tool checks, a fresh reviewer, and specialist checks selected by risk. | Demonstrate equal or better acceptance on the paired corpus without removing protected-path, security or publication gates. Preserve Fast/Full as scope, budget and verification-depth choices. This redesign is not implemented yet. |
+| 4 | Add in-progress steering through the supported SDK/app-server interface. | Persist each instruction against the same run, distinguish accepted/queued/uncertain delivery, and test reconnects without duplicate instructions or lost checkpoints. A native CLI feature alone does not establish adapter support. |
+
+The recommended product direction is a reliable orchestration and acceptance layer around Codex:
+project policies, isolation, recovery, independent verification, and evidence that the result helps
+the user. Curated project memory can follow with source attribution, review dates, and explicit
+update/deletion rules; the current dashboard context summary does not provide that lifecycle.
+
+Consider the [Agents API](https://developers.openai.com/api/docs/guides/agents-api/overview) when a
+deployment needs managed cloud sessions and execution. It uses API billing, including applicable
+tool and sandbox charges; it is a separate integration from the local subscription-backed SDK.
+It is not required for the current local Harness workflow.
 
 ## Documentation
 
