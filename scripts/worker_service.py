@@ -17,6 +17,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT = SCRIPT_DIR.parent
+# Select the source package before an older installed package can enter the import cache.
+sys.path[:0] = [str(ROOT), str(SCRIPT_DIR)]
+
 from approval_lifecycle import expire_approvals
 from task_queue import DEFAULT_DB, TaskQueue
 from worker_pool import WorkflowWorkerPool
@@ -25,7 +31,6 @@ from ai_harness.recovery.policy import load_recovery_policy
 from ai_harness.build import harness_build_fingerprint
 
 
-ROOT = Path(__file__).resolve().parents[1]
 SERVICE_STATE = ROOT / ".agent-queue" / "worker-service.json"
 SERVICE_LOG = ROOT / ".agent-queue" / "worker-service.log"
 

@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import shutil
 import sqlite3
 import subprocess
 import sys
+import sysconfig
+import venv
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -2584,6 +2588,53 @@ def test_agent_update_restores_previous_worker_when_package_install_fails(
 
     assert restored == [(worker_root, True)]
     assert "previous worker was restarted" in error
+
+
+@pytest.mark.parametrize(
+    ("source_package", "source_on_path"),
+    [(True, False), (True, True), (False, False)],
+    ids=["new-source-old-package", "source-after-old-package", "installed-resources"],
+)
+def test_update_stop_and_worker_serve_use_consistent_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_package: bool, source_on_path: bool
+) -> None:
+    root = tmp_path / "active-home"
+    installed = tmp_path / "installed-site"
+    ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
+    shutil.copytree(ROOT / "scripts", root / "scripts", ignore=ignore)
+    shutil.copytree(ROOT / "schemas", root / "schemas", ignore=ignore)
+    for config in ROOT.glob(".agent-*.yaml"):
+        shutil.copy2(config, root / config.name)
+    shutil.copytree(ROOT / "ai_harness", installed / "ai_harness", ignore=ignore)
+    if source_package:
+        # Simulate an installed release that predates a new source-only dependency.
+        (installed / "ai_harness/model_selection.py").unlink()
+        shutil.copytree(ROOT / "ai_harness", root / "ai_harness", ignore=ignore)
+    monkeypatch.setenv("AI_HARNESS_HOME", str(root))
+    # Keep dependency imports but do not activate an editable install's fallback finder.
+    # pipx uses a normal installed package; an editable test env would hide this bug.
+    interpreter = tmp_path / "interpreter"
+    venv.EnvBuilder(with_pip=False).create(interpreter)
+    import_paths = [str(installed), *([str(root)] if source_on_path else []), sysconfig.get_path("purelib")]
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(import_paths))
+    monkeypatch.setattr(cli.sys, "executable", str(interpreter / "bin/python"))
+    monkeypatch.setattr(cli, "harness_home", lambda: root)
+    states = iter([{"alive": True}, {"alive": False}])
+    monkeypatch.setattr(cli, "worker_service_status", lambda _root: next(states))
+
+    # The real stop subprocess sees no worker state and cannot signal a live service.
+    assert cli.pause_worker_for_update() == (root, True)
+    assert not (root / ".agent-queue").exists()
+
+    # The same entry point used by start_background must also bootstrap before imports.
+    served = subprocess.run(
+        [sys.executable, str(root / "scripts/worker_service.py"), "serve", "--once", "--workers", "1", "--db", str(root / "queue.db")],
+        cwd=tmp_path, text=True, capture_output=True, timeout=20, check=False,
+    )
+    assert served.returncode == 0, served.stderr
+    state = json.loads((root / ".agent-queue/worker-service.json").read_text(encoding="utf-8"))
+    assert state["status"] == "stopped"
+    assert state["db"] == str(root / "queue.db")
 
 
 def test_agent_start_validates_project_and_starts_workers(

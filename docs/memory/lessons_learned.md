@@ -1,3 +1,12 @@
+- Date: 2026-10-07
+  Agent: Codex
+  Failure: Updating from newer control-plane source failed while stopping the worker because the interpreter imported an older installed package first.
+  Root cause: The worker entry point added its source path only through a later dependency, after the old package had entered Python's module cache. An editable test installation masked the missing-module failure.
+  Prevention rule: Bootstrap the executable's source root and scripts directory before every local import; verify lifecycle entry points against a non-editable stale package as well as an installed resource-only home.
+  Example bad pattern: import local lifecycle modules before selecting their matching source package.
+  Example good pattern: establish source paths using only the standard library, then test update stop and background serve with isolated disposable state.
+  Scope: Harness source updates, package imports, and worker lifecycle
+
 - Date: 2026-04-16
   Agent: Codex
   Failure: Contact-specific trigger logic had spread into small free helper functions and a dedicated post-save hook.
