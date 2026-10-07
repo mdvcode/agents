@@ -119,6 +119,7 @@ workflows:
         project="nextjs_web",
         project_id="shared-name",
         project_key=trust_key(tmp_path),
+        model_override="available-custom-model",
     )
 
     state = json.loads((runs / "identity-run" / "workflow.json").read_text(encoding="utf-8"))
@@ -129,6 +130,15 @@ workflows:
     assert state["project_key"] == trust_key(tmp_path)
     assert arguments[arguments.index("--project-id") + 1] == "shared-name"
     assert arguments[arguments.index("--project-key") + 1] == trust_key(tmp_path)
+    assert state["model_override"] == "available-custom-model"
+    assert arguments[arguments.index("--model") + 1] == "available-custom-model"
+    assert run_workflow.run_workflow(
+        "sample", root=tmp_path, run_id="identity-run", resume=True,
+        project="nextjs_web", project_id="shared-name", project_key=trust_key(tmp_path),
+    ) == 0
+    resumed_arguments = shlex.split(commands[-1])
+    assert resumed_arguments[resumed_arguments.index("--model") + 1] == "available-custom-model"
+    assert "--resume" in resumed_arguments
 
 
 def test_workflow_runner_uses_workflow_timeout(tmp_path: Path, monkeypatch: object) -> None:

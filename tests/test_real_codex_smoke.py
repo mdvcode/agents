@@ -15,13 +15,15 @@ if str(SCRIPTS) not in sys.path:
 
 from runtimes import create_runtime
 from ai_harness.context.payload import read_snapshot
+from ai_harness.model_policy import load_execution_profiles
 
 
 @pytest.mark.skipif(
     os.environ.get("AGENT_REAL_CODEX_SMOKE") != "1",
     reason="optional real Codex SDK smoke requires AGENT_REAL_CODEX_SMOKE=1",
 )
-def test_real_codex_runtime_smoke(tmp_path: Path) -> None:
+@pytest.mark.parametrize("selected_model", [False, True], ids=["default", "selected"])
+def test_real_codex_runtime_smoke(tmp_path: Path, selected_model: bool) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
@@ -87,6 +89,17 @@ def test_real_codex_runtime_smoke(tmp_path: Path) -> None:
         raw_output_dir=raw_dir,
         timeout_seconds=90,
     )
+    selected_entry = None
+    if selected_model:
+        catalog = runtime.list_models(worktree=repo, timeout_seconds=20)
+        assert catalog["status"] == "available", catalog
+        assert catalog["models"], "authenticated runtime must return at least one visible model"
+        default_model = load_execution_profiles()["balanced"]["model"]
+        selected_entry = next(
+            (entry for entry in catalog["models"] if entry["id"] != default_model),
+            catalog["models"][0],
+        )
+        request.update({"model_override": selected_entry["id"], "model": selected_entry["id"]})
     result = runtime.execute(
         role="planner",
         context=manifest,
@@ -96,6 +109,9 @@ def test_real_codex_runtime_smoke(tmp_path: Path) -> None:
     )
 
     assert result["status"] == "completed", result
+    if selected_entry is not None:
+        assert result["model"] == selected_entry["id"]
+        assert result["reasoning_effort"] in selected_entry["supported_reasoning_efforts"]
     assert runtime.descriptor.provider == "codex-sdk"
     assert runtime.descriptor.transport == "local_subscription"
     assert runtime.descriptor.api_required is False

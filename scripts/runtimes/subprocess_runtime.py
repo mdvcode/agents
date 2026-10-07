@@ -54,6 +54,9 @@ class SubprocessRuntime:
             return {"execution_status": "blocked", "blockers": ["runtime command is missing"], "warnings": []}
         return {"execution_status": "completed", "blockers": [], "warnings": []}
 
+    def list_models(self, *, worktree: Path, timeout_seconds: int) -> dict[str, Any]:
+        return {"status": "unavailable", "provider": self.descriptor.provider, "models": [], "message": "This runtime does not support account model discovery; use role profiles"}
+
     def execute(
         self,
         *,
@@ -63,6 +66,8 @@ class SubprocessRuntime:
         worktree: Path,
         artifacts: Path,
     ) -> dict[str, Any]:
+        if task.get("model_override") and self.descriptor.provider not in {"codex-sdk", "test-subprocess"}:
+            return blocked_result("User model selection is unavailable for this runtime.", ["Use role profiles with this provider."])
         boundary_errors = self._boundary_errors(role, context, task, worktree, artifacts)
         if boundary_errors:
             return blocked_result("Runtime invocation boundary is invalid.", boundary_errors)

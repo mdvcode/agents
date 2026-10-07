@@ -9,6 +9,7 @@ from typing import Any
 import yaml
 
 from .paths import harness_home
+from .model_selection import ModelSelectionError, normalize_model_override, require_available_model
 
 RUNTIME_CONFIG = harness_home() / ".agent-runtime.yaml"
 PROFILE_NAMES = {"complex", "balanced", "economy"}
@@ -274,14 +275,23 @@ def validate_request_profile(
     request: dict[str, Any],
     *,
     profiles: dict[str, dict[str, str]] | None = None,
+    model_catalog: dict[str, Any] | None = None,
 ) -> dict[str, str]:
-    """Reject request-side model overrides that are not an exact configured profile."""
+    """Validate role profiles and explicit choices against a fresh runtime catalog."""
 
     configured = profiles or load_execution_profiles()
     name = str(request.get("execution_profile", "balanced") or "balanced")
     if name not in configured:
         raise ModelPolicyError(f"unknown execution profile: {name!r}")
     expected = configured[name]
+    selected_model: dict[str, Any] | None = None
+    try:
+        override = normalize_model_override(request.get("model_override", ""))
+        if override:
+            selected_model = require_available_model(override, model_catalog or {})
+            expected = {**expected, "model": override}
+    except ModelSelectionError as exc:
+        raise ModelPolicyError(str(exc)) from exc
     for field in ("model", "service_tier"):
         requested = request.get(field)
         if requested is not None and str(requested) != expected[field]:
@@ -293,4 +303,10 @@ def validate_request_profile(
         raise ModelPolicyError(
             f"execution profile {name!r} does not allow reasoning_effort={effort!r}"
         )
+    if selected_model is not None:
+        supported = selected_model.get("supported_reasoning_efforts", [])
+        if effort not in supported:
+            effort = str(selected_model.get("default_reasoning_effort", ""))
+        if not effort or effort not in supported:
+            raise ModelPolicyError("Selected model has no compatible reasoning effort in the current catalog")
     return {"execution_profile": name, **expected, "reasoning_effort": effort}

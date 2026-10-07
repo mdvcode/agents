@@ -585,8 +585,9 @@ Do not edit queue database rows or workflow state files manually. The recovery c
 
 ## What to build next
 
-This is a **proposed roadmap**, checked against official documentation on **2026-10-07**. It does
-not describe features already delivered by the Harness.
+This roadmap was checked against official documentation on **2026-10-07**. Result acceptance,
+descriptive Fast/Full comparison and explicit per-task model choice are now implemented; the
+next step is collecting representative results, rather than treating feature availability as quality evidence.
 
 The relevant recent changes are GPT-6.1 Sol availability on September 29, opt-in input steering in
 CLI 0.159, and resume/reconnection/subagent fixes in CLI 0.160. CLI 0.160.1 adds a remote Windows
@@ -597,8 +598,8 @@ the current repository pins `openai-codex==0.144.4` and GPT-5.6 profiles.
 
 | Priority | Next delivery slice | Evidence needed before adopting it |
 | --- | --- | --- |
-| 1 | Add explicit result acceptance: accepted, needs changes, or rejected, with a reason and links to the diff/checks. Compare direct Codex, Fast, and Full on the same representative tasks. | Record versions, project, scope and budgets; compare accepted results, elapsed time, token usage, automatic repairs and user interventions separately. A completed workflow is not proof that its result was accepted. Keep existing Adaptive/Step 2/production acceptance gates. |
-| 2 | Upgrade the pinned SDK deliberately and evaluate available current model profiles, including `gpt-6.1-sol` where the account supports it. | Run authenticated preflight, installed-package smoke, real task and repair/resume/reviewer-isolation checks, then compare against the current profiles. Keep a reproducible pin and rollback; do not replace profiles solely because a release exists. |
+| 1 | Collect human result assessments on representative tasks using the new result viewer and comparison table. | Compare like inputs, versions, project, scope and budgets. A completed workflow is not proof that its result was accepted. Missing measurements remain unknown; existing Adaptive/Step 2/production acceptance gates stay separate. See [result acceptance](docs/result-acceptance.md). |
+| 2 | Evaluate a pinned SDK upgrade against the current baseline; use the new model picker for explicit experiments. | The picker uses the runtime catalog rather than a hardcoded release list. Run authenticated preflight, installed-package smoke, real task and repair/resume/reviewer-isolation checks before adopting a newer pin or defaults. The current pinned runtime still returns GPT-5.6 models. |
 | 3 | Evaluate a simpler Full workflow: one coherent executor, mandatory tool checks, a fresh reviewer, and specialist checks selected by risk. | Demonstrate equal or better acceptance on the paired corpus without removing protected-path, security or publication gates. Preserve Fast/Full as scope, budget and verification-depth choices. This redesign is not implemented yet. |
 | 4 | Add in-progress steering through the supported SDK/app-server interface. | Persist each instruction against the same run, distinguish accepted/queued/uncertain delivery, and test reconnects without duplicate instructions or lost checkpoints. A native CLI feature alone does not establish adapter support. |
 
@@ -615,6 +616,7 @@ It is not required for the current local Harness workflow.
 ## Documentation
 
 - [CLI guide](docs/cli.md)
+- [Result acceptance and comparison](docs/result-acceptance.md)
 - [Operator runbook](docs/operator-runbook.md)
 - [Onboarding](docs/onboarding.md)
 - [System architecture](docs/agent-system.md)

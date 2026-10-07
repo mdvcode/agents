@@ -911,6 +911,7 @@ def resume_run(run_dir: Path, *, queue: TaskQueue) -> tuple[dict[str, Any], Task
             task_key=f"resume:{run_dir.name}:{approval['approval_id']}",
             payload={
                 "task_id": str(workflow.get("task_id", "task")),
+                "model_override": str(workflow.get("model_override", "")),
                 "goal": str(workflow.get("goal", workflow.get("task_id", "task"))),
                 "project": str(workflow.get("project", "agent_workspace")),
                 **project_identity,

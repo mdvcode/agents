@@ -46,6 +46,7 @@ from approval_lifecycle import (
     write_json_atomic as write_approval_workflow,
 )
 from ai_harness.model_policy import select_execution_profile
+from ai_harness.model_selection import ModelSelectionError, apply_model_override, normalize_model_override, resumed_model_override
 from ai_harness.economics import BudgetAction, BudgetController, BudgetUsage
 from ai_harness.execution_accounting import (
     accounted_role_count,
@@ -1789,6 +1790,7 @@ def build_role_request(
         "filesystem_access": role_filesystem_access(role),
         "execution_profile": str(execution_settings["execution_profile"]),
         "model": str(execution_settings["model"]),
+        "model_override": str(execution_settings.get("model_override", "")),
         "reasoning_effort": str(execution_settings["reasoning_effort"]),
         "service_tier": str(execution_settings["service_tier"]),
         "profile_reason": str(execution_settings["profile_reason"]),
@@ -2683,6 +2685,7 @@ def run_adaptive_read_only_verifier(
         budget_pressure=budget_pressure,
         max_escalations=int(budgets.get("max_model_escalations", 2) or 2) if isinstance(budgets, dict) else 2,
     )
+    settings = apply_model_override(settings, state.get("model_override", ""))
     if settings.get("terminal_action") == "human_or_dead_letter":
         return awaiting_approval_result(
             "Bounded model escalation is exhausted.",
@@ -2701,7 +2704,7 @@ def run_adaptive_read_only_verifier(
         execution_settings=settings,
     )
     write_json(requests_dir / f"{role}.json", request)
-    return execute_runtime_observed(
+    result = execute_runtime_observed(
         runtime,
         run_dir=run_dir,
         role=role,
@@ -2709,7 +2712,10 @@ def run_adaptive_read_only_verifier(
         task=request,
         worktree=repository,
         artifacts=artifacts_dir,
-    ), settings
+    )
+    if settings.get("model_override") and result.get("model") == settings["model_override"]:
+        settings["reasoning_effort"] = result.get("reasoning_effort", settings["reasoning_effort"])
+    return result, settings
 
 
 @serialized_run_execution
@@ -2735,6 +2741,7 @@ def run_roles(
     resume: bool = False,
     runtime_provider: str = "",
     runtime_command: str = "",
+    model_override: str = "",
 ) -> dict[str, Any]:
     if mode not in EXECUTION_MODES:
         return {
@@ -2775,6 +2782,10 @@ def run_roles(
             existing = load_json(existing_workflow)
         except (OSError, json.JSONDecodeError, ValueError):
             existing = {}
+    try:
+        model_override = resumed_model_override(model_override, existing) if resume else normalize_model_override(model_override)
+    except ModelSelectionError as exc:
+        return {**existing, "run_id": run_id, "execution_status": "blocked", "blockers": [str(exc)]}
     try:
         requested_project_identity = continuation_project_identity(
             {"project_id": project_id, "project_key": project_key}
@@ -2844,6 +2855,7 @@ def run_roles(
             workspace_mode="checkout" if current_branch else "worktree",
             workflow_mode=mode,
             input_manifest_sha256=input_manifest_sha256,
+            model_override=model_override,
         )
         if existing.get("execution_status") == "completed" and existing.get("input_fingerprint") == fingerprint:
             return existing
@@ -3038,6 +3050,7 @@ def run_roles(
             "base_sha": git_ref_sha(repository, effective_base),
             "branch_owner_run_id": run_id,
             "mode": mode,
+            "model_override": model_override,
             "effective_mode": effective_mode,
             "branch": effective_branch,
             "base_branch": effective_base,
@@ -3593,6 +3606,7 @@ def run_roles(
                             human_escalation_approved=bool(model_escalation_approval_id),
                             bounded_escalation_exhausted=bounded_escalation_exhausted,
                         )
+                        execution_settings = apply_model_override(execution_settings, state.get("model_override", ""))
                         if (
                             model_escalation_approval_id
                             and execution_settings.get("terminal_action")
@@ -3652,6 +3666,8 @@ def run_roles(
                                 worktree=worktree,
                                 artifacts=run_artifacts,
                             )
+                            if model_override and result.get("model") == model_override:
+                                execution_settings["reasoning_effort"] = result.get("reasoning_effort", execution_settings["reasoning_effort"])
 
         artifact_limit = load_recovery_policy().runtime_limits.max_artifact_bytes
         used_artifact_bytes = artifact_bytes(run_artifacts, stop_after=artifact_limit)
@@ -4234,6 +4250,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-branch", default="main")
     parser.add_argument("--runtime-provider", default="")
     parser.add_argument("--runtime-command", default="")
+    parser.add_argument("--model", default="")
     parser.add_argument("--adapter-command", default="", help=argparse.SUPPRESS)
     parser.add_argument("--token-budget", type=int, default=12000)
     parser.add_argument("--timeout-seconds", type=int, default=1800)
@@ -4269,6 +4286,7 @@ def main() -> int:
         resume=args.resume,
         runtime_provider=args.runtime_provider,
         runtime_command=args.runtime_command,
+        model_override=args.model,
     )
     print(json.dumps(state, indent=2, ensure_ascii=False))
     return 0 if state["execution_status"] in {"completed", "waiting_children"} else 1

@@ -31,6 +31,7 @@ from ai_harness.processes import run_managed_process
 from ai_harness.project import trust_key
 from ai_harness.recovery import RecoveryCoordinator, classify_failure, load_recovery_policy
 from ai_harness.recovery.models import persist_failure, sanitized_message
+from ai_harness.model_selection import normalize_model_override
 from ai_harness.sdk_session import ManagedCodexSdkSession, SdkSessionUnavailable
 from ai_harness.workspace_cache import cache_environment
 from run_state import continuation_project_identity
@@ -130,6 +131,7 @@ def safe_payload(record: TaskRecord) -> dict[str, Any]:
         "run_id",
         "adapter_command",
         "runtime_provider",
+        "model_override",
         "runtime_command",
         "goal",
         "source",
@@ -165,6 +167,7 @@ def safe_payload(record: TaskRecord) -> dict[str, Any]:
     ):
         raise ValueError("task project key does not match the canonical repository")
     workspace_mode = record.payload.get("workspace_mode", "worktree")
+    normalize_model_override(record.payload.get("model_override", ""))
     if workspace_mode not in {"checkout", "worktree", "isolated", "current_branch"}:
         raise ValueError("workspace_mode must be checkout or worktree")
     mode = record.payload.get("mode", "auto")
@@ -355,6 +358,8 @@ class WorkflowWorkerPool:
             command.extend(["--adapter-command", payload["adapter_command"]])
         if payload.get("runtime_provider"):
             command.extend(["--runtime-provider", payload["runtime_provider"]])
+        if payload.get("model_override"):
+            command.extend(["--model", payload["model_override"]])
         if payload.get("runtime_command"):
             command.extend(["--runtime-command", payload["runtime_command"]])
         if payload.get("workspace_mode") in {"checkout", "current_branch"}:

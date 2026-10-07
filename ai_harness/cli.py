@@ -27,6 +27,7 @@ import yaml
 
 from . import __version__
 from .build import harness_build_fingerprint
+from .model_selection import ModelSelectionError, normalize_model_override, require_available_model
 from .paths import HarnessNotFoundError, harness_home, home_config_path, save_harness_home
 from .project import (
     SUPPORTED_PROFILES,
@@ -630,6 +631,15 @@ def handle_task(args: argparse.Namespace) -> int:
         )
     if branch in {config.base_branch, "main", "master", "trunk"}:
         raise CLIError("task branch must not be a protected/default branch")
+    try:
+        model_override = normalize_model_override(getattr(args, "model", ""))
+        if model_override:
+            catalog = load_harness_module(root, "runtimes.registry").discover_models(
+                worktree=repository, provider=config.runtime_provider, timeout_seconds=20
+            )
+            require_available_model(model_override, catalog)
+    except ModelSelectionError as exc:
+        raise CLIError(str(exc)) from exc
     project_key = trust_key(repository)
     external_id = f"{project_key}:{task_id}"
     run_id = datetime.now(timezone.utc).strftime(f"%Y%m%dT%H%M%S.%fZ-{task_id}")
@@ -644,6 +654,7 @@ def handle_task(args: argparse.Namespace) -> int:
         "base_branch": config.base_branch,
         "workspace_mode": workspace_mode,
         "mode": args.mode,
+        "model_override": model_override,
         "priority": args.priority,
         "max_retries": args.max_retries,
         "repository_max_parallel_tasks": int(
@@ -730,6 +741,8 @@ def handle_task(args: argparse.Namespace) -> int:
         None,
     )
     if existing_same_task is not None:
+        if model_override and model_override != existing_same_task.payload.get("model_override", ""):
+            raise CLIError("task id already exists with a different model selection; use a new task id")
         # Reuse a matching legacy key so upgrading an initialized project does
         # not enqueue the same task a second time.  New tasks always retain the
         # collision-safe key based on the canonical repository identity.
@@ -904,6 +917,7 @@ def handle_task(args: argparse.Namespace) -> int:
         "branch": stored_branch,
         "workspace_mode": str(record.payload.get("workspace_mode", workspace_mode)),
         "mode": str(record.payload.get("mode", args.mode)),
+        "model_override": str(record.payload.get("model_override", "")),
         "queue_db": str(queue_path),
         "idempotent": (
             existing_same_task is not None
@@ -1217,6 +1231,7 @@ def project_tasks(db_path: Path, repository: Path) -> list[dict[str, Any]]:
                 "task_id": str(task_payload.get("task_id", "")),
                 "goal": str(task_payload.get("goal", "")),
                 "workspace_mode": str(task_payload.get("workspace_mode", "worktree")),
+                "model_override": str(task_payload.get("model_override", "")),
                 "checkout_path": str(task_payload.get("checkout_path", repository_value)),
                 "task_branch": str(task_payload.get("task_branch", task_payload.get("branch", ""))),
                 "base_sha": str(task_payload.get("base_sha", "")),
@@ -1365,6 +1380,7 @@ def project_runs(runs_dir: Path, repository: Path) -> list[dict[str, Any]]:
                 "branch": str(workflow.get("task_branch", workflow.get("branch", ""))),
                 "worktree": str(workflow.get("checkout_path", workflow.get("worktree", workflow.get("repository", "")))),
                 "workspace_mode": str(workflow.get("workspace_mode", "worktree")),
+                "model_override": str(workflow.get("model_override", "")),
                 "blockers": [str(item) for item in workflow.get("blockers", [])],
                 "current_role": str(workflow.get("current_role", "")),
                 "failure_id": str(workflow.get("failure_id", "")),
@@ -3305,6 +3321,7 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.set_defaults(handler=handle_init)
 
     task_parser = subparsers.add_parser("task", help="enqueue a task for the current project")
+    task_parser.add_argument("--model", default="", help="available runtime model for this task (default: role profiles)")
     task_parser.add_argument("goal", nargs="+")
     task_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")
     task_parser.add_argument("--task-id", default="")
