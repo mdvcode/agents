@@ -564,8 +564,23 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise APIError(HTTPStatus.BAD_REQUEST, f"agent command failed: {exc}") from exc
         if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout or "agent command failed").strip()[-2000:]
-            raise APIError(HTTPStatus.BAD_REQUEST, detail)
+            detail = (completed.stderr or completed.stdout or "agent command failed").strip()
+            for output in (completed.stdout, completed.stderr):
+                if not output or len(output) > MAX_BODY_BYTES:
+                    continue
+                try:
+                    error_payload = json.loads(output)
+                except json.JSONDecodeError:
+                    continue
+                if (
+                    isinstance(error_payload, dict)
+                    and error_payload.get("status") == "error"
+                    and isinstance(error_payload.get("error"), str)
+                    and error_payload["error"].strip()
+                ):
+                    detail = error_payload["error"].strip()
+                    break
+            raise APIError(HTTPStatus.BAD_REQUEST, detail[-2000:])
         try:
             value = json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
@@ -926,10 +941,32 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
             if path == "/ui/tasks":
                 self.require_cli_mutations_enabled()
                 repository = self.request_repository(payload)
+                ticket_reference = payload.get("ticket_reference", "")
+                if not isinstance(ticket_reference, str) or len(ticket_reference) > 2048:
+                    raise APIError(
+                        HTTPStatus.BAD_REQUEST,
+                        "ticket_reference must be a ticket URL, issue number, or Jira key",
+                    )
+                ticket_reference = ticket_reference.strip()
+                if ticket_reference:
+                    self.authorize_context_read()
+                    if self.headers.get_content_type() != "application/json":
+                        raise APIError(HTTPStatus.BAD_REQUEST, "ticket intake requires JSON")
                 goal = str(payload.get("goal", "")).strip()
                 require_safe(goal, "Task")
-                if not goal:
-                    raise APIError(HTTPStatus.BAD_REQUEST, "describe the task before starting it")
+                attachment_set_ids = payload.get("attachment_set_ids", [])
+                if not isinstance(attachment_set_ids, list) or not all(
+                    isinstance(value, str) and value for value in attachment_set_ids
+                ):
+                    raise APIError(
+                        HTTPStatus.BAD_REQUEST,
+                        "attachment_set_ids must be a list of ids",
+                    )
+                if not goal and not ticket_reference and not attachment_set_ids:
+                    raise APIError(
+                        HTTPStatus.BAD_REQUEST,
+                        "describe the task, provide a ticket reference, or attach task files before starting it",
+                    )
                 workspace_mode = (
                     "worktree"
                     if payload.get("parallel") is True
@@ -940,20 +977,14 @@ class ControlPlaneHandler(BaseHTTPRequestHandler):
                 execution_mode = str(payload.get("execution_mode", "auto"))
                 if execution_mode not in {"auto", "adaptive", "fast", "full", "goal"}:
                     raise APIError(HTTPStatus.BAD_REQUEST, "unknown execution mode")
-                arguments = ["task", goal, "--mode", execution_mode]
+                arguments = ["task", *([goal] if goal else []), "--mode", execution_mode]
+                if ticket_reference:
+                    arguments.extend(["--ticket", ticket_reference])
                 model_override = payload.get("model_override", "")
                 if not isinstance(model_override, str) or len(model_override) > 128:
                     raise APIError(HTTPStatus.BAD_REQUEST, "model_override must be a model identifier")
                 if model_override.strip():
                     arguments.extend(["--model", model_override.strip()])
-                attachment_set_ids = payload.get("attachment_set_ids", [])
-                if not isinstance(attachment_set_ids, list) or not all(
-                    isinstance(value, str) and value for value in attachment_set_ids
-                ):
-                    raise APIError(
-                        HTTPStatus.BAD_REQUEST,
-                        "attachment_set_ids must be a list of ids",
-                    )
                 if attachment_set_ids:
                     self.validate_attachment_sets(repository, attachment_set_ids)
                     if payload.get("attachment_runtime_consent") is not True:

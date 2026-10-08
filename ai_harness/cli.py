@@ -587,17 +587,66 @@ def guard_model_input(value: str, label: str) -> None:
 
 
 def handle_task(args: argparse.Namespace) -> int:
+    """Dispose only CLI-created uploads if intake fails before they are bound."""
+    args.local_attachment_staging = None
+    try:
+        return _handle_task(args)
+    finally:
+        staged = args.local_attachment_staging
+        if staged is not None:
+            from .attachments import AttachmentError
+
+            store, set_id = staged
+            try:
+                store.discard_staged([set_id])
+            except AttachmentError:
+                # The existing staging TTL remains the fallback; never mask a
+                # queue result or discard user-owned browser attachment sets.
+                pass
+
+
+def stage_local_task_attachments(
+    root: Path, paths: Sequence[str], *, limits: AttachmentLimits
+) -> tuple[Any, str]:
+    """Stage explicitly selected regular files through the shared input checks."""
+    from .attachments import AttachmentError, AttachmentStore
+
+    if not 1 <= len(paths) <= limits.max_files:
+        raise CLIError(f"no more than {limits.max_files} local attachments are allowed")
+    selected = [Path(name).expanduser() for name in paths]
+    store = AttachmentStore(root / ".agent-uploads", limits=limits)
+    try:
+        identities = [(info.st_dev, info.st_ino) for path in selected for info in [path.lstat()]]
+        if len(set(identities)) != len(identities):
+            raise CLIError("duplicate local attachment files are not allowed")
+        staged = store.stage_paths(selected)
+    except (OSError, ValueError, AttachmentError) as exc:
+        raise CLIError("local attachment intake failed; check file access, type, size, and content") from exc
+    return store, staged.set_id
+
+
+def _handle_task(args: argparse.Namespace) -> int:
     repository = repository_from_arg(args.repo, require_initialized=True)
     config = load_project_config(repository)
     if not project_is_trusted(config):
         raise CLIError("project configuration is not locally trusted; run `agent init` again")
     goal = " ".join(args.goal).strip()
     guard_model_input(goal, "Task")
-    if not goal:
-        raise CLIError("task goal is required")
+    ticket_reference = str(getattr(args, "ticket", "") or "")
+    local_paths = list(getattr(args, "attach", []) or [])
+    requested_attachment_sets = list(getattr(args, "attachment_sets", []) or [])
+    has_attachments = bool(local_paths or requested_attachment_sets)
+    if has_attachments and not getattr(args, "attachment_runtime_consent", False):
+        raise CLIError("attachments require --attachment-runtime-consent to send their contents to the configured AI runtime")
+    if args.dry_run and has_attachments:
+        raise CLIError("attachments cannot be consumed by a dry run")
+    if not goal and has_attachments and not ticket_reference:
+        goal = "Implement the task described in the attached files. Local only. Do not publish."
+    if not goal and not ticket_reference:
+        raise CLIError("task goal, --ticket, or attachments are required")
     if len(goal) > 20_000:
         raise CLIError("task goal must not exceed 20000 characters")
-    task_id = slug(args.task_id, "") if args.task_id else generated_task_id(goal)
+    task_id = slug(args.task_id, "") if args.task_id else generated_task_id(goal or ticket_reference)
     if not task_id:
         raise CLIError("--task-id must contain at least one letter or number")
     if args.current_branch and args.branch:
@@ -643,6 +692,18 @@ def handle_task(args: argparse.Namespace) -> int:
     project_key = trust_key(repository)
     external_id = f"{project_key}:{task_id}"
     run_id = datetime.now(timezone.utc).strftime(f"%Y%m%dT%H%M%S.%fZ-{task_id}")
+    ticket: dict[str, Any] | None = None
+    if ticket_reference:
+        from .tickets import TicketError, resolve_ticket, ticket_goal
+
+        try:
+            ticket = resolve_ticket(
+                ticket_reference, repository, control_root=root,
+                run_dir=root / ".agent-runs" / run_id,
+            )
+            goal = ticket_goal(ticket, goal)
+        except (TicketError, OSError) as exc:
+            raise CLIError(str(exc)) from exc
     payload = {
         "external_id": external_id,
         "task_id": task_id,
@@ -684,6 +745,10 @@ def handle_task(args: argparse.Namespace) -> int:
         raise CLIError(f"task request is invalid: {exc}") from exc
     legacy_task_key = f"cli:{config.project_id}:{task_id}"
     envelope["idempotency_aliases"] = [legacy_task_key]
+    if ticket is not None:
+        envelope["metadata"]["ticket"] = {
+            key: ticket[key] for key in ("provider", "repository", "number", "url", "content_sha256")
+        }
     if args.dry_run:
         if getattr(args, "attachment_sets", []):
             raise CLIError("attachment sets cannot be consumed by a dry run")
@@ -711,7 +776,6 @@ def handle_task(args: argparse.Namespace) -> int:
         raise CLIError(f"missing runtime dependencies: {', '.join(missing)}; {dependency_repair_hint()}")
     if config.runtime_provider == "codex-sdk":
         verify_managed_sdk_session(root)
-    requested_attachment_sets = list(getattr(args, "attachment_sets", []) or [])
     attachment_input: dict[str, Any] = {
         "input_manifest": "",
         "input_manifest_sha256": "",
@@ -741,13 +805,16 @@ def handle_task(args: argparse.Namespace) -> int:
         None,
     )
     if existing_same_task is not None:
+        previous_ticket = existing_same_task.payload.get("metadata", {}).get("ticket")
+        if previous_ticket != envelope["metadata"].get("ticket"):
+            raise CLIError("task id already exists with a different ticket source; use a new task id")
         if model_override and model_override != existing_same_task.payload.get("model_override", ""):
             raise CLIError("task id already exists with a different model selection; use a new task id")
         # Reuse a matching legacy key so upgrading an initialized project does
         # not enqueue the same task a second time.  New tasks always retain the
         # collision-safe key based on the canonical repository identity.
         envelope["task_key"] = existing_same_task.task_key
-    if requested_attachment_sets and existing_same_task is not None:
+    if has_attachments and existing_same_task is not None:
         raise CLIError(
             f"task id {task_id!r} already exists; use a new task id when submitting attachments"
         )
@@ -778,6 +845,11 @@ def handle_task(args: argparse.Namespace) -> int:
             f"with status {conflict.status!r}; inspect it with `agent status` "
             "or submit again without --keep-paused to replace a human-paused task"
         )
+    if local_paths:
+        args.local_attachment_staging = stage_local_task_attachments(
+            root, local_paths, limits=project_attachment_limits(config)
+        )
+        requested_attachment_sets.append(args.local_attachment_staging[1])
     branch_warnings: list[str] = list(supersession_warnings)
     prepared: dict[str, object] | None = None
     if not args.current_branch and workspace_mode == "checkout" and existing_same_task is None:
@@ -832,6 +904,8 @@ def handle_task(args: argparse.Namespace) -> int:
             branch_warnings.extend(supersession_warnings)
         queue = queue or task_queue.TaskQueue(queue_path)
         record = event_ingestion.enqueue_envelope(queue, envelope)
+        if record.payload.get("metadata", {}).get("ticket") != envelope["metadata"].get("ticket"):
+            raise CLIError("task id was queued concurrently with a different ticket source; use a new task id")
     except (CLIError, OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
         attachment_rollback_error = restore_bound_task_attachments(
             root=root, attachment_input=attachment_input
@@ -3322,7 +3396,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     task_parser = subparsers.add_parser("task", help="enqueue a task for the current project")
     task_parser.add_argument("--model", default="", help="available runtime model for this task (default: role profiles)")
-    task_parser.add_argument("goal", nargs="+")
+    task_parser.add_argument("goal", nargs="*")
+    task_parser.add_argument("--ticket", default="", metavar="REF", help="read a GitHub issue or Jira Cloud work item (also read during --dry-run)")
+    task_parser.add_argument("--attach", action="append", default=[], metavar="PATH", help="attach a local PDF, image, or text file (repeatable; requires runtime consent)")
     task_parser.add_argument("--repo", default="", help="project directory (default: discover from cwd)")
     task_parser.add_argument("--task-id", default="")
     task_parser.add_argument("--branch", default="")
@@ -3379,7 +3455,7 @@ def build_parser() -> argparse.ArgumentParser:
     task_parser.add_argument(
         "--attachment-runtime-consent",
         action="store_true",
-        help=argparse.SUPPRESS,
+        help="allow the configured runtime to receive attached file contents",
     )
     task_parser.add_argument("--dry-run", action="store_true")
     task_parser.add_argument("--json", action="store_true")

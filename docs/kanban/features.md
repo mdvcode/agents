@@ -11,7 +11,9 @@
 - None.
 
 ## Review
-- None.
+- Explicit GitHub/Jira ticket and local PDF/image task intake through the existing consent and CLI
+  boundary; SDK 0.161.0 pin and weekly checked dependency update proposals. Final review, CI,
+  browser evidence, and release/install verification remain separate acceptance gates.
 
 ## Done
 - Local task control dashboard: start work in a new or existing branch, monitor queue and worker state, answer questions, approve gates, retry failures, and stop runs from one responsive page.

@@ -8,7 +8,8 @@ This repository is the local operating base and product source for Tweebit AI Ha
 - `docs/agent-system.md`: current agent analysis and improvement plan.
 - `docs/evaluation-framework.md`: versioned run scoring, 30-case production corpus, frozen comparisons, CI regression gate, coverage, and leaderboard workflow.
 - `docs/observability.md`: OpenTelemetry traces and metrics, operational snapshot, privacy boundaries, and loopback dashboard.
-- `docs/cli.md`: install and use the `agent` product CLI from any project.
+- `docs/cli.md`: install and use the `agent` product CLI, including explicit GitHub/Jira ticket intake,
+  local PDF/image tasks, file consent, model selection, and reviewed dependency updates.
 - `docs/tweebit-ai-harness-by-daryna-release-comparison.md`: factual public-baseline versus local
   release-candidate comparison, including attachment privacy and runtime-bridge status.
 - `docs/operator-runbook.md`: one copyable start path plus failure, approval, and recovery actions.
@@ -66,6 +67,12 @@ This repository is the local operating base and product source for Tweebit AI Ha
 - `agent update`: safely download and install updates, verify the command, and restart the worker service.
 - `agent init`: create `.agent/project.yaml` and safe project instructions.
 - `agent task "Goal"`: create a dedicated task branch in the current checkout, start workers when needed, and queue autonomous work.
+- `agent task --ticket '#42'`: read one GitHub issue from the selected project's verified origin;
+  optional text adds user instructions. Issue content remains untrusted source data.
+- `agent task --ticket 'TEAM-123'`: read one Jira Cloud issue through an existing official `acli`
+  login; the selected local project remains the explicit target repository.
+- `agent task --attach /path/to/requirements.pdf --attachment-runtime-consent`: start from a
+  local task file; repeat `--attach` for additional files. File-only tasks default to local work.
 - `agent start`: optionally validate the current project and start the autonomous worker service in advance.
 - `agent stop`: stop the autonomous worker service gracefully.
 - `agent task --current-branch "Goal"`: use the clean, already checked-out non-default branch.
@@ -76,6 +83,11 @@ This repository is the local operating base and product source for Tweebit AI Ha
 - `agent doctor [--full]`: validate packaging/build freshness, project config, Codex availability, worker freshness, and optionally SDK subscription authentication.
 
 ## Runtime State
+- `pyproject.toml`: pins `openai-codex==0.161.0`; the live runtime/account model catalog is separate
+  from the unchanged role-profile defaults.
+- `.github/dependabot.yml`: weekly Monday 07:00 Europe/Berlin pip and Actions update proposals.
+  CI tests the installed SDK contract; review, merge, and local `agent update --source ...` remain
+  explicit actions, with no unattended installation.
 - `.agent-runtime.yaml`: the production runtime selection; official `codex-sdk` is primary, `codex-cli` is a compatibility fallback, provider API use is forbidden, and Model Router is disabled.
 - `scripts/runtimes/`: provider-neutral contract, registry, generic structured subprocess boundary, and provider adapters.
 - All model-backed execution must pass through `Runtime.execute(...)`. Additional adapters belong to Step 3; Model Router belongs to Step 4.

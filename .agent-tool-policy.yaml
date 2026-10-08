@@ -70,3 +70,21 @@ tools:
     credentials: [gh_auth]
     side_effects: pull_request
     timeout_seconds: 300
+  ticket_source:
+    roles: [issue-intake]
+    allowed: [read_issue]
+    forbidden: [arbitrary_url, write_issue, download_linked_files]
+    network_domains: [github.com, api.github.com]
+    credentials: [gh_auth]
+    side_effects: none
+    timeout_seconds: 30
+  jira_ticket_source:
+    roles: [issue-intake]
+    allowed: [read_issue]
+    forbidden: [arbitrary_url, write_issue, download_linked_files]
+    # ACLI can refresh its existing account and emit its vendor telemetry.
+    # This is action governance, not an OS network sandbox for the binary.
+    network_domains: [api.atlassian.com, auth.atlassian.com, as.atlassian.com, o55978.ingest.us.sentry.io]
+    credentials: [acli_auth]
+    side_effects: none
+    timeout_seconds: 30

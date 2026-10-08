@@ -16,7 +16,9 @@ view across all projects. The composer keeps Auto/Adaptive/Fast/Full/Goal visibl
 five-file/PDF intake with defaults of 100 MiB per file and 500 MiB per task. A locally trusted
 project may raise those limits to the hard ceilings of 512 MiB per file and 2.5 GiB per task.
 Pending uploads are bounded to 32 sets and 6 GiB; direct runtime images are limited to 10 MiB each
-and 20 references. File tasks require explicit per-task runtime consent.
+and 20 references. File tasks require explicit per-task runtime consent. A task may start from
+written instructions, an explicit GitHub or Jira issue, local files containing the assignment, or a
+combination of these inputs.
 
 Attachment upload, validation, processing, run provenance, and runtime context are implemented.
 Both runtimes receive bounded text and PDF-text excerpts as explicitly untrusted data. The Codex SDK
@@ -139,9 +141,17 @@ agent --version
 ```
 
 The runtime uses ChatGPT subscription authentication; a separate OpenAI API key is not required.
-The Python SDK includes its own pinned Codex runtime. Updating the desktop app or a global Codex
-CLI does not update the Harness's pinned SDK or configured model profiles. See the
+The Python SDK is pinned to `openai-codex==0.161.0` and includes its own Codex runtime. Updating
+the desktop app or a global Codex CLI does not update this dependency. The dashboard's model
+selector queries the models actually available to the installed runtime and account; the default
+role profiles remain unchanged. See the
 [official Codex SDK documentation](https://learn.chatgpt.com/docs/codex-sdk).
+
+Dependabot is configured to propose pip and GitHub Actions updates every Monday at 07:00
+Europe/Berlin. Its pull requests run CI, which installs the declared SDK and tests its event
+contract. Updates require review and merge; this does not enable auto-merge or unattended local
+installation. After a reviewed update is merged, run `agent update --source /absolute/path/to/agents`
+from the intended source checkout, followed by `agent doctor --full`.
 
 If you maintain a source checkout as your control-plane home, select it explicitly:
 
@@ -226,8 +236,8 @@ shown honestly.
 
 **Посмотреть глазами AI** opens the Context Inspector from the task composer or a task row.
 Before launch it previews the selected role's repository sources, including inclusion/exclusion
-reasons, privacy/trust labels, token counts, and the assembled source package. Pending attachments
-are excluded from this preview and require consent when the task starts. In an existing run, the
+reasons, privacy/trust labels, token counts, and the assembled source package. Ticket content and
+pending attachments are excluded from this preview; attachments require consent when the task starts. In an existing run, the
 inspector shows verified saved inputs for individual stages: the exact prompt, response contract,
 runtime settings, and source provenance. Session history, provider-internal instructions, and
 subsequent file reads are outside that snapshot; older runs may not have a saved input.
@@ -256,6 +266,41 @@ agent watch
 ```
 
 By default, the Harness creates a dedicated task branch in the current checkout. Only one unfinished task may own that checkout.
+
+### Start from a ticket or task files
+
+These are alternative examples for an initialized project whose verified GitHub `origin` is
+`owner/repo`:
+
+```sh
+agent task --ticket 'https://github.com/owner/repo/issues/42' --task-id issue-42
+agent task --ticket '#42' --task-id issue-42-with-context \
+  --attach /path/to/requirements.pdf --attach /path/to/screen.png \
+  --attachment-runtime-consent "Keep the existing keyboard shortcuts."
+agent task --attach /path/to/requirements.pdf --attachment-runtime-consent
+```
+
+`owner/repo#42` is also accepted for GitHub. Jira Cloud accepts an uppercase key such as `TEAM-123`
+or an `https://<site>.atlassian.net/browse/TEAM-123` URL through the optional official Atlassian
+CLI (`acli`), using an existing login. A Jira URL must match the active login's site; the selected
+local project is the repository where the work will run:
+
+```sh
+agent task --ticket 'TEAM-123' --task-id team-123 "Preserve the existing layout."
+```
+
+Ticket instructions are optional, and files may contain the whole
+assignment. The dashboard offers the same inputs through **Задача GitHub или Jira** and **Добавить файлы**,
+with explicit consent before sending selected file contents to the runtime. File-only tasks use a
+local-only default; ticket-only tasks also default to local work. Ticket title/body are saved as
+untrusted source data with a content hash and cannot authorize publication. Use a new `--task-id`
+for changed issue content or a new attachment submission.
+
+GitHub reads use existing `gh` access to the selected project's verified origin. Jira requires
+an existing authenticated `acli` session; Harness does not create or store tracker credentials.
+Self-hosted Jira, custom tracker domains, GitHub Enterprise hosts, and automatic downloads of
+links inside tickets are not supported. Select local files explicitly instead. See the [ticket and file guide](docs/cli.md#start-from-a-ticket-or-files)
+for input limits, provenance, and retry behavior.
 
 ### One parallel task in an isolated worktree
 
