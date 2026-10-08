@@ -288,7 +288,7 @@ def enqueue_envelope(queue: TaskQueue, envelope: dict[str, Any]) -> TaskRecord:
             "allowed_child_repositories", "graph_depth", "child_budget", "spawn_fingerprint"
         )
     }
-    for key in ("project_id", "project_key", "model_override"):
+    for key in ("project_id", "project_key", "model_override", "metadata"):
         if key in envelope:
             payload[key] = envelope[key]
     if "input_manifest" in envelope:

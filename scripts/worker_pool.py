@@ -136,6 +136,7 @@ def safe_payload(record: TaskRecord) -> dict[str, Any]:
         "goal",
         "source",
         "event_id",
+        "metadata",
         "repository_max_parallel_tasks",
         "batch_id",
         "batch_index",
@@ -157,6 +158,8 @@ def safe_payload(record: TaskRecord) -> dict[str, Any]:
     unknown = sorted(set(record.payload) - allowed)
     if unknown:
         raise ValueError("unsupported task payload fields: " + ", ".join(unknown))
+    if not isinstance(record.payload.get("metadata", {}), dict):
+        raise ValueError("task metadata must be an object")
     required = ("task_id", "repository")
     missing = [field for field in required if not isinstance(record.payload.get(field), str) or not record.payload[field]]
     if missing:

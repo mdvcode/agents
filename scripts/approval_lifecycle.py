@@ -904,6 +904,8 @@ def resume_run(run_dir: Path, *, queue: TaskQueue) -> tuple[dict[str, Any], Task
     with approval_lock(run_dir):
         attachment_payload = continuation_attachments_for_run(run_dir)
         project_identity = continuation_project_for_run(run_dir)
+        predecessor = queue.find_run(run_dir.name)
+        source_metadata = predecessor.payload.get("metadata", {}) if predecessor else {}
         result = _prepare_resume_locked(run_dir)
         workflow = result["workflow"]
         approval = result["approval"]
@@ -931,6 +933,7 @@ def resume_run(run_dir: Path, *, queue: TaskQueue) -> tuple[dict[str, Any], Task
                 "run_id": run_dir.name,
                 "source": "approval",
                 "event_id": str(approval["approval_id"]),
+                **({"metadata": source_metadata} if isinstance(source_metadata, dict) and source_metadata else {}),
                 **attachment_payload,
             },
             priority=100,

@@ -43,6 +43,15 @@ Contributors may still use `pip install -e .` or direct pipx commands, but users
 
 The installation bundles the policy, workflow, schemas, prompts, scripts, official Python Codex SDK, and CLI compatibility adapter under an isolated environment.
 
+The SDK dependency is pinned to `openai-codex==0.161.0`. Dependabot is configured to check pip and
+GitHub Actions dependencies weekly on Monday at 07:00 Europe/Berlin and propose pull requests.
+CI installs the declared package dependencies and tests the installed SDK's event contract; it
+does not require subscription credentials or run a live model turn. Real subscription smoke
+remains an explicit compatibility check. The update workflow does not auto-merge changes or
+install them on a running local Harness. After reviewing and merging an update, select the
+reviewed source with `agent update --source /absolute/path/to/agents` and verify it with
+`agent doctor --full`.
+
 Select one existing control-plane home when using the installed command with a source checkout:
 
 ```sh
@@ -129,7 +138,7 @@ Fast gives the implementation role the complete narrow task, including focused t
 
 Codex is already connected through the official Python SDK using ChatGPT sign-in. This local execution path does not require an OpenAI API key. The SDK dependency is pinned and includes its own runtime; updating the desktop app or a separate CLI does not upgrade that dependency. Verify compatibility and run the real SDK smoke before changing the pin or execution profiles. OpenAI's managed Agents API is a separate API-billed deployment option, not a prerequisite for Fast or Full.
 
-In the dashboard, **Модель → По настройкам системы** keeps the role-specific profile defaults. Choosing another returned model, or passing `--model MODEL_ID`, applies that model to the task's model-backed stages. It does not change Fast/Full routing, budgets, permissions, or reviewer isolation. Supported reasoning effort is checked against the chosen model's catalog; the role's configured effort is retained when supported, otherwise the runtime's declared default is used. A preference persists on checkpoint resume. The list belongs to the pinned runtime and client/account combination: absence from this list does not establish absence from a newer desktop client. If discovery fails, the default remains usable; an explicit unavailable model fails before preparing a branch or enqueueing a task.
+In the dashboard, **Модель → По настройкам системы** keeps the role-specific profile defaults; the SDK upgrade does not change those defaults. The selector queries the actual available model catalog for the installed runtime and account. Choosing another returned model, or passing `--model MODEL_ID`, applies that model to the task's model-backed stages. It does not change Fast/Full routing, budgets, permissions, or reviewer isolation. Supported reasoning effort is checked against the chosen model's catalog; the role's configured effort is retained when supported, otherwise the runtime's declared default is used. A preference persists on checkpoint resume. The list belongs to the pinned runtime and client/account combination: absence from this list does not establish absence from a newer desktop client. If discovery fails, the default remains usable; an explicit unavailable model fails before preparing a branch or enqueueing a task.
 
 After a task completes, open **Задачи → Посмотреть результат**. Read its summary, changed-file list and checks, then choose **Принято**, **Нужны правки**, or **Отклонено**. Changes and rejection require a comment. These assessments never approve a run, enqueue a retry, publish, or merge. **Подготовить задачу для правок** creates a draft containing the original goal and your comment; inspect it before launching. See [result acceptance](result-acceptance.md) for measurement and revision rules.
 
@@ -144,6 +153,85 @@ agent init --force --branch-prefix chore/
 Prompt length and punctuation never become a branch-name failure: generated names are normalized, bounded, and receive a deterministic fallback automatically. Existing branches are checked against Git's own ref rules rather than a narrower ASCII-only list, so valid names containing Unicode or punctuation such as `+`, `=`, `&`, and `,` are accepted. Ambiguous or unsafe ref forms such as `../`, `@{`, repeated `/`, control characters, and `.lock` remain blocked.
 
 `--current-branch` uses an already checked-out clean non-default branch without creating or renaming it. `--worktree` is the explicit opt-in for isolated parallel task execution. The worker revalidates current-checkout branches immediately before execution. Status, retry, resume, and abort preserve the same authoritative run and workspace.
+
+## Start from a ticket or files
+
+Select the initialized local project first, using its working directory or `--repo`. For a project
+whose verified GitHub `origin` is `owner/repo`, these are alternative ways to select one issue:
+
+```sh
+agent task --ticket 'https://github.com/owner/repo/issues/42' --task-id issue-42
+agent task --ticket '#42' --task-id issue-42-scoped "Preserve keyboard navigation."
+agent task --ticket 'owner/repo#42' --task-id issue-42-check "Add a focused regression test."
+```
+
+Quote a reference beginning with `#` so the shell does not treat it as a comment. A plain positive
+number is also accepted. A qualified reference must match the selected project's verified
+`origin`; it cannot redirect work to another repository. Reads use existing `gh` authentication
+and access. Standard github.com origins are supported; an SSH host alias must have its exact
+remote explicitly listed in the central repository registry. Pull request URLs and automatic
+issue monitoring are not supported.
+
+Jira Cloud uses the optional official Atlassian CLI (`acli`) with an existing authenticated
+session. Verify that session with `acli jira auth status` before intake; Harness does not create
+or store Jira credentials. Supply an uppercase issue key or a canonical browse URL:
+
+```sh
+agent task --ticket 'TEAM-123' --task-id team-123
+agent task --ticket 'https://example.atlassian.net/browse/TEAM-123' \
+  --task-id team-123-scoped "Keep the existing keyboard shortcuts."
+```
+
+For first-time setup, follow the [official ACLI installation guide](https://developer.atlassian.com/cloud/acli/guides/install-macos/)
+and sign in with `acli jira auth login`. A Jira connection in the Codex app has its own session;
+the Harness uses the CLI session. ACLI manages that session and its vendor telemetry/error
+reporting. The ticket policy governs the requested read action; it is not OS network isolation.
+
+Replace `example.atlassian.net` with the site from your existing login. A Jira URL must match that
+active site; query strings, fragments, and hosts outside `atlassian.net` are rejected. A bare key
+uses the active Jira site. Jira does not select a Git repository: the initialized local project
+you choose with the working directory or `--repo` is the explicit target for the work.
+
+The resolver uses the requested issue's identity, title, and body before branch creation or
+enqueue. It saves a private source snapshot with fetch time and content SHA-256; the task carries
+that source identity and hash. Ticket text is untrusted task data, separate from your optional
+instructions. It cannot grant permission to publish, merge, deploy, change credentials, or bypass
+policy. Ticket-only tasks default to local work. A publication request must come from your own
+instructions and still satisfy the central publication policy.
+
+Repeating a matching ticket with the same explicit `--task-id` reuses its queue item. If the issue
+content or source changed, choose a new task ID; an existing run is not silently replaced with
+the updated ticket. `--dry-run --ticket ...` still reads the issue and saves private lookup
+evidence, but does not create a branch or enqueue work.
+
+Attach local requirements or screenshots with repeatable `--attach` options:
+
+```sh
+agent task --ticket '#42' --task-id issue-42-files \
+  --attach /path/to/requirements.pdf --attach /path/to/screen.png \
+  --attachment-runtime-consent "Use the supplied layout and preserve existing behavior."
+agent task --attach /path/to/requirements.pdf --attachment-runtime-consent
+agent task --attach /path/to/screen.png --attachment-runtime-consent
+```
+
+Files may contain the entire assignment, so a text goal and ticket are both optional when files
+are supplied. The file-only default is: `Implement the task described in the attached files.
+Local only. Do not publish.` File contents cannot authorize publication. Each file submission
+requires `--attachment-runtime-consent`, including when files accompany a ticket. Use a new task
+ID when submitting attachments again; attachment intake is not supported with `--dry-run`.
+
+The same private attachment pipeline serves CLI and dashboard: up to five files, with default
+limits of 100 MiB per file and 500 MiB per task, subject to trusted project overrides and runtime
+limits. The SDK accepts supported images and scanned PDF pages as well as bounded text/PDF-text
+excerpts; the CLI compatibility runtime accepts text and PDF text only. Linked files in ticket
+bodies are never downloaded automatically. Supply the required local files explicitly.
+
+In **Новая задача**, use **Задача GitHub или Jira** for the external reference and the paperclip
+**Добавить файлы** for PDFs/images, or drag/paste supported files. Add optional instructions and
+confirm file transmission before launch. Errors preserve the draft and selected files. The
+advanced **Свой идентификатор запуска** field is only the internal task ID; it does not fetch a
+ticket. **Посмотреть глазами AI** previews local sources before launch and excludes both ticket
+content and pending files; saved stage inputs are available after execution begins.
 
 ## Submit a task batch
 
