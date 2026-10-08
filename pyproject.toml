@@ -14,7 +14,7 @@ dependencies = [
   "opentelemetry-api>=1.44,<2",
   "opentelemetry-exporter-otlp-proto-http>=1.45.0,<2",
   "opentelemetry-sdk>=1.44,<2",
-  "PyYAML>=6.0",
+  "PyYAML>=6.0.3",
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",
