@@ -485,6 +485,7 @@ async function load(silent=false,force=false){try{state.data=await api('/metrics
 async function runAction(run,action,extra={}){if(!run?.run_id)return toast('У задачи ещё нет run id.',true);if(action==='abort'&&!confirm('Остановить эту задачу? Ветка и файлы сохранятся.'))return;try{await api(`/ui/runs/${encodeURIComponent(run.run_id)}/${action}`,{method:'POST',body:{repository:run.repository||$('repository').value.trim(),...extra}});if(action==='answer')delete state.answers[run.run_id];toast(action==='abort'?'Задача остановлена.':'Команда принята. Выполнение продолжится автоматически.');await load(true,true)}catch(e){toast(e.message,true)}}
 function taskErrorMessage(error){
   const message=String(error?.message||'Не удалось запустить задачу. Попробуйте ещё раз.');
+  if(message.includes('current checkout has uncommitted changes'))return 'В проекте есть ваши несохранённые изменения. Сохраните их в Git или выберите «Параллельная задача», чтобы работать в отдельной копии. Черновик сохранён.';
   const messages={
     'Provide a GitHub issue URL, owner/repo#number, or an issue number':'Укажите ссылку на задачу, номер GitHub (#42) или ключ Jira (TEAM-123).',
     'Provide a GitHub issue reference or a Jira Cloud work item key or URL':'Укажите ссылку на задачу, номер GitHub (#42) или ключ Jira (TEAM-123).',

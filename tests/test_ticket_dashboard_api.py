@@ -313,6 +313,11 @@ failureMessage='Jira ticket site does not match the active acli site; switch it 
 await startTask({preventDefault(){}});assert.equal(calls.length,7);
 assert.equal(messages.at(-1),'Ссылка относится к другому сайту Jira. Выберите нужный сайт в acli и повторите запуск.');
 assert.equal(state.submitting,false);assert.equal($('taskForm').inert,false);assert.deepEqual(state.contextFiles,[file]);
+failureMessage='current checkout has uncommitted changes; commit or stash them before queueing the task: README.md';
+await startTask({preventDefault(){}});assert.equal(calls.length,8);
+assert.equal(messages.at(-1),'В проекте есть ваши несохранённые изменения. Сохраните их в Git или выберите «Параллельная задача», чтобы работать в отдельной копии. Черновик сохранён.');
+assert.equal($('goal').value,'Jira instructions');assert.equal($('taskId').value,'jira-retry');assert.deepEqual(state.contextFiles,[file]);
+assert.equal(state.submitting,false);assert.equal($('taskForm').inert,false);
 """
     completed = subprocess.run([node, "--input-type=module", "-"], input=code, text=True, capture_output=True, timeout=10)
     assert completed.returncode == 0, completed.stderr
