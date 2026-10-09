@@ -85,6 +85,8 @@ Existing files are preserved. Re-running `agent init` trusts the existing projec
 
 `agent init` also records the absolute repository path and configuration fingerprint in the current user's private Harness config. A copied or merely committed `.agent/project.yaml` is not execution authority; after moving or editing the project config, run `agent init` again.
 
+In a Git repository, untracked `.agent/project.yaml` and the unchanged generated `AGENTS.md` template are kept local automatically using exact root-level rules in Git's local `info/exclude` file. Repository `.gitignore` and existing exclude content are preserved. Existing custom or tracked instructions and other `.agent/` files are not hidden. A normal task also repairs this setup for previously initialized trusted projects; a dry run does not change Git metadata. Branch switches refuse to overwrite ignored local files.
+
 ## Create a task
 
 The ordinary visual entry point is:
@@ -142,7 +144,7 @@ In the dashboard, **Модель → По настройкам системы** 
 
 After a task completes, open **Задачи → Посмотреть результат**. Read its summary, changed-file list and checks, then choose **Принято**, **Нужны правки**, or **Отклонено**. Changes and rejection require a comment. These assessments never approve a run, enqueue a retry, publish, or merge. **Подготовить задачу для правок** creates a draft containing the original goal and your comment; inspect it before launching. See [result acceptance](result-acceptance.md) for measurement and revision rules.
 
-By default, the command creates a fresh dedicated task branch in the current checkout from the configured base branch. It never silently reuses an existing branch and does not create a worktree. Repeating the same queued task id is idempotent; intentional work on an existing branch requires `--current-branch`. If queueing fails before ownership is recorded, a newly created clean branch is rolled back. The checkout must be clean. Setup files intentionally ignored by Git may stay local and must not be force-added; otherwise commit or intentionally ignore new setup files and commit or stash other intended changes before starting the first task. Only one unfinished current-checkout task may own a repository at a time.
+By default, the command creates a fresh dedicated task branch in the current checkout from the configured base branch. It never silently reuses an existing branch and does not create a worktree. Repeating the same queued task id is idempotent; intentional work on an existing branch requires `--current-branch`. If queueing fails before ownership is recorded, a newly created clean branch is rolled back. The checkout must be clean of user changes. Generated local setup no longer requires a manual commit; custom or tracked setup files and other intended changes still need to be committed or stashed before using this checkout. Explicit repository ignore overrides remain authoritative. Alternatively, select **Параллельная задача** or `--worktree` to work in a separate copy. Only one unfinished current-checkout task may own a repository at a time.
 
 Generated branches use the prefix selected during initialization and never use the default branch. The prefix is not restricted to a fixed list: any safe Git prefix is accepted, including `feat/`, `fix/`, `chore/`, `release/2026/`, or `team/mobile/`:
 

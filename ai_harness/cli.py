@@ -28,6 +28,7 @@ import yaml
 from . import __version__
 from .build import harness_build_fingerprint
 from .model_selection import ModelSelectionError, normalize_model_override, require_available_model
+from .local_setup import AGENTS_TEMPLATE, keep_generated_setup_local
 from .paths import HarnessNotFoundError, harness_home, home_config_path, save_harness_home
 from .project import (
     SUPPORTED_PROFILES,
@@ -52,23 +53,6 @@ from .task_batch import BatchManifestError, parse_batch_manifest
 
 if TYPE_CHECKING:
     from .attachments import AttachmentLimits
-
-
-AGENTS_TEMPLATE = """# AGENTS.md
-
-## Project
-
-This repository is initialized for the local AI Harness. Project metadata lives in `.agent/project.yaml`.
-
-## Working rules
-
-- Make minimal, reviewable changes in the task branch.
-- Never commit directly to the default branch.
-- Run the project checks selected by the Harness before review or publication.
-- Do not expose secrets, private data, raw traces, or local Harness state.
-- Never auto-merge or deploy without explicit human approval.
-- Follow any more specific repository instructions added below this section.
-"""
 
 
 class CLIError(RuntimeError):
@@ -273,6 +257,7 @@ def handle_init(args: argparse.Namespace) -> int:
     if args.replace_agents or not agents_path.exists():
         agents_path.write_text(AGENTS_TEMPLATE, encoding="utf-8")
         agents_created = True
+    keep_generated_setup_local(config)
     ignored = ignored_setup_files(repository)
     payload = {
         "status": "initialized",
@@ -663,7 +648,7 @@ def _handle_task(args: argparse.Namespace) -> int:
         checkout = worktree_manager.inspect_current_checkout(
             repository,
             protected_branches={config.base_branch, "main", "master", "trunk"},
-            require_clean=True,
+            require_clean=args.dry_run,
         )
         checkout_errors = [str(item) for item in checkout.get("errors", [])]
         if checkout_errors:
@@ -776,6 +761,19 @@ def _handle_task(args: argparse.Namespace) -> int:
         raise CLIError(f"missing runtime dependencies: {', '.join(missing)}; {dependency_repair_hint()}")
     if config.runtime_provider == "codex-sdk":
         verify_managed_sdk_session(root)
+    keep_generated_setup_local(config)
+    if args.current_branch:
+        assert worktree_manager is not None
+        checked = worktree_manager.inspect_current_checkout(
+            repository,
+            protected_branches={config.base_branch, "main", "master", "trunk"},
+            require_clean=True,
+        )
+        errors = [str(item) for item in checked.get("errors", [])]
+        if errors:
+            raise CLIError("; ".join(errors))
+        if checked.get("branch") != branch or checked.get("head_sha") != intake_base_sha:
+            raise CLIError("current checkout changed during task preflight; retry the task")
     attachment_input: dict[str, Any] = {
         "input_manifest": "",
         "input_manifest_sha256": "",

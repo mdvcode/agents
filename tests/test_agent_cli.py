@@ -49,7 +49,8 @@ def initialize_git_repository(path: Path) -> None:
 
 def commit_all(path: Path, message: str = "project setup") -> None:
     subprocess.run(["git", "add", "."], cwd=path, check=True)
-    subprocess.run(["git", "commit", "-m", message], cwd=path, check=True, capture_output=True, text=True)
+    # Generated local setup is now ignored; some fixtures only need a checkpoint.
+    subprocess.run(["git", "commit", "--allow-empty", "-m", message], cwd=path, check=True, capture_output=True, text=True)
 
 
 def configure_temporary_harness(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
@@ -127,6 +128,11 @@ def test_agent_task_checks_managed_sdk_transport_before_git_or_queue_mutation(
     capsys.readouterr()
     state_root = configure_temporary_harness(monkeypatch, tmp_path)
 
+    # Simulate a trusted project initialized before automatic local setup rules.
+    exclude = repository / ".git/info/exclude"
+    exclude.write_text("# legacy local rules\n", encoding="utf-8")
+    original_exclude = exclude.read_bytes()
+
     def fail_transport(_root: Path) -> str:
         raise cli.CLIError("managed Codex SDK worker transport is unavailable: socket failed")
 
@@ -138,6 +144,7 @@ def test_agent_task_checks_managed_sdk_transport_before_git_or_queue_mutation(
 
     assert result == 2
     assert "worker transport is unavailable" in capsys.readouterr().err
+    assert exclude.read_bytes() == original_exclude
     assert subprocess.run(
         ["git", "branch", "--show-current"],
         cwd=repository,
@@ -481,16 +488,19 @@ def test_agent_init_force_updates_only_explicit_config_and_preserves_agents(
     assert (repository / "AGENTS.md").read_text(encoding="utf-8") == existing_agents
 
 
+@pytest.mark.parametrize("legacy_setup", [False, True])
 def test_agent_task_is_high_level_idempotent_queue_intake(
     tmp_path: Path,
     monkeypatch: object,
     capsys: object,
+    legacy_setup: bool,
 ) -> None:
     repository = tmp_path / "project"
     repository.mkdir()
     initialize_git_repository(repository)
     assert cli.main(["init", "--repo", str(repository)]) == 0
-    commit_all(repository)
+    if legacy_setup:
+        (repository / ".git/info/exclude").write_text("# legacy local rules\n", encoding="utf-8")
     capsys.readouterr()
     state_root = configure_temporary_harness(monkeypatch, tmp_path)
 
@@ -513,6 +523,9 @@ def test_agent_task_is_high_level_idempotent_queue_intake(
     assert first["branch"] == "feat/fix-login"
     assert first["workspace_mode"] == "checkout"
     assert first["worker"] == {"status": "starting", "pid": 4321}
+    assert subprocess.run(
+        ["git", "status", "--porcelain"], cwd=repository, check=True, capture_output=True, text=True,
+    ).stdout == ""
     assert subprocess.run(
         ["git", "branch", "--show-current"], cwd=repository, check=True, capture_output=True, text=True
     ).stdout.strip() == "feat/fix-login"
@@ -646,6 +659,9 @@ def test_agent_task_dry_run_does_not_switch_branch_start_worker_or_create_queue(
     initialize_git_repository(repository)
     assert cli.main(["init", "--repo", str(repository), "--branch-prefix", "chore/"]) == 0
     commit_all(repository)
+    exclude = repository / ".git/info/exclude"
+    exclude.write_text("# legacy local rules\n", encoding="utf-8")
+    original_exclude = exclude.read_bytes()
     original_branch = subprocess.run(
         ["git", "branch", "--show-current"], cwd=repository, check=True, capture_output=True, text=True
     ).stdout.strip()
@@ -674,6 +690,7 @@ def test_agent_task_dry_run_does_not_switch_branch_start_worker_or_create_queue(
         ["git", "branch", "--show-current"], cwd=repository, check=True, capture_output=True, text=True
     ).stdout.strip() == original_branch
     assert worker_calls == []
+    assert exclude.read_bytes() == original_exclude
     assert not (state_root / ".agent-queue").exists()
 
 
@@ -3083,3 +3100,27 @@ def test_parser_exposes_worker_service_commands(worker_command: str) -> None:
 
     assert args.command == "worker"
     assert args.worker_command == worker_command
+
+
+def test_legacy_local_setup_can_queue_on_an_existing_task_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: object,
+) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    initialize_git_repository(repository)
+    assert cli.main(["init", "--repo", str(repository)]) == 0
+    subprocess.run(["git", "switch", "-c", "feat/local-legacy"], cwd=repository, check=True, capture_output=True)
+    (repository / ".git/info/exclude").write_text("# legacy rules\n", encoding="utf-8")
+    capsys.readouterr()
+    state_root = configure_temporary_harness(monkeypatch, tmp_path)
+    assert cli.main([
+        "task", "Local fixture", "--repo", str(repository),
+        "--current-branch", "--task-id", "local-legacy", "--json",
+    ]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["branch"] == "feat/local-legacy"
+    assert result["queue_task_id"] > 0
+    assert (state_root / ".agent-queue/tasks.db").is_file()
+    assert subprocess.run([
+        "git", "status", "--porcelain",
+    ], cwd=repository, check=True, capture_output=True, text=True).stdout == ""

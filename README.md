@@ -47,9 +47,10 @@ agent init
 agent doctor --full
 ```
 
-`agent init` creates `.agent/project.yaml` and, when absent, `AGENTS.md`. Before launching a task,
-keep the checkout clean: commit these files or use a repository-approved ignore rule. Already
-ignored setup files can remain local; do not force-add them. Project initialization sets local
+`agent init` creates `.agent/project.yaml` and, when absent, `AGENTS.md`. Untracked project config
+and the unchanged generated instruction template stay local automatically through Git's local
+exclude file; no setup commit is needed. Existing custom or tracked instructions and your code
+changes still need a clean checkout before starting a task in it. Project initialization sets local
 execution identity and trust, without granting publication or deployment permissions.
 
 ### 3. Launch from the dashboard or terminal

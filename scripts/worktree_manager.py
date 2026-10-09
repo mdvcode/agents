@@ -186,7 +186,7 @@ def prepare_task_branch(
             else:
                 base_sha_result = run_git(repo, ["rev-parse", "--verify", base_ref])
                 base_sha = base_sha_result.stdout.strip() if base_sha_result.returncode == 0 else ""
-                switched = run_git(repo, ["switch", "-c", branch, base_ref])
+                switched = run_git(repo, ["switch", "--no-overwrite-ignore", "-c", branch, base_ref])
                 if switched.returncode != 0:
                     errors.append(switched.stderr.strip() or switched.stdout.strip() or "cannot create task branch")
                 else:
@@ -239,7 +239,7 @@ def rollback_prepared_task_branch(repo: Path, prepared: dict[str, object]) -> li
         errors.append("previous branch is unknown; automatic rollback was skipped")
     if errors:
         return errors
-    switched = run_git(repo, ["switch", previous_branch])
+    switched = run_git(repo, ["switch", "--no-overwrite-ignore", previous_branch])
     if switched.returncode != 0:
         return [switched.stderr.strip() or switched.stdout.strip() or "cannot restore previous branch"]
     deleted = run_git(repo, ["branch", "-d", branch])

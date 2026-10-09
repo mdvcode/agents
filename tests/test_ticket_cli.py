@@ -31,8 +31,7 @@ def intake(tmp_path, monkeypatch, capsys):
     git(repository, "add", ".")
     git(repository, "commit", "-m", "initial")
     assert cli.main(["init", "--repo", str(repository), "--profile", "agent_workspace"]) == 0
-    git(repository, "add", ".")
-    git(repository, "commit", "-m", "setup")
+    assert git(repository, "status", "--porcelain") == ""
     capsys.readouterr()
     home = tmp_path / "home"
     home.mkdir()
