@@ -1852,3 +1852,28 @@ def test_dependency_change_fails_closed_when_vulnerability_scanner_is_unavailabl
     assert result["status"] == "awaiting_approval"
     assert evidence["verdict"] == "unavailable"
     assert evidence["evidence"][-1]["command"] == "dependency vulnerability scanner"
+
+
+def test_checkout_run_records_actual_starting_head_when_main_is_older(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repository = tmp_path / "project"
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repository, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repository, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repository, check=True)
+    (repository / "README.md").write_text("initial\n")
+    subprocess.run(["git", "add", "README.md"], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-qm", "initial"], cwd=repository, check=True)
+    main_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip()
+    subprocess.run(["git", "switch", "-qc", "feat/task"], cwd=repository, check=True)
+    (repository / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "add", "app.py"], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-qm", "existing application"], cwd=repository, check=True)
+    starting_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip()
+    monkeypatch.setattr(agent_role_runner, "RUNS", tmp_path / "runs")
+    def stop_before_execution(**_kwargs):
+        raise agent_role_runner.RuntimeConfigurationError("Stop before executing a model")
+    monkeypatch.setattr(agent_role_runner, "create_runtime", stop_before_execution)
+    state = agent_role_runner.run_roles(run_id="checkout-baseline", repository=repository, branch="feat/task", base_branch="main", goal="Inspect posting", dry_run=True)
+    assert state["base_sha"] == starting_sha
+    assert state["base_branch_sha_before"] == main_sha
+    assert state["execution_status"] == "blocked"

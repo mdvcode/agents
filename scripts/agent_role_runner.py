@@ -526,6 +526,22 @@ def append_trace(layout: RunLayout, event: dict[str, Any]) -> None:
         trace.write(json.dumps({"time": datetime.now(timezone.utc).isoformat(), **event}, ensure_ascii=False) + "\n")
 
 
+
+def append_workflow_audit(layout: RunLayout, state: dict[str, Any]) -> None:
+    verdict_path = layout.artifacts / "verdict.json"
+    verdict = load_json(verdict_path) if verdict_path.exists() else {}
+    entry = {
+        "time": datetime.now(timezone.utc).isoformat(),
+        "agent": "orchestrator",
+        "action": "workflow_finished",
+        "verdict": str(state.get("execution_status", "blocked")),
+        "checks_passed": verdict.get("checks_passed") is True,
+        "run_id": layout.run_id,
+    }
+    with (layout.root / "audit-log.jsonl").open("a", encoding="utf-8") as audit:
+        audit.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
 def role_prompt(role: str) -> str:
     prompt_file = PROMPT_FILES.get(role)
     if not prompt_file:
@@ -3097,7 +3113,7 @@ def run_roles(
             "workspace_mode": "checkout" if current_branch else "worktree",
             "checkout_path": str(worktree.resolve()),
             "task_branch": effective_branch,
-            "base_sha": git_ref_sha(repository, effective_base),
+            "base_sha": git_ref_sha(worktree, "HEAD"),
             "branch_owner_run_id": run_id,
             "mode": mode,
             "model_override": model_override,
@@ -4283,6 +4299,7 @@ def run_roles(
     write_json(layout.workflow, state)
     write_metrics(layout, state)
     append_trace(layout, {"event": "workflow_finished", "execution_status": state["execution_status"]})
+    append_workflow_audit(layout, state)
     return state
 
 

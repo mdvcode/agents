@@ -254,3 +254,49 @@ def test_same_run_refresh_retains_risk_and_scope(tmp_path: Path) -> None:
     assert not agent_role_runner.refresh_resumed_validation(
         artifacts, "agent_workspace", repository, "fast"
     )
+
+
+def test_artifact_validator_uses_target_checks_and_exact_scanner_arguments(
+    tmp_path: Path,
+) -> None:
+    import yaml
+
+    policy = yaml.safe_load((ROOT / ".agent-project-profiles.yaml").read_text())
+    repository = python_target(tmp_path)
+    profile = effective_project_profile(ROOT, "agent_workspace", repository)
+    args = shlex.split(profile["security_commands"]["required"][0])
+    args[0] = "/other/venv/bin/python3.12"
+    artifact = {
+        "project_profile": "agent_workspace",
+        "quality_commands_selected": profile["quality_commands"]["required"],
+        "security_commands_selected": [shlex.join(args)],
+    }
+    assert (
+        validate_artifacts.validate_profile_command_selection(
+            artifact, policy, repository
+        )
+        == []
+    )
+    args[-1] = "--full-repo"
+    artifact["security_commands_selected"] = [shlex.join(args)]
+    assert validate_artifacts.validate_profile_command_selection(
+        artifact, policy, repository
+    )
+    args[0] = "/bin/true"
+    args[-1] = "--git-worktree"
+    artifact["security_commands_selected"] = [shlex.join(args)]
+    assert validate_artifacts.validate_profile_command_selection(
+        artifact, policy, repository
+    )
+
+
+def test_terminal_local_workflow_has_an_audit_record(tmp_path: Path) -> None:
+    from scripts.run_state import RunLayout
+
+    layout = RunLayout.create(tmp_path, "local-run")
+    (layout.artifacts / "verdict.json").write_text('{"checks_passed":true}')
+    agent_role_runner.append_workflow_audit(layout, {"execution_status": "completed"})
+    assert validate_artifacts.validate_audit_log(layout.root) == []
+    entry = json.loads((layout.root / "audit-log.jsonl").read_text())
+    assert entry["checks_passed"] is True
+    assert entry["verdict"] == "completed"

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import argparse
+import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from ai_harness.project_validation import effective_project_profile
 from ai_harness.evaluation.io import EvaluationInputError
 from ai_harness.evaluation.adaptive import validate_adaptive_dataset
 from ai_harness.planning import RolePolicy, RolePolicyError
@@ -1143,6 +1146,7 @@ def validate_cross_artifact_invariants(artifacts: dict[str, dict[str, Any]]) -> 
 def validate_profile_command_selection(
     project_profile_artifact: dict[str, Any],
     profiles_doc: dict[str, Any],
+    repository: Path | None = None,
 ) -> list[str]:
     errors: list[str] = []
     profile_name = project_profile_artifact.get("project_profile")
@@ -1150,6 +1154,7 @@ def validate_profile_command_selection(
     profile = profiles.get(profile_name)
     if not isinstance(profile, dict):
         return [f"project_profile.json: selected profile {profile_name!r} is not defined"]
+    profile = effective_project_profile(ROOT, str(profile_name), repository, profiles_document=profiles_doc)
     for artifact_field, profile_field in (
         ("quality_commands_selected", "quality_commands"),
         ("security_commands_selected", "security_commands"),
@@ -1160,7 +1165,22 @@ def validate_profile_command_selection(
         commands = profile.get(profile_field)
         required = commands.get("required", []) if isinstance(commands, dict) else []
         for command in required:
-            if command not in selected:
+            matches = command in selected
+            if not matches and profile_field == "security_commands" and profile.get("validation_variant"):
+                expected = shlex.split(command)
+                for candidate in selected:
+                    if not isinstance(candidate, str):
+                        continue
+                    try:
+                        actual = shlex.split(candidate)
+                    except ValueError:
+                        continue
+                    # Validator and executor may use different Python virtualenvs.
+                    # Keep the trusted scanner path, repository, flags and arguments exact.
+                    if actual and re.fullmatch(r"python(?:[0-9]+(?:\.[0-9]+)*)?(?:\.exe)?", Path(actual[0]).name) and actual[1:] == expected[1:]:
+                        matches = True
+                        break
+            if not matches:
                 errors.append(
                     f"project_profile.json: {artifact_field} missing required command {command!r}"
                 )
@@ -1268,7 +1288,19 @@ def main(artifacts_dir: Path | None = None) -> int:
     if {"risk", "quality", "verdict", "project_profile"}.issubset(loaded_artifacts):
         errors.extend(validate_cross_artifact_invariants(loaded_artifacts))
     if profiles_doc is not None and "project_profile" in loaded_artifacts:
-        errors.extend(validate_profile_command_selection(loaded_artifacts["project_profile"], profiles_doc))
+        repository = None
+        workflow_path = artifacts_root.parent / "workflow.json" if artifacts_root is not None else None
+        if workflow_path is not None and workflow_path.exists():
+            try:
+                workflow = load_json(workflow_path)
+                checkout = workflow.get("checkout_path", workflow.get("worktree", ""))
+                if isinstance(checkout, str) and checkout:
+                    repository = Path(checkout)
+                if workflow.get("project_profile") != loaded_artifacts["project_profile"].get("project_profile"):
+                    errors.append("project_profile.json: profile differs from authoritative workflow")
+            except (OSError, ValueError) as exc:
+                errors.append(f"workflow.json: cannot resolve validation repository: {exc}")
+        errors.extend(validate_profile_command_selection(loaded_artifacts["project_profile"], profiles_doc, repository))
 
     if errors:
         for error in errors:

@@ -12,12 +12,20 @@ import yaml
 
 
 def effective_project_profile(
-    control_root: Path, project_profile: str, repository: Path | None = None
+    control_root: Path,
+    project_profile: str,
+    repository: Path | None = None,
+    *,
+    profiles_document: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     path = control_root / ".agent-project-profiles.yaml"
-    if not path.exists():
+    if profiles_document is None and not path.exists():
         return {}
-    document = yaml.safe_load(path.read_text()) or {}
+    document = (
+        profiles_document
+        if profiles_document is not None
+        else yaml.safe_load(path.read_text()) or {}
+    )
     base = document.get("profiles", {}).get(project_profile, {})
     profile = copy.deepcopy(base)
     if repository is not None and repository.resolve() != control_root.resolve():
