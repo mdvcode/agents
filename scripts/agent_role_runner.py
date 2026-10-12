@@ -57,6 +57,7 @@ from ai_harness.execution_accounting import (
 from ai_harness.planning import RolePolicy, TaskAnalyzer, WorkflowCompiler
 from ai_harness.planning.workflow_compiler import COMPILER_VERSION
 from ai_harness.project import trust_key
+from ai_harness.project_validation import effective_project_profile
 from context_compiler import create_context_manifest, role_capability, role_contract
 from repository_registry import RepositoryRecord, find_by_remote, load_local_project_record
 from runtime_contracts import contract_section, load_json, validate_contract
@@ -523,6 +524,22 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
 def append_trace(layout: RunLayout, event: dict[str, Any]) -> None:
     with (layout.raw_events / "workflow.jsonl").open("a", encoding="utf-8") as trace:
         trace.write(json.dumps({"time": datetime.now(timezone.utc).isoformat(), **event}, ensure_ascii=False) + "\n")
+
+
+
+def append_workflow_audit(layout: RunLayout, state: dict[str, Any]) -> None:
+    verdict_path = layout.artifacts / "verdict.json"
+    verdict = load_json(verdict_path) if verdict_path.exists() else {}
+    entry = {
+        "time": datetime.now(timezone.utc).isoformat(),
+        "agent": "orchestrator",
+        "action": "workflow_finished",
+        "verdict": str(state.get("execution_status", "blocked")),
+        "checks_passed": verdict.get("checks_passed") is True,
+        "run_id": layout.run_id,
+    }
+    with (layout.root / "audit-log.jsonl").open("a", encoding="utf-8") as audit:
+        audit.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
 def role_prompt(role: str) -> str:
@@ -1100,7 +1117,9 @@ def execute_runtime_observed(
             pass
 
 
-def ensure_project_profile_artifact(artifacts_dir: Path, project_profile: str) -> None:
+def ensure_project_profile_artifact(
+    artifacts_dir: Path, project_profile: str, repository: Path | None = None
+) -> None:
     path = artifacts_dir / "project_profile.json"
     data: dict[str, Any] = {}
     if path.exists():
@@ -1109,7 +1128,8 @@ def ensure_project_profile_artifact(artifacts_dir: Path, project_profile: str) -
         except (OSError, json.JSONDecodeError, ValueError):
             data = {}
     profiles = load_yaml(ROOT / ".agent-project-profiles.yaml").get("profiles", {})
-    profile = profiles.get(project_profile, {}) if isinstance(profiles, dict) else {}
+    base_profile = profiles.get(project_profile, {}) if isinstance(profiles, dict) else {}
+    profile = effective_project_profile(ROOT, project_profile, repository)
     quality = profile.get("quality_commands", {}) if isinstance(profile, dict) else {}
     security = profile.get("security_commands", {}) if isinstance(profile, dict) else {}
     required_quality = quality.get("required", []) if isinstance(quality, dict) else []
@@ -1117,6 +1137,15 @@ def ensure_project_profile_artifact(artifacts_dir: Path, project_profile: str) -
     frontend = profile.get("frontend_evidence", {}) if isinstance(profile, dict) else {}
     quality_selected = list(data.get("quality_commands_selected", []))
     security_selected = list(data.get("security_commands_selected", []))
+    variant = str(profile.get("validation_variant", ""))
+    if variant:
+        # Discard only the obsolete base-profile gates when resuming an old run.
+        for group, selected in (("quality_commands", quality_selected), ("security_commands", security_selected)):
+            obsolete = base_profile.get(group, {}).get("required", [])
+            selected[:] = [command for command in selected if command not in obsolete]
+    reasons = list(data.get("reasons", ["Selected by the workflow project profile resolver."]))
+    if variant and f"Repository validation variant: {variant}." not in reasons:
+        reasons.append(f"Repository validation variant: {variant}.")
     for command in required_quality:
         if command not in quality_selected:
             quality_selected.append(command)
@@ -1127,7 +1156,7 @@ def ensure_project_profile_artifact(artifacts_dir: Path, project_profile: str) -
         {
             "project_profile": project_profile,
             "confidence": data.get("confidence", "high"),
-            "reasons": data.get("reasons", ["Selected by the workflow project profile resolver."]),
+            "reasons": reasons,
             "matched_markers": data.get("matched_markers", []),
             "quality_commands_selected": quality_selected,
             "security_commands_selected": security_selected,
@@ -1147,10 +1176,46 @@ def ensure_project_profile_artifact(artifacts_dir: Path, project_profile: str) -
     )
 
 
-def ensure_deterministic_role_artifacts(role: str, artifacts_dir: Path, project_profile: str) -> list[str]:
+
+def refresh_resumed_validation(
+    artifacts_dir: Path, project_profile: str, repository: Path, execution_mode: str
+) -> bool:
+    """Refresh compiler-generated checks after a trusted policy repair, retaining risk and scope."""
+    if execution_mode not in {"fast", "adaptive"}:
+        return False
+    profile = effective_project_profile(ROOT, project_profile, repository)
+    if not profile.get("validation_variant"):
+        return False
+    profile_path = artifacts_dir / "project_profile.json"
+    plan_path = artifacts_dir / "plan.md"
+    if not profile_path.exists() or not plan_path.exists():
+        return False
+    existing = load_json(profile_path)
+    required = profile.get("quality_commands", {}).get("required", [])
+    security = profile.get("security_commands", {}).get("required", [])
+    if all(command in existing.get("quality_commands_selected", []) for command in required) and all(
+        command in existing.get("security_commands_selected", []) for command in security
+    ):
+        return False
+    plan = plan_path.read_text(encoding="utf-8")
+    if not any(marker in plan for marker in (
+        "The Context Compiler prepared this plan", "Adaptive deterministic plan."
+    )) or "# CHECKS_TO_RUN\n" not in plan or "\n# DONE_CRITERIA" not in plan:
+        return False
+    ensure_project_profile_artifact(artifacts_dir, project_profile, repository)
+    selected = load_json(profile_path)["quality_commands_selected"]
+    checks = "# CHECKS_TO_RUN\n" + "\n".join(f"- {command}" for command in selected) + "\n"
+    plan = re.sub(r"# CHECKS_TO_RUN\n.*?(?=\n# DONE_CRITERIA)", lambda _match: checks, plan, count=1, flags=re.DOTALL)
+    plan_path.write_text(plan, encoding="utf-8")
+    return True
+
+
+def ensure_deterministic_role_artifacts(
+    role: str, artifacts_dir: Path, project_profile: str, repository: Path | None = None
+) -> list[str]:
     if role != "planner":
         return []
-    ensure_project_profile_artifact(artifacts_dir, project_profile)
+    ensure_project_profile_artifact(artifacts_dir, project_profile, repository)
     return ["project_profile.json"]
 
 
@@ -1958,12 +2023,12 @@ def missing_image_capability(goal: str, artifacts_dir: Path) -> str:
     return ""
 
 
-def profile_required_commands(project_profile: str, group: str) -> list[str]:
-    profiles = load_yaml(ROOT / ".agent-project-profiles.yaml").get("profiles", {})
-    profile = profiles.get(project_profile, {}) if isinstance(profiles, dict) else {}
-    commands = profile.get(group, {}) if isinstance(profile, dict) else {}
-    required = commands.get("required", []) if isinstance(commands, dict) else []
-    return [str(command) for command in required if isinstance(command, str) and command.strip()]
+def profile_required_commands(
+    project_profile: str, group: str, repository: Path | None = None
+) -> list[str]:
+    profile = effective_project_profile(ROOT, project_profile, repository)
+    required = profile.get(group, {}).get("required", [])
+    return [command for command in required if isinstance(command, str) and command.strip()]
 
 
 def run_bounded_commands(commands: list[str], repository: Path, timeout_seconds: int) -> list[dict[str, Any]]:
@@ -2019,7 +2084,7 @@ def run_bounded_commands(commands: list[str], repository: Path, timeout_seconds:
 def run_deterministic_quality(
     *, goal: str, project_profile: str, repository: Path, artifacts_dir: Path, timeout_seconds: int
 ) -> dict[str, Any]:
-    commands = profile_required_commands(project_profile, "quality_commands")
+    commands = profile_required_commands(project_profile, "quality_commands", repository)
     checks = run_bounded_commands(commands, repository, min(timeout_seconds, 180))
     changed = changed_paths(repository)
     symbol_names: list[str] = []
@@ -2086,23 +2151,24 @@ def run_deterministic_security(
     timeout_seconds: int,
     required_checks: set[str] | None = None,
 ) -> dict[str, Any]:
-    commands = profile_required_commands(project_profile, "security_commands")
+    commands = profile_required_commands(project_profile, "security_commands", repository)
     required = required_checks or set()
     if "secret_scan" in required:
         scanner = ROOT / "scripts" / "security_scan.py"
-        commands.append(
-            " ".join(
-                (
-                    shlex.quote(sys.executable),
-                    shlex.quote(str(scanner)),
-                    "--repo",
-                    shlex.quote(str(repository)),
-                    "--profile",
-                    shlex.quote(project_profile),
-                    "--full-repo",
-                )
+        variant = effective_project_profile(ROOT, project_profile, repository).get("validation_variant")
+        command = " ".join(
+            (
+                shlex.quote(sys.executable),
+                shlex.quote(str(scanner)),
+                "--repo",
+                shlex.quote(str(repository)),
+                "--profile",
+                shlex.quote(project_profile),
+                "--git-worktree" if variant == "python_uv" else "--full-repo",
             )
         )
+        if command not in commands:
+            commands.append(command)
     dependency_scanner_missing = False
     if "dependency_audit" in required:
         if project_profile in {"agent_workspace", "django"} and shutil.which("pip-audit"):
@@ -2392,7 +2458,7 @@ def run_context_compiler(
     execution_mode: str,
 ) -> dict[str, Any]:
     if execution_mode in {"fast", "adaptive"}:
-        ensure_project_profile_artifact(artifacts_dir, project_profile)
+        ensure_project_profile_artifact(artifacts_dir, project_profile, worktree)
         profile = load_json(artifacts_dir / "project_profile.json")
         execution_plan = (
             load_json(context_dir.parent / "execution-plan.json")
@@ -3047,7 +3113,7 @@ def run_roles(
             "workspace_mode": "checkout" if current_branch else "worktree",
             "checkout_path": str(worktree.resolve()),
             "task_branch": effective_branch,
-            "base_sha": git_ref_sha(repository, effective_base),
+            "base_sha": git_ref_sha(worktree, "HEAD"),
             "branch_owner_run_id": run_id,
             "mode": mode,
             "model_override": model_override,
@@ -3210,6 +3276,8 @@ def run_roles(
         write_json(layout.workflow, state)
         write_metrics(layout, state)
         return state
+    if resume and refresh_resumed_validation(run_artifacts, project_profile, worktree, effective_mode):
+        append_trace(layout, {"event": "validation_refreshed", "project_profile": project_profile})
     prior_roles = [
         str(item.get("role", ""))
         for item in state.get("roles", [])
@@ -3723,7 +3791,7 @@ def run_roles(
                 "error_type": "InvalidStructuredOutput",
                 "message": "Role result failed schema validation.",
             }
-        deterministic_created = ensure_deterministic_role_artifacts(role, run_artifacts, project_profile)
+        deterministic_created = ensure_deterministic_role_artifacts(role, run_artifacts, project_profile, worktree)
         if deterministic_created and result.get("status") == "completed":
             created = list(result.get("artifacts_created", []))
             for artifact in deterministic_created:
@@ -4231,6 +4299,7 @@ def run_roles(
     write_json(layout.workflow, state)
     write_metrics(layout, state)
     append_trace(layout, {"event": "workflow_finished", "execution_status": state["execution_status"]})
+    append_workflow_audit(layout, state)
     return state
 
 

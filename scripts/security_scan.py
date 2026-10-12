@@ -37,8 +37,8 @@ SECRET_PATTERNS = [
     re.compile(r"\bgho_[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\bghu_[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\bghs_[A-Za-z0-9_]{20,}\b"),
-    re.compile(r"\bANTHROPIC_API_KEY\s*=\s*[A-Za-z0-9_-]{20,}\b"),
-    re.compile(r"\bOPENAI_API_KEY\s*=\s*[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bANTHROPIC_API_KEY\s*=\s*(?!your_anthropic_api_key\b)[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bOPENAI_API_KEY\s*=\s*(?!your_openai_api_key\b)[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"(?i)\bDATABASE_URL\s*=\s*['\"]?(?:postgres|mysql|mongodb|redis)://[^'\"\s]+"),
     re.compile(r"(?i)\bDB_(?:PASSWORD|USER|HOST|NAME)\s*=\s*['\"]?[^'\"\s]{4,}"),
     re.compile(r"(?i)\b(?:password|token|credential|secret)\s*[:=]\s*['\"][^'\"]{8,}['\"]"),
@@ -128,6 +128,19 @@ def files_to_scan(repo: Path, staged_paths: list[str] | None, full_repo: bool) -
     return files
 
 
+
+def git_worktree_paths(repo: Path) -> list[str]:
+    result = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=repo,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("cannot enumerate Git worktree files")
+    return list(dict.fromkeys(os.fsdecode(path) for path in result.stdout.split(b"\0") if path))
+
+
 def scan(
     repo: Path = ROOT,
     profile: str | None = None,
@@ -162,6 +175,7 @@ def scan(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=ROOT)
+    parser.add_argument("--git-worktree", action="store_true", help="Scan tracked and non-ignored worktree files, including unstaged changes.")
     parser.add_argument("--full-repo", action="store_true", help="Scan the full repository instead of staged files.")
     parser.add_argument(
         "--paths-file",
@@ -183,6 +197,20 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     staged_paths = paths_from_file(args.paths_file) if args.paths_file is not None else None
+    if args.git_worktree:
+        if args.full_repo or args.paths_file is not None or args.base_ref or args.head_ref:
+            print("security: --git-worktree cannot be combined with another scan scope")
+            return 1
+        try:
+            staged_paths = git_worktree_paths(args.repo)
+        except RuntimeError as exc:
+            print(f"security: {exc}")
+            return 1
+        for relative in staged_paths:
+            path = args.repo / relative
+            if path.exists() and not path.resolve().is_relative_to(args.repo.resolve()):
+                print(f"security: worktree path escapes repository: {relative}")
+                return 1
     if staged_paths is None and args.base_ref and args.head_ref:
         try:
             staged_paths = changed_files_between_refs(args.repo, args.base_ref, args.head_ref)

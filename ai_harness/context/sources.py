@@ -13,6 +13,7 @@ from typing import Iterable, Protocol, Sequence
 import yaml
 
 from ai_harness.project import trust_key
+from ai_harness.project_validation import effective_project_profile
 
 from .content_guard import findings, source_privacy
 
@@ -455,11 +456,15 @@ class ProjectProfileSource:
             )
             if document is not None:
                 documents.append(document)
+        profile = effective_project_profile(control_root, request.project_profile, request.repository)
         identity = json.dumps(
             {
                 "project": request.project,
                 "project_profile": request.project_profile,
                 "repository": str(request.repository.resolve()),
+                "validation_variant": profile.get("validation_variant", "default"),
+                "quality_commands_required": profile.get("quality_commands", {}).get("required", []),
+                "security_commands_required": profile.get("security_commands", {}).get("required", []),
             },
             indent=2,
             ensure_ascii=False,
