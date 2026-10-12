@@ -746,6 +746,32 @@ def validate_project_profiles_data(
         for field in ("quality_commands", "security_commands", "test_strategy", "frontend_evidence"):
             if field not in value:
                 errors.append(f"{label}: profiles.{profile} missing {field!r}")
+    for profile_name, value in profiles.items():
+        variants = value.get("validation_variants", {}) if isinstance(value, dict) else {}
+        if not isinstance(variants, dict):
+            errors.append(f"{label}: profiles.{profile_name}.validation_variants must be an object")
+            continue
+        for name, variant in variants.items():
+            prefix = f"{label}: profiles.{profile_name}.validation_variants.{name}"
+            if not isinstance(variant, dict):
+                errors.append(f"{prefix} must be an object")
+                continue
+            for field in ("required_markers", "excluded_markers"):
+                markers = variant.get(field)
+                if not isinstance(markers, list) or not markers or any(
+                    not isinstance(marker, str) or not marker or Path(marker).is_absolute()
+                    or ".." in Path(marker).parts or any(char in marker for char in "*?[]")
+                    for marker in markers
+                ):
+                    errors.append(f"{prefix}.{field} must contain exact repository-relative paths")
+            for group in ("quality_commands", "security_commands"):
+                commands = variant.get(group, {}).get("required", []) if isinstance(variant.get(group), dict) else []
+                if not isinstance(commands, list) or not commands or any(
+                    not isinstance(command, str) or not command.strip() for command in commands
+                ):
+                    errors.append(f"{prefix}.{group}.required must contain commands")
+            if not isinstance(variant.get("test_strategy"), dict):
+                errors.append(f"{prefix}.test_strategy must be an object")
     web = profiles.get("nextjs_web", {})
     frontend = web.get("frontend_evidence", {}) if isinstance(web, dict) else {}
     if not isinstance(frontend, dict):

@@ -39,6 +39,31 @@ profiles:
     frontend_evidence:
       required: false
       reason: "Agent workspace is not a frontend application."
+    validation_variants:
+      python_uv:
+        required_markers:
+          - "pyproject.toml"
+          - "uv.lock"
+          - "tests"
+        excluded_markers:
+          - ".agent-policy.yaml"
+          - "manage.py"
+          - "package.json"
+        quality_commands:
+          required:
+            - "uv run --frozen ruff check ."
+            - "uv run --frozen ruff format --check ."
+            - "uv run --frozen pytest"
+        security_commands:
+          required:
+            - "{python} {security_scanner} --repo {repository} --profile agent_workspace --git-worktree"
+        test_strategy:
+          primary: "pytest"
+          focused_tests: []
+          repository_checks:
+            - "uv run --frozen ruff check ."
+            - "uv run --frozen ruff format --check ."
+            - "uv run --frozen pytest"
   django:
     description: "Python / Django / Django REST Framework project."
     kind: python_django_drf
