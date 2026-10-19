@@ -13,7 +13,8 @@ production acceptance.
 
 [Quick start](#quick-start) · [How it works](#how-it-works) · [Tickets and files](#tickets-and-files) ·
 [Modes and models](#modes-and-models) · [Results](#review-and-accept-the-result) ·
-[Updates](#updates-and-maintenance) · [Documentation](#documentation)
+[Updates](#updates-and-maintenance) · [Upgrade from 0.2.0](#upgrade-from-020-on-another-mac) ·
+[Documentation](#documentation)
 
 ## Quick start
 
@@ -50,7 +51,8 @@ agent doctor --full
 `agent init` creates `.agent/project.yaml` and, when absent, `AGENTS.md`. Untracked project config
 and the unchanged generated instruction template stay local automatically through Git's local
 exclude file; no setup commit is needed. Existing custom or tracked instructions and your code
-changes still need a clean checkout before starting a task in it. Project initialization sets local
+changes stay in place: a normal task automatically uses an isolated worktree when the checkout
+has local changes, working from the committed base. Explicit current-branch mode requires a clean checkout. Project initialization sets local
 execution identity and trust, without granting publication or deployment permissions.
 
 ### 3. Launch from the dashboard or terminal
@@ -266,6 +268,67 @@ credentials or secrets in an answer. Both preserve the existing run and checkpoi
 
 ## Updates and maintenance
 
+### Upgrade from 0.2.0 on another Mac
+
+Use this one-time procedure if version `0.2.0` rejects `agent update` because of local memory,
+caches or nested projects. Install the repaired CLI first, then use it to update the existing
+Harness folder. Git and `pipx` must be available, as in the original installation.
+
+The commands below assume the Harness is in `$HOME/agents` and your project is in
+`$HOME/review-agent`. Replace those paths if your folders are elsewhere. Run each step separately;
+if a command fails, resolve that error before continuing.
+
+1. Wait for active tasks to finish, then stop the old worker. If a dashboard is running in another
+   terminal, stop that dashboard with **Ctrl+C** too.
+
+   ```sh
+   cd "$HOME/review-agent"
+   agent stop
+   ```
+
+2. Bootstrap the current CLI directly from `main`, bypassing the old updater:
+
+   ```sh
+   pipx install --force 'git+https://github.com/mdvcode/agents.git@main'
+   hash -r
+   agent --version
+   ```
+
+   Expect `agent 0.4.0` or a later version before continuing.
+
+3. Update the existing Harness source with the repaired updater:
+
+   ```sh
+   agent update --source "$HOME/agents" --ref main
+   ```
+
+   Expect `AI Harness updated` and `background service: restarted`. Private memory and project
+   registration are backed up and restored; caches, outputs and nested projects stay in place.
+   Modified package code or staged changes still stop the update for review; do not discard them.
+
+4. Refresh the project's local configuration and check the installed runtime:
+
+   ```sh
+   cd "$HOME/review-agent"
+   agent init
+   agent doctor --full
+   ```
+
+   Initialization repairs an unavailable legacy base-branch setting when an existing branch can
+   be selected. A new Git repository still needs its first project commit. A separate Codex CLI
+   is optional for the SDK runtime; authentication and runtime checks must pass.
+
+5. Start the updated dashboard and open the address printed in the terminal:
+
+   ```sh
+   agent dashboard
+   ```
+
+   If the usual port is occupied, the dashboard selects a free loopback port automatically.
+   You do not need to commit or delete IDE files, private memory or caches to complete this upgrade.
+
+### Routine updates
+
 For an existing installation:
 
 ```sh
@@ -274,15 +337,19 @@ agent doctor --full
 ```
 
 `agent update` refreshes the installed package source, verifies the CLI and restarts the worker.
-It refuses to overwrite a dirty source checkout. To install an explicitly reviewed local checkout
-at its current revision, use:
+Local memory and project registration are backed up and preserved; unrelated caches, outputs and
+nested projects do not block it. Modified package code and staged changes still require review.
+To install an explicitly reviewed local checkout at its current revision, use:
 
 ```sh
 agent update --source /absolute/path/to/agents
 agent doctor --full
 ```
 
-An explicit `--source` does not pull that checkout. Bring it to the reviewed revision first.
+An explicit `--source` does not pull that checkout unless you also select `--ref <reviewed-origin-branch>`.
+Doctor checks the selected runtime: the SDK does not require a separate Codex CLI. A busy
+dashboard port automatically falls back to a free loopback port. New Git repositories are
+identified as awaiting the first project commit, rather than reporting a nonexistent default branch.
 Dependency updates are proposed by **Dependabot every Monday at 07:00 Europe/Berlin**, for pip and
 GitHub Actions. PR checks install the declared SDK and test its event contract. Review and merge
 updates before running the updater; dependency PRs do not automatically merge or install locally.

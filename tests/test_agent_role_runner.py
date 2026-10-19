@@ -1877,3 +1877,47 @@ def test_checkout_run_records_actual_starting_head_when_main_is_older(tmp_path: 
     assert state["base_sha"] == starting_sha
     assert state["base_branch_sha_before"] == main_sha
     assert state["execution_status"] == "blocked"
+
+
+@pytest.mark.parametrize("publication_requested,expected_status", [(True, "planned"), (False, "completed")])
+def test_orchestrator_verdict_matches_prepublication_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, publication_requested: bool, expected_status: str
+) -> None:
+    from validate_artifacts import validate_verdict_invariants
+
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    for name, data in {
+        "risk.json": {"risk_class": "low", "high_risk_triggers": [], "protected_paths_touched": []},
+        "quality.json": {"overall_status": "pass", "warnings": []},
+        "security.json": {"verdict": "works", "blockers": [], "warnings": []},
+        "review.json": {"verdict": "works", "blockers": []},
+    }.items():
+        (artifacts / name).write_text(json.dumps(data))
+    monkeypatch.setattr(agent_role_runner, "changed_paths", lambda _repo: ["docs/README.ru.md"])
+    monkeypatch.setattr(agent_role_runner, "publication_requested", lambda _goal, _repo: publication_requested)
+    result = agent_role_runner.run_deterministic_orchestrator(
+        goal="Document posting setup", project_profile="agent_workspace", repository=tmp_path, artifacts_dir=artifacts
+    )
+    verdict = json.loads((artifacts / "verdict.json").read_text())
+    assert result["status"] == "completed"
+    assert verdict["decision"] == ("publish_pr" if publication_requested else "local_complete")
+    assert verdict["execution_status"] == expected_status
+    assert validate_verdict_invariants(verdict) == []
+
+
+def test_publication_prepare_does_not_put_internal_stage_names_in_public_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(agent_role_runner, "changed_paths", lambda _repo: ["docs/README.ru.md"])
+    monkeypatch.setattr(agent_role_runner, "git_remote", lambda _repo: "git@github.com:example/product.git")
+    result = agent_role_runner.run_publication_prepare(
+        task_id="posting-setup", project_profile="agent_workspace", repository=tmp_path,
+        artifacts_dir=tmp_path, base_branch="main"
+    )
+    payload = json.loads((tmp_path / "publication_payload.json").read_text())
+    assert result["status"] == "completed"
+    assert "docs/README.ru.md" in payload["body"]
+    assert "publication-prepare" not in payload["body"]
+    assert "deterministic" not in payload["body"]
+    assert "worktree" not in payload["body"]
