@@ -13,7 +13,8 @@ production acceptance.
 
 [Quick start](#quick-start) · [How it works](#how-it-works) · [Tickets and files](#tickets-and-files) ·
 [Modes and models](#modes-and-models) · [Results](#review-and-accept-the-result) ·
-[Updates](#updates-and-maintenance) · [Documentation](#documentation)
+[Updates](#updates-and-maintenance) · [Upgrade from 0.2.0](#upgrade-from-020-on-another-mac) ·
+[Documentation](#documentation)
 
 ## Quick start
 
@@ -266,6 +267,67 @@ Use `answer` for information and `approve` only for the exact scoped permission 
 credentials or secrets in an answer. Both preserve the existing run and checkpoint.
 
 ## Updates and maintenance
+
+### Upgrade from 0.2.0 on another Mac
+
+Use this one-time procedure if version `0.2.0` rejects `agent update` because of local memory,
+caches or nested projects. Install the repaired CLI first, then use it to update the existing
+Harness folder. Git and `pipx` must be available, as in the original installation.
+
+The commands below assume the Harness is in `$HOME/agents` and your project is in
+`$HOME/review-agent`. Replace those paths if your folders are elsewhere. Run each step separately;
+if a command fails, resolve that error before continuing.
+
+1. Wait for active tasks to finish, then stop the old worker. If a dashboard is running in another
+   terminal, stop that dashboard with **Ctrl+C** too.
+
+   ```sh
+   cd "$HOME/review-agent"
+   agent stop
+   ```
+
+2. Bootstrap the current CLI directly from `main`, bypassing the old updater:
+
+   ```sh
+   pipx install --force 'git+https://github.com/mdvcode/agents.git@main'
+   hash -r
+   agent --version
+   ```
+
+   Expect `agent 0.4.0` or a later version before continuing.
+
+3. Update the existing Harness source with the repaired updater:
+
+   ```sh
+   agent update --source "$HOME/agents" --ref main
+   ```
+
+   Expect `AI Harness updated` and `background service: restarted`. Private memory and project
+   registration are backed up and restored; caches, outputs and nested projects stay in place.
+   Modified package code or staged changes still stop the update for review; do not discard them.
+
+4. Refresh the project's local configuration and check the installed runtime:
+
+   ```sh
+   cd "$HOME/review-agent"
+   agent init
+   agent doctor --full
+   ```
+
+   Initialization repairs an unavailable legacy base-branch setting when an existing branch can
+   be selected. A new Git repository still needs its first project commit. A separate Codex CLI
+   is optional for the SDK runtime; authentication and runtime checks must pass.
+
+5. Start the updated dashboard and open the address printed in the terminal:
+
+   ```sh
+   agent dashboard
+   ```
+
+   If the usual port is occupied, the dashboard selects a free loopback port automatically.
+   You do not need to commit or delete IDE files, private memory or caches to complete this upgrade.
+
+### Routine updates
 
 For an existing installation:
 
