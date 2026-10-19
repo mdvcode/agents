@@ -32,7 +32,14 @@ agent update
 agent doctor --full
 ```
 
-`agent update` uses the installed package source. A clean Git checkout is updated with a fast-forward-only pull; a ZIP/folder installation moves to the official public repository source; a remote package installation is upgraded in place. It then verifies the new `agent` command and restarts the background worker. A dirty source checkout is never overwritten. Use `--source` when intentionally selecting another reviewed checkout.
+`agent update` uses the installed package source. A Git checkout is updated with a fast-forward-only pull; a ZIP/folder installation moves to the official public repository source; a remote package installation is upgraded in place. It then verifies the new `agent` command and restarts the background worker. Non-build local folders (nested projects, editor files, caches and outputs) do not block updates and remain untouched. Unstaged private memory/knowledge and `.agent-repositories.yaml` are backed up under `.agent-runs/update-*/` and restored after success or failure; an upstream knowledge copy is retained in that backup when it changes too. Modified package code, untracked package inputs and staged changes still require review; they are never overwritten. Use `--source` when intentionally selecting another reviewed checkout. To explicitly fast-forward a local source to a reviewed origin branch/tag, use `agent update --source /path/to/agents --ref <branch>`. Without `--ref`, an explicit local source is installed as-is and is not pulled.
+
+If a legacy updater (for example 0.2.0) rejects its own update because of local memory or caches,
+install the reviewed updater package first with `pipx install --force
+'git+https://github.com/mdvcode/agents.git@<reviewed-ref>'`. Then run
+`agent update --source /path/to/agents --ref <reviewed-origin-branch>` to update an explicitly
+selected source home with state preservation. Stop idle workers before replacing the old package;
+do not interrupt running tasks. Re-run `agent init` and `agent doctor --full` inside the target project.
 
 An installation old enough not to recognize `agent update` must be bootstrapped once with
 `install.sh` from a reviewed checkout or the public bootstrap. Refresh the shell command cache
@@ -41,7 +48,7 @@ or completion of the production acceptance gates.
 
 Contributors may still use `pip install -e .` or direct pipx commands, but users do not need to manage those environments themselves.
 
-The installation bundles the policy, workflow, schemas, prompts, scripts, official Python Codex SDK, and CLI compatibility adapter under an isolated environment.
+The installation bundles the policy, workflow, schemas, prompts, scripts, official Python Codex SDK, and CLI compatibility adapter under an isolated environment. `agent doctor --full` probes the selected runtime, including the managed SDK transport. A standalone Codex CLI is optional for `codex-sdk` and required only for an explicitly selected `codex-cli` compatibility runtime.
 
 The SDK dependency is pinned to `openai-codex==0.161.0`. Dependabot is configured to check pip and
 GitHub Actions dependencies weekly on Monday at 07:00 Europe/Berlin and propose pull requests.
@@ -79,7 +86,7 @@ MyProject/
   AGENTS.md
 ```
 
-Existing files are preserved. Re-running `agent init` trusts the existing project configuration instead of silently replacing it. `--force` replaces `.agent/project.yaml` but still preserves an existing `AGENTS.md`; add `--replace-agents` only when replacing that instruction file is intentional. Profile and base-branch detection recognize this agent workspace, Django projects, Next.js/web projects, remote default branches, and common local default branches. Either can also be selected explicitly.
+Existing files are preserved. Re-running `agent init` trusts the existing project configuration instead of silently replacing it. `--force` replaces `.agent/project.yaml` but still preserves an existing `AGENTS.md`; add `--replace-agents` only when replacing that instruction file is intentional. A repeated init repairs an unavailable legacy base branch when a committed existing branch can be detected, while retaining other project settings. A brand-new Git repository is reported as waiting for its first project commit rather than a broken `main`; init never stages user files or invents an initial commit. Profile and base-branch detection recognize this agent workspace, Django projects, Next.js/web projects, remote default branches, and common local default branches. Either can also be selected explicitly.
 
 `.agent/project.yaml` is local execution identity, not publication authority. It may select the project profile, base branch, task branch prefix, and local-subscription Codex runtime. It cannot authorize push, PR publication, merge, deployment, credentials, protected paths, or a different model provider.
 
@@ -98,15 +105,19 @@ The ordinary visual entry point is:
 agent dashboard
 ```
 
-It starts an authenticated loopback control center and opens it in the default browser. **Проекты**
+It starts an authenticated loopback control center and opens it in the default browser. If the requested port is already occupied, the OS selects a free loopback port automatically; the other process is not stopped or reused. **Проекты**
 lists only repositories explicitly registered by `agent init`; it never scans the computer. Every
 new task selects one project, while **Задачи** remains the global operations list across all
 projects. Project actions can initialize another chosen folder and open a trusted project folder in
 Codex without accessing private Codex application state. The page launches tasks through the same
 CLI policy boundary and healthy worker as `agent task`, refreshes live task/worker state, displays
 bounded attention questions, and provides answer, approval, retry, and abort controls. **Очистить
-историю** hides only completed and cancelled task rows in that browser; active or actionable tasks
-remain visible, queue/run evidence is retained, and **Вернуть скрытые** restores the rows. The
+историю** is visible at the top of the Tasks page, above attention requests and task filters and hides completed/cancelled rows matching the current
+filters in that browser. **Скрыть остановленные** separately hides stopped/error rows and their
+attention cards after confirmation; it does not cancel tasks or grant approvals. Individual
+**Скрыть** buttons are available for finished and stopped tasks. Queued/running tasks remain
+visible, including tasks resumed after hiding. Queue/run evidence and files are retained;
+**Вернуть скрытые** restores the rows, including after a page reload. The
 temporary token is passed in the URL fragment, moved to session storage, and removed from the
 visible URL. Use `Ctrl+C` to stop only the dashboard server.
 
@@ -147,7 +158,7 @@ In the dashboard, **Модель → По настройкам системы** 
 
 After a task completes, open **Задачи → Посмотреть результат**. Read its summary, changed-file list and checks, then choose **Принято**, **Нужны правки**, or **Отклонено**. Changes and rejection require a comment. These assessments never approve a run, enqueue a retry, publish, or merge. **Подготовить задачу для правок** creates a draft containing the original goal and your comment; inspect it before launching. See [result acceptance](result-acceptance.md) for measurement and revision rules.
 
-By default, the command creates a fresh dedicated task branch in the current checkout from the configured base branch. It never silently reuses an existing branch and does not create a worktree. Repeating the same queued task id is idempotent; intentional work on an existing branch requires `--current-branch`. If queueing fails before ownership is recorded, a newly created clean branch is rolled back. The checkout must be clean of user changes. Generated local setup no longer requires a manual commit; custom or tracked setup files and other intended changes still need to be committed or stashed before using this checkout. Explicit repository ignore overrides remain authoritative. Alternatively, select **Параллельная задача** or `--worktree` to work in a separate copy. Only one unfinished current-checkout task may own a repository at a time.
+By default, the command creates a fresh dedicated task branch in the current checkout from the configured base branch. It never silently reuses an existing branch and does not create a worktree. Repeating the same queued task id is idempotent; intentional work on an existing branch requires `--current-branch`. If queueing fails before ownership is recorded, a newly created clean branch is rolled back. When the checkout contains user or IDE changes, a normal task automatically selects an isolated worktree from the committed base; those local changes remain in place and are not part of that task. Generated local setup no longer requires a manual commit. Explicit `--current-branch` still requires a clean checkout. Explicit repository ignore overrides remain authoritative. Alternatively, select **Параллельная задача** or `--worktree` to work in a separate copy. Only one unfinished current-checkout task may own a repository at a time.
 
 Generated branches use the prefix selected during initialization and never use the default branch. The prefix is not restricted to a fixed list: any safe Git prefix is accepted, including `feat/`, `fix/`, `chore/`, `release/2026/`, or `team/mobile/`:
 
@@ -157,7 +168,7 @@ agent init --force --branch-prefix chore/
 
 Prompt length and punctuation never become a branch-name failure: generated names are normalized, bounded, and receive a deterministic fallback automatically. Existing branches are checked against Git's own ref rules rather than a narrower ASCII-only list, so valid names containing Unicode or punctuation such as `+`, `=`, `&`, and `,` are accepted. Ambiguous or unsafe ref forms such as `../`, `@{`, repeated `/`, control characters, and `.lock` remain blocked.
 
-`--current-branch` uses an already checked-out clean non-default branch without creating or renaming it. `--worktree` is the explicit opt-in for isolated parallel task execution. The worker revalidates current-checkout branches immediately before execution. Status, retry, resume, and abort preserve the same authoritative run and workspace.
+`--current-branch` uses an already checked-out clean non-default branch without creating or renaming it. `--worktree` explicitly selects isolated parallel task execution; it is also selected automatically for a dirty checkout. The worker revalidates current-checkout branches immediately before execution. Status, retry, resume, and abort preserve the same authoritative run and workspace.
 
 ## Start from a ticket or files
 
@@ -267,7 +278,7 @@ agent batch --file tasks.yaml --dry-run --json
 cat tasks.yaml | agent batch --file -
 ```
 
-The dashboard accepts the same YAML, and the loopback API accepts either a `manifest` string or a `repositories` plus `tasks` object at `POST /tasks/batch`. In visual intake, `parallel: true` automatically selects an isolated worktree. The ordinary CLI keeps `--worktree` explicit. A repository limit is enforced atomically when workers claim tasks, so several workers cannot oversubscribe one project or its shared test resources.
+The dashboard accepts the same YAML, and the loopback API accepts either a `manifest` string or a `repositories` plus `tasks` object at `POST /tasks/batch`. In visual intake, `parallel: true` automatically selects an isolated worktree. The ordinary CLI also accepts explicit `--worktree`, and selects isolation automatically when the checkout has user changes. A repository limit is enforced atomically when workers claim tasks, so several workers cannot oversubscribe one project or its shared test resources.
 
 Worktrees reuse private shared pip, uv, npm, and Bun download caches. Project-specific Turbo, build, virtualenv, and container-layer cache roots are also stable across task worktrees; a task still owns a separate checkout and branch.
 

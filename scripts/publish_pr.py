@@ -32,6 +32,7 @@ from tool_governance import audit_tool_call, authorize_tool_call
 from workflow_router import required_gate_roles
 from ai_harness.recovery.idempotency import branch_pushed, commit_sha_for_marker, pr_exists
 from ai_harness.observability import safe_telemetry_runtime
+from ai_harness.project_validation import effective_project_profile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -931,7 +932,9 @@ class Publisher:
         publication: PublicationResult,
         command_group: str,
     ) -> None:
-        profile_doc = profiles_doc.get("profiles", {}).get(profile, {})
+        profile_doc = effective_project_profile(
+            self.root, profile, target_repo, profiles_document=profiles_doc
+        )
         commands_doc = profile_doc.get(command_group, {})
         if not isinstance(commands_doc, dict):
             publication.errors.append(f"profile {profile!r} has invalid {command_group}")
@@ -1248,7 +1251,9 @@ class Publisher:
         if layout.artifacts.resolve() != self.artifacts:
             raise ValueError("publication artifacts must belong to the authoritative run directory")
         publication.run_dir = str(layout.root)
-        publication.idempotency_key = f"{publication.run_id}:publication"
+        publication.idempotency_key = "sha256:" + hashlib.sha256(
+            f"{publication.run_id}:publication".encode("utf-8")
+        ).hexdigest()
         publication.target_repository = str(target_repo.resolve())
         return layout.root
 
@@ -1327,7 +1332,7 @@ class Publisher:
         target_repo: Path,
         publication: PublicationResult,
         project_profile: str,
-        post_comment: bool = True,
+        post_comment: bool = False,
     ) -> None:
         self.write_final_runtime_artifacts(publication, project_profile)
         if post_comment:

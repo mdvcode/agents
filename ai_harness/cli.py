@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import importlib
 import json
@@ -18,7 +19,7 @@ import tomllib
 import urllib.parse
 import webbrowser
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
@@ -35,6 +36,8 @@ from .project import (
     ProjectConfigError,
     CONFIG_RELATIVE_PATH,
     default_config,
+    detect_base_branch,
+    git_output,
     discover_repository,
     load_project_config,
     project_attachment_limits,
@@ -49,6 +52,7 @@ from .recovery.checkpoints import RoleCheckpoint, read_checkpoint, write_checkpo
 from .recovery.models import sanitized_message
 from .recovery.policy import load_recovery_policy
 from .sdk_session import ManagedCodexSdkSession, SdkSessionUnavailable
+from .source_update import SourceStateError, inspect_source_changes, preserved_source_state
 from .task_batch import BatchManifestError, parse_batch_manifest
 
 if TYPE_CHECKING:
@@ -243,7 +247,16 @@ def handle_init(args: argparse.Namespace) -> int:
         ),
         attachments=existing_config.attachments if existing_config else None,
     )
-    if existing_config is not None and not args.force:
+    repair_base = bool(
+        existing_config is not None and args.base_branch == "auto"
+        and not available_base_ref(repository, existing_config.base_branch)
+        and git_output(repository, ["rev-parse", "--verify", "HEAD^{commit}"])
+    )
+    if repair_base:
+        assert existing_config is not None
+        config = replace(requested_config if args.force else existing_config, base_branch=detect_base_branch(repository))
+        config_created = write_project_config(config, force=True)
+    elif existing_config is not None and not args.force:
         config = existing_config
         config_created = False
     else:
@@ -638,6 +651,17 @@ def _handle_task(args: argparse.Namespace) -> int:
         raise CLIError("--current-branch cannot be combined with --branch")
     if args.current_branch and args.worktree:
         raise CLIError("--current-branch cannot be combined with --worktree")
+    auto_worktree = False
+    if not args.current_branch and not args.worktree:
+        # Preserve user/IDE changes in place; isolated work starts from the
+        # committed base rather than staging or hiding somebody else's files.
+        changes = git_output(repository, ["status", "--porcelain=v1", "--untracked-files=all"])
+        generated = {"?? .agent/project.yaml"}
+        agents = repository / "AGENTS.md"
+        if not agents.is_symlink() and agents.is_file() and agents.read_bytes() == AGENTS_TEMPLATE.encode():
+            generated.add("?? AGENTS.md")
+        args.worktree = any(line not in generated for line in changes.splitlines())
+        auto_worktree = args.worktree
     workspace_mode = "worktree" if args.worktree else "checkout"
     root = harness_home()
     event_ingestion = load_harness_module(root, "event_ingestion")
@@ -1027,6 +1051,7 @@ def _handle_task(args: argparse.Namespace) -> int:
             f"  base branch: {config.base_branch}",
             f"  branch: {stored_branch}",
             f"  workspace: {task_workspace_label(args)}",
+            *(["  local changes stay in the original checkout; this task uses the committed base"] if auto_worktree else []),
             f"  mode: {record.payload.get('mode', args.mode)}",
             f"  status: {record.status}",
             f"  worker: {worker.get('status', 'starting')}",
@@ -2694,23 +2719,28 @@ def handle_dashboard(args: argparse.Namespace) -> int:
         if not args.no_open:
             webbrowser.open(url)
 
-    try:
-        control_plane.serve_control_plane(
-            host="127.0.0.1",
-            port=args.port,
-            db_path=root / ".agent-queue" / "tasks.db",
-            runs_dir=root / ".agent-runs",
-            auth_token=token,
-            default_repository=repository,
-            on_ready=ready,
-        )
-    except KeyboardInterrupt:
-        print("\nDashboard stopped.")
-    except OSError as exc:
-        raise CLIError(
-            f"dashboard could not start on port {args.port}: {exc}; "
-            "choose another port with `agent dashboard --port 8766`"
-        ) from exc
+    port = args.port
+    while True:
+        try:
+            control_plane.serve_control_plane(
+                host="127.0.0.1",
+                port=port,
+                db_path=root / ".agent-queue" / "tasks.db",
+                runs_dir=root / ".agent-runs",
+                auth_token=token,
+                default_repository=repository,
+                on_ready=ready,
+            )
+            break
+        except KeyboardInterrupt:
+            print("\nDashboard stopped.")
+            break
+        except OSError as exc:
+            if exc.errno == errno.EADDRINUSE and port != 0:
+                print(f"Port {port} is in use; selecting a free local port.", flush=True)
+                port = 0  # Let the OS bind an available port atomically.
+                continue
+            raise CLIError(f"dashboard could not start: {exc}") from exc
     return 0
 
 
@@ -2905,28 +2935,24 @@ def validate_local_update_source(source: Path) -> None:
         raise CLIError(f"{source} is not an AI Harness download")
 
 
-def ensure_clean_git_source(source: Path) -> None:
-    status = update_process(
-        ["git", "-C", str(source), "status", "--porcelain=v1", "--untracked-files=normal"],
-        label="checking the downloaded system",
-        timeout=30,
-    )
-    dirty = [line[3:].strip() for line in status.stdout.splitlines() if line.strip()]
-    if dirty:
-        visible = ", ".join(dirty[:5])
-        raise CLIError(
-            f"update stopped because the downloaded system has local changes: {visible}; "
-            "commit or stash them, then run `agent update` again"
-        )
+def ensure_clean_git_source(source: Path) -> list[str]:
+    try:
+        return inspect_source_changes(source, update_process)
+    except SourceStateError as exc:
+        raise CLIError(str(exc)) from exc
 
 
-def refresh_git_source(source: Path) -> None:
-    ensure_clean_git_source(source)
-    update_process(
-        ["git", "-C", str(source), "pull", "--ff-only"],
-        label="downloading the update",
-        timeout=180,
-    )
+def refresh_git_source(source: Path, revision: str = "") -> Path | None:
+    memory = ensure_clean_git_source(source)
+    try:
+        with preserved_source_state(source, memory, update_process) as backup:
+            update_process(
+                ["git", "-C", str(source), "pull", "--ff-only", *(["origin", revision] if revision else [])],
+                label="downloading the update", timeout=180,
+            )
+        return backup
+    except SourceStateError as exc:
+        raise CLIError(str(exc)) from exc
 
 
 def installed_agent_executable() -> str:
@@ -2986,18 +3012,19 @@ def handle_update(args: argparse.Namespace) -> int:
     pipx = pipx_executable()
     installed_source = pipx_installed_source(pipx)
     install_spec, local_source, source_kind = selected_update_source(args.source, installed_source)
+    revision = str(getattr(args, "ref", "") or "")
+    if revision and (not safe_branch(revision) or local_source is None or not (local_source / ".git").exists()):
+        raise CLIError("--ref requires a safe branch/tag name and a local Git source folder")
     git_updated = False
-    if local_source is not None and (local_source / ".git").exists():
-        # An explicitly selected local checkout is already the release input:
-        # verify that it is reviewable, but never replace it with a hidden pull.
-        # Ordinary no-argument updates retain the existing pull behavior.
-        if args.source:
-            ensure_clean_git_source(local_source)
-        else:
-            refresh_git_source(local_source)
-            git_updated = True
+    memory_backup = None
+    git_source = local_source is not None and (local_source / ".git").exists()
+    if git_source:
+        ensure_clean_git_source(local_source)
     worker_root, worker_was_running = pause_worker_for_update()
     try:
+        if git_source and (not args.source or revision):
+            memory_backup = refresh_git_source(local_source, revision)
+            git_updated = True
         if local_source is not None or args.source or install_spec == DEFAULT_UPDATE_SOURCE:
             update_process(
                 [pipx, "install", "--force", install_spec],
@@ -3010,7 +3037,7 @@ def handle_update(args: argparse.Namespace) -> int:
                 label="installing the update",
                 timeout=300,
             )
-    except CLIError as exc:
+    except (CLIError, OSError) as exc:
         recovery = restore_worker_after_failed_update(worker_root, worker_was_running)
         raise CLIError(f"{exc}{recovery}") from exc
     agent_executable = installed_agent_executable()
@@ -3052,6 +3079,8 @@ def handle_update(args: argparse.Namespace) -> int:
         "git_updated": git_updated,
         "worker_restarted": True,
     }
+    if memory_backup is not None:
+        payload["local_memory_backup"] = str(memory_backup)
     emit(
         payload,
         as_json=args.json,
@@ -3059,6 +3088,7 @@ def handle_update(args: argparse.Namespace) -> int:
             f"AI Harness updated: {version}",
             f"  source: {source_kind}",
             "  background service: restarted",
+            *([f"  local memory preserved; backup: {memory_backup}"] if memory_backup else []),
             "Next: open your project and run `agent doctor --full`",
         ),
     )
@@ -3158,20 +3188,27 @@ def handle_doctor(args: argparse.Namespace) -> int:
             next_actions.append("initialize and commit the project as a Git repository")
         if config is not None and git_ready:
             base_ref = available_base_ref(repository, config.base_branch)
+            unborn = not git_output(repository, ["rev-parse", "--verify", "HEAD^{commit}"]) and bool(
+                git_output(repository, ["symbolic-ref", "--quiet", "HEAD"])
+            )
             checks.append(
                 DoctorCheck(
                     "base_branch",
-                    "pass" if base_ref else "fail",
+                    "pass" if base_ref else "warn" if unborn else "fail",
                     f"{config.base_branch} ({base_ref})"
                     if base_ref
+                    else "new Git repository: create the first project commit before running tasks"
+                    if unborn
                     else (
                         f"{config.base_branch!r} was not found locally or under origin; fetch it or update "
                         "the project config with `agent init --force --base-branch <branch>`"
                     ),
                 )
             )
-            if not base_ref:
-                next_actions.append("fetch the configured base branch or select an existing branch")
+            if unborn:
+                next_actions.append("create the first project commit; no files were staged automatically")
+            elif not base_ref:
+                next_actions.append("run `agent init` to detect an existing base branch, or fetch the configured branch")
             try:
                 checkout_status = subprocess.run(
                     ["git", "status", "--porcelain=v1", "--untracked-files=normal"],
@@ -3186,7 +3223,7 @@ def handle_doctor(args: argparse.Namespace) -> int:
                 checkout_detail = (
                     "clean; task branch can be prepared"
                     if checkout_clean
-                    else "uncommitted changes: " + ", ".join(dirty_paths[:5])
+                    else "local changes preserved; new tasks use an isolated worktree: " + ", ".join(dirty_paths[:5])
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
                 checkout_clean = False
@@ -3198,8 +3235,6 @@ def handle_doctor(args: argparse.Namespace) -> int:
                     checkout_detail,
                 )
             )
-            if not checkout_clean:
-                next_actions.append("commit or stash project changes before `agent task`")
     missing = missing_runtime_imports()
     checks.append(
         DoctorCheck(
@@ -3212,20 +3247,23 @@ def handle_doctor(args: argparse.Namespace) -> int:
     )
     if missing:
         next_actions.append("agent update")
+    runtime_provider = config.runtime_provider if config is not None else "codex-sdk"
     codex = configured_codex_command()
+    needs_cli = runtime_provider == "codex-cli"
     checks.append(
         DoctorCheck(
             "codex_cli",
-            "pass" if codex else "fail",
-            codex or "Codex CLI was not found",
+            "pass" if codex or not needs_cli else "fail",
+            codex or ("not required: using the bundled Codex SDK runtime" if not needs_cli else "Codex CLI was not found"),
         )
     )
-    if args.full and root is not None and repository is not None and codex and not missing:
+    if args.full and root is not None and repository is not None and (codex or not needs_cli) and not missing:
         environment = os.environ.copy()
-        environment["AGENT_CODEX_CLI_COMMAND"] = codex
+        if codex:
+            environment["AGENT_CODEX_CLI_COMMAND"] = codex
         try:
             probe = subprocess.run(
-                [sys.executable, str(root / "scripts" / "check_runtime.py"), "--repo", str(repository)],
+                [sys.executable, str(root / "scripts" / "check_runtime.py"), "--repo", str(repository), "--runtime-provider", runtime_provider],
                 cwd=root,
                 env=environment,
                 text=True,
@@ -3259,7 +3297,7 @@ def handle_doctor(args: argparse.Namespace) -> int:
             checks.append(
                 DoctorCheck("runtime_preflight", "pass" if probe.returncode == 0 else "fail", detail)
             )
-            if probe.returncode == 0:
+            if probe.returncode == 0 and runtime_provider == "codex-sdk":
                 try:
                     session_detail = verify_managed_sdk_session(root)
                     checks.append(DoctorCheck("managed_sdk_session", "pass", session_detail))
@@ -3370,6 +3408,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="updated AI Harness folder or git+https/git+ssh source (normally not needed)",
     )
+    update_parser.add_argument("--ref", default="", help="explicitly fast-forward a local Git source to this reviewed origin branch/tag")
     update_parser.add_argument("--json", action="store_true")
     update_parser.set_defaults(handler=handle_update)
 

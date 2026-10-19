@@ -2304,7 +2304,7 @@ def run_deterministic_orchestrator(
         execution_status = "completed"
     elif publication_requested(goal, repository):
         decision = "publish_pr"
-        execution_status = "completed"
+        execution_status = "planned"
     else:
         decision = "local_complete"
         execution_status = "completed"
@@ -2618,7 +2618,7 @@ def run_publication_prepare(
         artifacts_dir / "publication_payload.json",
         {
             "title": title,
-            "body": "Prepared by the deterministic publication-prepare step from the task worktree diff.",
+            "body": "Updates project files:\n\n" + "\n".join(f"- `{path}`" for path in include),
             "commit_message": title,
             "base_branch": base_branch or "main",
         },

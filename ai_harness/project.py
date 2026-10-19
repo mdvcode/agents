@@ -192,7 +192,7 @@ def detect_base_branch(repository: Path) -> str:
     remote_head = git_output(repository, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
     if remote_head.startswith("origin/"):
         candidate = remote_head.removeprefix("origin/")
-        if safe_branch(candidate):
+        if safe_branch(candidate) and git_output(repository, ["rev-parse", "--verify", f"refs/remotes/origin/{candidate}^{{commit}}"]):
             return candidate
     for candidate in ("main", "master", "trunk"):
         if git_output(repository, ["show-ref", "--verify", f"refs/remotes/origin/{candidate}"]):
@@ -200,7 +200,14 @@ def detect_base_branch(repository: Path) -> str:
         if git_output(repository, ["show-ref", "--verify", f"refs/heads/{candidate}"]):
             return candidate
     current = git_output(repository, ["symbolic-ref", "--quiet", "--short", "HEAD"])
-    return current if safe_branch(current) else "main"
+    if safe_branch(current):
+        return current
+    # Detached checkouts can still have a valid local branch at this commit.
+    points_at_head = git_output(repository, ["for-each-ref", "--format=%(refname:short)", "--points-at=HEAD", "refs/heads/"])
+    for candidate in points_at_head.splitlines():
+        if safe_branch(candidate):
+            return candidate
+    return "main"
 
 
 def discover_repository(start: Path, explicit: bool = False) -> Path:

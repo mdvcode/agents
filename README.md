@@ -50,7 +50,8 @@ agent doctor --full
 `agent init` creates `.agent/project.yaml` and, when absent, `AGENTS.md`. Untracked project config
 and the unchanged generated instruction template stay local automatically through Git's local
 exclude file; no setup commit is needed. Existing custom or tracked instructions and your code
-changes still need a clean checkout before starting a task in it. Project initialization sets local
+changes stay in place: a normal task automatically uses an isolated worktree when the checkout
+has local changes, working from the committed base. Explicit current-branch mode requires a clean checkout. Project initialization sets local
 execution identity and trust, without granting publication or deployment permissions.
 
 ### 3. Launch from the dashboard or terminal
@@ -274,15 +275,19 @@ agent doctor --full
 ```
 
 `agent update` refreshes the installed package source, verifies the CLI and restarts the worker.
-It refuses to overwrite a dirty source checkout. To install an explicitly reviewed local checkout
-at its current revision, use:
+Local memory and project registration are backed up and preserved; unrelated caches, outputs and
+nested projects do not block it. Modified package code and staged changes still require review.
+To install an explicitly reviewed local checkout at its current revision, use:
 
 ```sh
 agent update --source /absolute/path/to/agents
 agent doctor --full
 ```
 
-An explicit `--source` does not pull that checkout. Bring it to the reviewed revision first.
+An explicit `--source` does not pull that checkout unless you also select `--ref <reviewed-origin-branch>`.
+Doctor checks the selected runtime: the SDK does not require a separate Codex CLI. A busy
+dashboard port automatically falls back to a free loopback port. New Git repositories are
+identified as awaiting the first project commit, rather than reporting a nonexistent default branch.
 Dependency updates are proposed by **Dependabot every Monday at 07:00 Europe/Berlin**, for pip and
 GitHub Actions. PR checks install the declared SDK and test its event contract. Review and merge
 updates before running the updater; dependency PRs do not automatically merge or install locally.

@@ -522,8 +522,10 @@ def test_control_plane_api_approves_resumes_and_accepts_tasks(tmp_path: Path) ->
         assert 'id="clearFilters"' in dashboard
         assert 'id="clearHistory"' in dashboard
         assert 'id="restoreHistory"' in dashboard
-        assert "historyCanHide(task){return ['completed','cancelled'].includes(task.status)}" in dashboard
-        assert "Активные задачи, ошибки, журналы и файлы сохранятся" in dashboard
+        assert 'id="hideStoppedHistory"' in dashboard
+        assert "function historyCanHide(task)" in dashboard
+        assert "$('historyControlsMount').append(historyControls)" in dashboard
+        assert "Журналы и файлы сохранятся" in dashboard
         assert "localStorage.setItem(historyStorageKey" in dashboard
         assert "Быстрый старт" not in dashboard
         assert 'id="attentionPanel" hidden' in dashboard

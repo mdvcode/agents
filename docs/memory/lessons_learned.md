@@ -258,3 +258,15 @@
   Example bad pattern: mark `reviewer` complete forever, patch code afterward, and let old review authorize or block orchestration.
   Example good pattern: after implementation repair, invalidate stale dependent gates by visit order, rerun quality/security/review, block rather than request authority for failed checks, and make a rejected stale approval retryable in both workflow and queue.
   Scope: adaptive DAG freshness, post-repair verification, verdict routing, and approval rejection recovery
+
+
+- Date: 2026-10-19
+  Failure: Routine source updates were rejected because private memory, caches, nested projects and outputs made the control-plane checkout dirty.
+  Root cause: The updater treated every Git status entry as modified package code and required private operational knowledge to be committed or stashed.
+  Prevention rule: Classify package inputs separately from private control-plane knowledge and non-build local files. Preserve unstaged private knowledge and repository registration in a durable private backup before a fast-forward, restore them after success or failure, and retain upstream copies when both changed. Keep staged changes and modified executable/package inputs review-gated. Never stash or delete nested projects and caches wholesale.
+  Scope: installation, source updates and private control-plane state
+
+- Date: 2026-10-19
+  Failure: Setup reported a missing default branch, required an unrelated CLI for the SDK runtime, or failed when the dashboard port was occupied.
+  Prevention rule: Validate detected Git refs, distinguish an unborn repository from an invalid branch, run preflight for the selected runtime, and bind an OS-selected loopback port after EADDRINUSE. Use an isolated worktree for user-dirty checkouts while keeping explicit current-branch checks strict.
+  Scope: repository onboarding and CLI diagnostics
