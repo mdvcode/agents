@@ -2436,7 +2436,7 @@ def test_agent_update_installs_explicit_clean_local_git_source_without_pull(
 
     assert result["source"] == "downloaded folder"
     assert result["git_updated"] is False
-    assert ["git", "-C", str(source), "status", "--porcelain=v1", "--untracked-files=normal"] in commands
+    assert ["git", "-C", str(source), "status", "--porcelain=v1", "-z", "--untracked-files=normal"] in commands
     assert ["/tools/pipx", "install", "--force", str(source)] in commands
     assert not any(command[:3] == ["git", "-C", str(source)] and "pull" in command for command in commands)
 

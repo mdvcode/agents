@@ -610,3 +610,52 @@ def test_publication_rejects_a_worktree_unrelated_to_workflow_state(tmp_path: Pa
     publisher.authoritative_task_worktree(unrelated, publication)
 
     assert any("match checkout_path" in error for error in publication.errors)
+
+
+def test_publication_uses_trusted_python_validation_variant(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    for marker in ("pyproject.toml", "uv.lock"):
+        (target / marker).touch()
+    (target / "tests").mkdir()
+    runner = FakeRunner()
+    publisher = publisher_for(tmp_path, runner=runner)
+    profiles = {"profiles": {"agent_workspace": {
+        "quality_commands": {"required": ["make check"]},
+        "validation_variants": {"python_uv": {
+            "required_markers": ["pyproject.toml", "uv.lock", "tests"],
+            "excluded_markers": [".agent-policy.yaml"],
+            "quality_commands": {"required": ["uv run --frozen pytest"]},
+            "security_commands": {"required": ["{python} {security_scanner} --repo {repository} --git-worktree"]},
+            "test_strategy": {},
+        }},
+    }}}
+    result = publish_pr.PublicationResult()
+    publisher.run_profile_commands(target, profiles, "agent_workspace", result, "quality_commands")
+    publisher.run_profile_commands(target, profiles, "agent_workspace", result, "security_commands")
+    assert runner.calls == [
+        ("uv", "run", "--frozen", "pytest"),
+        (sys.executable, str(tmp_path / "scripts/security_scan.py"), "--repo", str(target), "--git-worktree"),
+    ]
+    assert not result.errors
+
+
+def test_publication_commit_marker_does_not_expose_private_run_id(tmp_path: Path) -> None:
+    publisher = publisher_for(tmp_path, run_id="private-run-name")
+    result = publish_pr.PublicationResult()
+    publisher.ensure_runtime_state(result, {"task_id": "task"}, tmp_path)
+    marker = result.idempotency_key
+    assert marker.startswith("sha256:")
+    assert "private-run-name" not in marker
+    publisher.ensure_runtime_state(result, {"task_id": "task"}, tmp_path)
+    assert result.idempotency_key == marker
+
+
+def test_finalization_keeps_publication_report_local_by_default(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    publisher = publisher_for(tmp_path, runner=runner)
+    result = publish_pr.PublicationResult(pr_url="https://github.com/example/repo/pull/1")
+    publisher.ensure_runtime_state(result, {"task_id": "task"}, tmp_path)
+    publisher.finalize(tmp_path, result, "agent_workspace")
+    assert not any(call[:3] == ("gh", "pr", "comment") for call in runner.calls)
+    assert result.pr_comment_posted is False
