@@ -9,7 +9,7 @@ description = "Tweebit AI Harness by Daryna: a policy-governed local engineering
 readme = "docs/index.md"
 requires-python = ">=3.11"
 dependencies = [
-  "openai-codex==0.161.0",
+  "openai-codex==0.163.0",
   "PyMuPDF>=1.28.2,<2",
   "opentelemetry-api>=1.44,<2",
   "opentelemetry-exporter-otlp-proto-http>=1.45.0,<2",
